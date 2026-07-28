@@ -1,0 +1,128 @@
+body,
+button,
+input,
+textarea {
+  font-family: var(--font-body), Arial, sans-serif;
+}
+
+.brand,
+.eyebrow {
+  font-family: var(--font-display), var(--font-body), sans-serif;
+}
+
+.brand {
+  letter-spacing: .13em;
+  text-shadow: 0 0 14px #ff2d9580;
+}
+
+header h1 {
+  font-family: var(--font-display), Impact, sans-serif;
+  font-weight: 400;
+  letter-spacing: .018em;
+  line-height: 1.08;
+  transform: rotate(-1deg);
+  text-shadow:
+    3px 3px 0 #8b3dff,
+    -2px -2px 0 #ff2d958f,
+    0 0 18px #ff2d9599,
+    0 0 34px #8b3dff80;
+}
+
+header h2 {
+  position: relative;
+  z-index: 1;
+  width: max-content;
+  max-width: 100%;
+  margin: 7px auto 0;
+  padding: 0 13px 5px;
+  overflow: visible;
+  font-family: var(--font-brush), cursive;
+  font-size: clamp(28px, 6vw, 39px);
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: .01em;
+  transform: rotate(-2deg);
+}
+
+header h2::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  right: 2px;
+  bottom: 1px;
+  left: 0;
+  height: 9px;
+  opacity: .82;
+  border-radius: 65% 35% 58% 42%;
+  background:
+    linear-gradient(90deg, transparent, #ff2d95 7%, #8b3dff 56%, #00c8ff 94%, transparent);
+  filter: drop-shadow(0 0 7px #ff2d9599);
+  transform: rotate(1deg) skewX(-12deg);
+}
+
+.desc {
+  font-family: var(--font-body), sans-serif;
+  font-weight: 500;
+}
+
+.field label {
+  font-family: var(--font-display), var(--font-body), sans-serif;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: .07em;
+}
+
+.input input,
+.input textarea {
+  font-family: var(--font-body), sans-serif;
+  font-weight: 500;
+}
+
+.input input::placeholder,
+.input textarea::placeholder {
+  font-family: var(--font-brush), cursive;
+  font-size: 19px;
+  font-style: italic;
+}
+
+.submit {
+  font-family: var(--font-display), var(--font-body), sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: .045em;
+}
+
+.step span {
+  font-family: var(--font-brush), cursive;
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.success h2 {
+  font-family: var(--font-brush), cursive;
+  font-size: clamp(36px, 8vw, 53px);
+  font-weight: 400;
+  line-height: .98;
+  transform: rotate(-2deg);
+  text-shadow: 0 0 24px #ff2d9566;
+}
+
+.success > p:not(.eyebrow) {
+  font-family: var(--font-brush), cursive;
+  font-size: 24px;
+  font-style: italic;
+}
+
+@media (max-width: 690px) {
+  header h1 {
+    font-size: clamp(28px, 9vw, 40px);
+  }
+
+  header h2 {
+    font-size: clamp(27px, 8vw, 35px);
+  }
+
+  .field label {
+    font-size: 9px;
+  }
+}
