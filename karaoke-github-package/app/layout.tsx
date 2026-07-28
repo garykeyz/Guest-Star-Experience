@@ -3,18 +3,18 @@ import { Bungee, Caveat_Brush, Montserrat } from "next/font/google";
 import "./globals.css";
 import "./typography.css";
 
-const montserrat = Montserrat({
+const bodyFont = Montserrat({
   variable: "--font-body",
   subsets: ["latin"],
 });
 
-const bungee = Bungee({
+const displayFont = Bungee({
   variable: "--font-display",
   weight: "400",
   subsets: ["latin"],
 });
 
-const caveatBrush = Caveat_Brush({
+const brushFont = Caveat_Brush({
   variable: "--font-brush",
   weight: "400",
   subsets: ["latin"],
@@ -22,25 +22,20 @@ const caveatBrush = Caveat_Brush({
 
 export const metadata: Metadata = {
   title: "Karaoke Night — Guest Star Experience",
-  description: "Request your favorite song and get ready to shine on stage.",
-  other: {
-    "codex-preview": "development",
-  },
+  description:
+    "Request your favorite karaoke song and get ready to shine on stage.",
   icons: {
     icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
   },
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body
-        className={`${montserrat.variable} ${bungee.variable} ${caveatBrush.variable} antialiased`}
+        className={`${bodyFont.variable} ${displayFont.variable} ${brushFont.variable}`}
       >
         {children}
       </body>
