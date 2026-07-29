@@ -1,0 +1,19 @@
+{
+  "bridgePort": 8787,
+  "libraryFolders": [
+    "/Users/tu-usuario/Music/Karaoke"
+  ],
+  "rememberLibraryFolders": true,
+  "appsScriptUrl": "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec",
+  "hostPin": "",
+  "rememberHostPin": true,
+  "virtualDJ": {
+    "host": "127.0.0.1",
+    "port": 80,
+    "password": "",
+    "timeoutMs": 3500
+  },
+  "requestIntervalSeconds": 2,
+  "scanIntervalSeconds": 10,
+  "autoQueueExact": false
+}

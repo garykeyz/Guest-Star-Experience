@@ -1,0 +1,182 @@
+#!/bin/bash
+set -u
+
+APP_VERSION="3.0.0"
+PANEL_URL="http://127.0.0.1:8787"
+CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUNDLE_DIR="$(cd "$CONTENTS_DIR/.." && pwd)"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+RUNTIME="$RESOURCES_DIR/runtime/node"
+SUPPORT_DIR="$HOME/Library/Application Support/Guest Star Bridge"
+BRIDGE_DIR="$SUPPORT_DIR/bridge"
+DATA_DIR="$SUPPORT_DIR/data"
+PID_FILE="$SUPPORT_DIR/bridge.pid"
+LOG_DIR="$HOME/Library/Logs"
+LOG_FILE="$LOG_DIR/Guest Star Bridge.log"
+WINDOW_SCRIPT="$RESOURCES_DIR/GuestStarWindow.js"
+bridge_pid=""
+owns_server=0
+bridge_updated=0
+
+show_alert() {
+  /usr/bin/osascript - "$1" <<'APPLESCRIPT' >/dev/null 2>&1
+on run argv
+  display alert "Guest Star Bridge" message (item 1 of argv) as critical
+end run
+APPLESCRIPT
+}
+
+is_bridge_process() {
+  candidate_pid="$1"
+  running_command="$(/bin/ps -p "$candidate_pid" -o command= 2>/dev/null || true)"
+  case "$running_command" in
+    *"$RUNTIME"*"src/server.mjs"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+case "$BUNDLE_DIR" in
+  /Volumes/*)
+    /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
+display alert "Instala Guest Star Bridge" message "Arrastra la aplicación a la carpeta Aplicaciones y ábrela desde allí." buttons {"Entendido"} default button "Entendido"
+APPLESCRIPT
+    /usr/bin/open "/Applications"
+    exit 0
+    ;;
+esac
+
+/bin/mkdir -p "$SUPPORT_DIR" "$DATA_DIR" "$LOG_DIR"
+
+if [ ! -f "$DATA_DIR/config.json" ]; then
+  for old_config in \
+    "$HOME/Downloads/guest-star-bridge/data/config.json" \
+    "$HOME/Desktop/guest-star-bridge/data/config.json" \
+    "$HOME/Documents/guest-star-bridge/data/config.json"
+  do
+    if [ -f "$old_config" ]; then
+      /usr/bin/ditto "$old_config" "$DATA_DIR/config.json"
+      break
+    fi
+  done
+fi
+
+installed_version=""
+if [ -f "$BRIDGE_DIR/.app-version" ]; then
+  installed_version="$(/bin/cat "$BRIDGE_DIR/.app-version" 2>/dev/null || true)"
+fi
+
+if [ "$installed_version" != "$APP_VERSION" ]; then
+  STAGE_DIR="$SUPPORT_DIR/bridge-stage"
+  PREVIOUS_DIR="$SUPPORT_DIR/bridge-previous"
+  /bin/rm -rf "$STAGE_DIR" "$PREVIOUS_DIR"
+  if ! /usr/bin/ditto "$RESOURCES_DIR/bridge" "$STAGE_DIR"; then
+    show_alert "No se pudieron preparar los archivos de la aplicación."
+    exit 1
+  fi
+  /bin/rm -rf "$STAGE_DIR/data"
+  /bin/ln -s "$DATA_DIR" "$STAGE_DIR/data"
+  /usr/bin/printf "%s\n" "$APP_VERSION" > "$STAGE_DIR/.app-version"
+  if [ -d "$BRIDGE_DIR" ]; then
+    /bin/mv "$BRIDGE_DIR" "$PREVIOUS_DIR"
+  fi
+  if ! /bin/mv "$STAGE_DIR" "$BRIDGE_DIR"; then
+    if [ -d "$PREVIOUS_DIR" ]; then
+      /bin/mv "$PREVIOUS_DIR" "$BRIDGE_DIR"
+    fi
+    show_alert "No se pudo actualizar Guest Star Bridge."
+    exit 1
+  fi
+  /bin/rm -rf "$PREVIOUS_DIR"
+  bridge_updated=1
+fi
+
+if [ "$bridge_updated" -eq 1 ]; then
+  previous_pid=""
+  if [ -f "$PID_FILE" ]; then
+    previous_pid="$(/usr/bin/tr -cd '0-9' < "$PID_FILE")"
+  fi
+  if [ -z "$previous_pid" ] && [ -x /usr/sbin/lsof ]; then
+    previous_pid="$(/usr/sbin/lsof -nP -tiTCP:8787 -sTCP:LISTEN 2>/dev/null | /usr/bin/head -n 1)"
+  fi
+  if [ -n "$previous_pid" ] &&
+    /bin/kill -0 "$previous_pid" 2>/dev/null &&
+    is_bridge_process "$previous_pid"
+  then
+    /bin/kill "$previous_pid" 2>/dev/null || true
+    stop_attempt=0
+    while [ "$stop_attempt" -lt 20 ] &&
+      /bin/kill -0 "$previous_pid" 2>/dev/null
+    do
+      /bin/sleep 0.1
+      stop_attempt=$((stop_attempt + 1))
+    done
+  fi
+  /bin/rm -f "$PID_FILE"
+fi
+
+if [ ! -x "$RUNTIME" ]; then
+  show_alert "El motor Apple Silicon de la aplicación no está disponible."
+  exit 1
+fi
+
+if [ ! -f "$WINDOW_SCRIPT" ]; then
+  show_alert "La interfaz interna de Guest Star Bridge no está disponible."
+  exit 1
+fi
+
+cleanup() {
+  if [ "$owns_server" -eq 1 ] && [ -n "$bridge_pid" ]; then
+    if /bin/kill -0 "$bridge_pid" 2>/dev/null && is_bridge_process "$bridge_pid"; then
+      /bin/kill "$bridge_pid" 2>/dev/null || true
+    fi
+    if [ -f "$PID_FILE" ]; then
+      saved_pid="$(/usr/bin/tr -cd '0-9' < "$PID_FILE")"
+      if [ "$saved_pid" = "$bridge_pid" ]; then
+        /bin/rm -f "$PID_FILE"
+      fi
+    fi
+  fi
+}
+
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+
+if [ -f "$PID_FILE" ]; then
+  running_pid="$(/usr/bin/tr -cd '0-9' < "$PID_FILE")"
+  if [ -n "$running_pid" ] &&
+    /bin/kill -0 "$running_pid" 2>/dev/null &&
+    is_bridge_process "$running_pid"
+  then
+    bridge_pid="$running_pid"
+    owns_server=1
+  else
+    /bin/rm -f "$PID_FILE"
+  fi
+fi
+
+if [ -z "$bridge_pid" ]; then
+  if ! /usr/bin/curl --silent --fail --max-time 1 "$PANEL_URL/api/state" >/dev/null 2>&1; then
+    cd "$BRIDGE_DIR" || exit 1
+    /usr/bin/nohup "$RUNTIME" src/server.mjs >>"$LOG_FILE" 2>&1 </dev/null &
+    bridge_pid=$!
+    owns_server=1
+    /usr/bin/printf "%s\n" "$bridge_pid" > "$PID_FILE"
+  fi
+fi
+
+attempt=0
+while [ "$attempt" -lt 40 ]; do
+  if /usr/bin/curl --silent --fail --max-time 1 "$PANEL_URL/api/state" >/dev/null 2>&1; then
+    /usr/bin/osascript -l JavaScript "$WINDOW_SCRIPT" >>"$LOG_FILE" 2>&1
+    window_status=$?
+    if [ "$window_status" -ne 0 ]; then
+      show_alert "No se pudo abrir la ventana interna. El detalle quedó guardado en Library/Logs/Guest Star Bridge.log."
+    fi
+    exit "$window_status"
+  fi
+  /bin/sleep 0.25
+  attempt=$((attempt + 1))
+done
+
+show_alert "No se pudo iniciar el Bridge. El detalle quedó guardado en Library/Logs/Guest Star Bridge.log."
+exit 1

@@ -1,0 +1,6 @@
+.next/
+.open-next/
+.wrangler/
+node_modules/
+.DS_Store
+guest-star-bridge/data/

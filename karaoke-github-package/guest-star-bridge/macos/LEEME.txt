@@ -1,0 +1,29 @@
+GUEST STAR BRIDGE PARA MAC M1 / M2 / M3 / M4
+
+1. Arrastra “Guest Star Bridge.app” a la carpeta Aplicaciones.
+2. La primera vez, haz clic derecho sobre la aplicación y selecciona Abrir.
+3. Pulsa Abrir en la confirmación de macOS.
+4. Desde ese momento puedes abrirla normalmente con doble clic.
+
+La aplicación:
+
+- inicia el Bridge silenciosamente, sin mostrar Terminal;
+- abre el panel dentro de una ventana propia de Guest Star Bridge;
+- no abre Safari, Chrome ni una pestaña del navegador;
+- incluye su propio motor Node para Apple Silicon;
+- conserva la configuración en Library/Application Support/Guest Star Bridge;
+- permite recordar la carpeta de karaoke y el PIN por separado;
+- deja elegir manualmente cuál opción de YouTube copiar;
+- actualiza la búsqueda local en tiempo real cuando un archivo aparece o desaparece;
+- vuelve a ofrecer enlaces Karaoke/Lyrics si una pista deja de estar local;
+- verifica la cola real de VirtualDJ y avisa si una canción fue retirada;
+- permite volver a agregar una canción retirada al final de la rotación;
+- organiza las canciones enviadas según su posición actual en VirtualDJ;
+- permite reenviar o retirar canciones de la rotación de VirtualDJ;
+- cierra el proceso local al salir de la aplicación;
+- continúa sincronizando Google Sheets, la carpeta local y VirtualDJ.
+
+VirtualDJ debe estar abierto y Network Control debe permanecer activado.
+
+Esta compilación no está firmada con un certificado comercial de Apple. Por eso
+macOS puede pedir la confirmación de clic derecho → Abrir la primera vez.

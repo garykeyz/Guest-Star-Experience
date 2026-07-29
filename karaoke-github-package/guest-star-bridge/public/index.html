@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#100715" />
+    <title>Guest Star Bridge</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="glow glow-one"></div>
+    <div class="glow glow-two"></div>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">✦ GUEST STAR EXPERIENCE</p>
+        <h1>Guest Star <span>Bridge</span></h1>
+        <p class="subtitle">Biblioteca local · YouTube · Cola Karaoke de VirtualDJ</p>
+      </div>
+      <div class="live-pill"><i></i> PUENTE LOCAL</div>
+    </header>
+
+    <main>
+      <section class="status-grid" aria-label="Estado de conexiones">
+        <article class="status-card" id="libraryStatus">
+          <span class="status-icon">♫</span>
+          <div><small>BIBLIOTECA</small><strong>Comprobando…</strong><p></p></div>
+        </article>
+        <article class="status-card" id="sheetStatus">
+          <span class="status-icon">▦</span>
+          <div><small>SOLICITUDES</small><strong>Comprobando…</strong><p></p></div>
+        </article>
+        <article class="status-card" id="vdjStatus">
+          <span class="status-icon">VDJ</span>
+          <div><small>VIRTUALDJ</small><strong>Sin probar</strong><p>Network Control</p></div>
+        </article>
+        <article class="status-card" id="activityStatus">
+          <span class="status-icon">●</span>
+          <div><small>ACTIVIDAD</small><strong>Comprobando…</strong><p></p></div>
+        </article>
+      </section>
+
+      <section class="time-dashboard" aria-label="Resumen de tiempo de la actividad">
+        <article class="time-card">
+          <small>TIEMPO TRANSCURRIDO</small>
+          <strong id="elapsedTime">0:00:00</strong>
+          <p id="elapsedDetail">Desde el inicio de la actividad</p>
+        </article>
+        <article class="time-card">
+          <small>YA CANTADO + EN COLA</small>
+          <strong id="confirmedTime">0:00:00</strong>
+          <p id="confirmedDetail">0 canciones confirmadas</p>
+        </article>
+        <article class="time-card">
+          <small>TOTAL SOLICITADO</small>
+          <strong id="plannedTime">0:00:00</strong>
+          <p id="plannedDetail">Saltadas no incluidas</p>
+        </article>
+        <article class="time-card" id="coverageCard">
+          <small>COBERTURA DE LA ACTIVIDAD</small>
+          <strong id="coverageTime">Faltan 0:00:00</strong>
+          <p id="coverageDetail">Calculando la rotación…</p>
+        </article>
+      </section>
+      <section id="coverageAdvice" class="coverage-advice hidden"></section>
+
+      <section class="toolbar">
+        <div>
+          <h2>Solicitudes de karaoke</h2>
+          <p>La biblioteca y el orden real de VirtualDJ se actualizan automáticamente.</p>
+        </div>
+        <div class="button-row">
+          <button class="button success" id="openRequests">Abrir solicitudes</button>
+          <button class="button danger" id="closeRequests">Cerrar solicitudes</button>
+          <button class="button ghost" id="resetRequests">Reiniciar actividad</button>
+          <button class="button ghost" id="settingsButton">⚙ Configuración</button>
+          <button class="button ghost" id="scanButton">↻ Buscar localmente</button>
+          <button class="button primary" id="syncButton">Sincronizar</button>
+        </div>
+      </section>
+
+      <section id="notice" class="notice hidden" role="status"></section>
+      <section id="requests" class="request-list" aria-live="polite"></section>
+      <section id="hitSuggestions" class="hit-suggestions hidden"></section>
+    </main>
+
+    <dialog id="settingsDialog">
+      <form id="settingsForm">
+        <header>
+          <div><p class="eyebrow">CONFIGURACIÓN LOCAL</p><h2>Conecta tu biblioteca</h2></div>
+          <button type="button" class="close-button" id="closeSettings" aria-label="Cerrar">×</button>
+        </header>
+
+        <label>Carpetas de karaoke</label>
+        <div id="folderList" class="folder-list"></div>
+        <div class="button-row left">
+          <button type="button" class="button ghost" id="chooseFolder">Elegir carpeta en Mac</button>
+          <button type="button" class="button ghost" id="addFolder">Escribir ruta</button>
+        </div>
+        <label class="toggle memory-toggle">
+          <input id="rememberLibraryFolders" name="rememberLibraryFolders" type="checkbox" />
+          <span></span>
+          Recordar las carpetas elegidas al volver a abrir la app
+        </label>
+
+        <label for="appsScriptUrl">Enlace de Google Apps Script</label>
+        <input id="appsScriptUrl" name="appsScriptUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" />
+
+        <div class="two-columns">
+          <div>
+            <label for="hostPin">PIN privado del host</label>
+            <input id="hostPin" name="hostPin" type="password" inputmode="numeric" placeholder="Dejar vacío para conservar" />
+            <label class="toggle memory-toggle">
+              <input id="rememberHostPin" name="rememberHostPin" type="checkbox" />
+              <span></span>
+              Recordar el PIN en este Mac
+            </label>
+            <button type="button" class="text-button" id="forgetHostPin">Olvidar PIN guardado</button>
+          </div>
+          <div>
+            <label for="vdjPort">Puerto Network Control</label>
+            <input id="vdjPort" name="vdjPort" type="number" min="1" max="65535" value="80" />
+          </div>
+        </div>
+
+        <label for="vdjPassword">Contraseña de Network Control</label>
+        <input id="vdjPassword" name="vdjPassword" type="password" placeholder="Dejar vacío si no usas contraseña" />
+        <button type="button" class="text-button" id="forgetVdjPassword">Quitar contraseña guardada</button>
+
+        <label class="toggle">
+          <input id="autoQueueExact" name="autoQueueExact" type="checkbox" />
+          <span></span>
+          Agregar automáticamente a VirtualDJ cuando el archivo aparezca localmente
+        </label>
+
+        <section class="sheet-settings">
+          <p class="eyebrow">CONFIGURACIÓN DE GOOGLE SHEETS</p>
+          <h3>Control completo de la actividad</h3>
+          <div class="two-columns">
+            <div>
+              <label for="activityHours">Duración total (horas)</label>
+              <input id="activityHours" name="activityHours" type="number" min="0.25" max="168" step="0.25" />
+            </div>
+            <div>
+              <label for="transitionSeconds">Transición por cantante (segundos)</label>
+              <input id="transitionSeconds" name="transitionSeconds" type="number" min="0" max="900" step="1" />
+            </div>
+          </div>
+          <label class="toggle">
+            <input id="acceptingRequests" name="acceptingRequests" type="checkbox" />
+            <span></span>
+            Aceptar solicitudes en el formulario
+          </label>
+          <div class="sheet-state-grid">
+            <div><small>Inicio</small><strong id="settingsStartedAt">—</strong></div>
+            <div><small>Acumulado</small><strong id="settingsAccumulated">0:00:00</strong></div>
+            <div><small>Restante programado</small><strong id="settingsRemaining">0:00:00</strong></div>
+            <div><small>ID de actividad</small><strong id="settingsActivityId">—</strong></div>
+            <div><small>Revisión del estado</small><strong id="settingsRevision">—</strong></div>
+            <div><small>Último cambio</small><strong id="settingsUpdatedAt">—</strong></div>
+            <div><small>Última acción</small><strong id="settingsLastAction">—</strong></div>
+            <div><small>Origen</small><strong id="settingsLastSource">—</strong></div>
+          </div>
+          <p class="settings-help">
+            Los tiempos acumulados y restantes se calculan automáticamente. “Saltado” se resta; “Ya cantó” permanece contado.
+          </p>
+        </section>
+
+        <div class="settings-actions">
+          <button type="button" class="button ghost" id="testSheet">Probar hoja</button>
+          <button type="button" class="button ghost" id="testVdj">Probar VirtualDJ</button>
+          <button type="submit" class="button primary">Guardar configuración</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="successDialog" class="success-dialog">
+      <div class="success-content">
+        <div class="success-check" aria-hidden="true">✓</div>
+        <p class="eyebrow">CONEXIÓN CONFIRMADA</p>
+        <h2 id="successTitle">Todo está correcto</h2>
+        <p id="successDetail"></p>
+        <button type="button" class="button success" id="closeSuccess">Entendido</button>
+      </div>
+    </dialog>
+
+    <template id="requestTemplate">
+      <article class="request-card">
+        <div class="request-number"></div>
+        <div class="request-main">
+          <div class="request-head">
+            <div>
+              <p class="singer"></p>
+              <h3 class="song"></h3>
+              <p class="artist"></p>
+              <p class="request-language"></p>
+            </div>
+            <span class="state-badge"></span>
+          </div>
+          <div class="source-panel hidden"></div>
+          <div class="match-panel"></div>
+          <div class="youtube-panel hidden"></div>
+          <div class="outcome-panel"></div>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

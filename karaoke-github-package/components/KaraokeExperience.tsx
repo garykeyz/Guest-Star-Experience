@@ -1,4 +1,3 @@
-/opt/homebrew/Library/Homebrew/cmd/shellenv.sh: line 27: /bin/ps: Operation not permitted
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
@@ -13,10 +12,22 @@ type FieldKey = "name" | "song" | "artist" | "comment";
 type Copy = {
   live: string; title: string; sub: string; desc: string; fields: Record<FieldKey, [string, string]>;
   error: string; submit: string; sending: string; success: string; stage: string;
-  again: string; closed: string; closedText: string; steps: string[];
+  again: string; closed: string; closedText: string; failed: string; steps: string[];
 };
 
-const ENDPOINT = "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
+type ApiState = {
+  accepting?: boolean;
+  stateRevision?: number;
+  activityId?: string;
+};
+type ApiResponse = ApiState & {
+  ok?: boolean;
+  code?: string;
+  error?: string;
+  state?: ApiState;
+};
+
+const ENDPOINT = "/api/karaoke";
 const languages: [Lang, string, string][] = [
   ["es","🇪🇸","Español"],["en","🇺🇸","English"],["fr","🇫🇷","Français"],
   ["it","🇮🇹","Italiano"],["de","🇩🇪","Deutsch"],["ru","🇷🇺","Русский"],["pt","🇵🇹","Português"]
@@ -27,6 +38,7 @@ const common = (x: Partial<Copy>): Copy => ({
   error:"Please complete this field.",submit:"Submit Request",sending:"Sending...",
   success:"Your song request has been sent!",stage:"Get ready to take the stage!",again:"Submit another song",
   closed:"Requests are closed",closedText:"The host has temporarily closed song requests.",
+  failed:"We couldn't send your request. Please try again.",
   steps:["Fill the form","Wait for your turn","Sing and enjoy!"],...x
 });
 const copy: Record<Lang, Copy> = {
@@ -38,6 +50,7 @@ const copy: Record<Lang, Copy> = {
     error:"Completa este campo.",submit:"Enviar solicitud",sending:"Enviando...",
     success:"¡Tu solicitud de canción ha sido enviada!",stage:"¡Prepárate para subir al escenario!",again:"Pedir otra canción",
     closed:"Solicitudes cerradas",closedText:"El anfitrión ha cerrado temporalmente las solicitudes de canciones.",
+    failed:"No pudimos enviar la solicitud. Inténtalo de nuevo.",
     steps:["Completa el formulario","Espera tu turno","¡Canta y disfruta!"]
   }),
   fr: common({
@@ -47,6 +60,7 @@ const copy: Record<Lang, Copy> = {
     error:"Veuillez remplir ce champ.",submit:"Envoyer la demande",sending:"Envoi en cours...",
     success:"Votre demande de chanson a bien été envoyée !",stage:"Préparez-vous à monter sur scène !",again:"Demander une autre chanson",
     closed:"Demandes fermées",closedText:"L’animateur a temporairement fermé les demandes de chansons.",
+    failed:"Impossible d’envoyer votre demande. Veuillez réessayer.",
     steps:["Remplissez le formulaire","Attendez votre tour","Chantez et amusez-vous !"]
   }),
   it: common({
@@ -56,6 +70,7 @@ const copy: Record<Lang, Copy> = {
     error:"Compila questo campo.",submit:"Invia richiesta",sending:"Invio in corso...",
     success:"La tua richiesta è stata inviata!",stage:"Preparati a salire sul palco!",again:"Richiedi un’altra canzone",
     closed:"Richieste chiuse",closedText:"Il presentatore ha temporaneamente chiuso le richieste di brani.",
+    failed:"Non è stato possibile inviare la richiesta. Riprova.",
     steps:["Compila il modulo","Aspetta il tuo turno","Canta e divertiti!"]
   }),
   de: common({
@@ -65,6 +80,7 @@ const copy: Record<Lang, Copy> = {
     error:"Bitte fülle dieses Feld aus.",submit:"Songwunsch senden",sending:"Wird gesendet...",
     success:"Dein Songwunsch wurde gesendet!",stage:"Mach dich bereit für deinen Auftritt!",again:"Weiteren Song wünschen",
     closed:"Keine Songwünsche möglich",closedText:"Der Gastgeber nimmt vorübergehend keine Songwünsche an.",
+    failed:"Dein Songwunsch konnte nicht gesendet werden. Bitte versuche es erneut.",
     steps:["Formular ausfüllen","Warte, bis du dran bist","Singen und Spaß haben!"]
   }),
   ru: common({
@@ -74,6 +90,7 @@ const copy: Record<Lang, Copy> = {
     error:"Заполните это поле.",submit:"Отправить заявку",sending:"Отправка...",
     success:"Ваша заявка на песню отправлена!",stage:"Приготовьтесь выйти на сцену!",again:"Заказать ещё одну песню",
     closed:"Приём заявок закрыт",closedText:"Ведущий временно приостановил приём заявок на песни.",
+    failed:"Не удалось отправить заявку. Попробуйте ещё раз.",
     steps:["Заполните форму","Дождитесь своей очереди","Пойте и получайте удовольствие!"]
   }),
   pt: common({
@@ -83,35 +100,40 @@ const copy: Record<Lang, Copy> = {
     error:"Preencha este campo.",submit:"Enviar pedido",sending:"A enviar...",
     success:"O seu pedido de música foi enviado!",stage:"Prepare-se para subir ao palco!",again:"Pedir outra música",
     closed:"Pedidos encerrados",closedText:"O anfitrião encerrou temporariamente os pedidos de músicas.",
+    failed:"Não foi possível enviar o pedido. Tente novamente.",
     steps:["Preencha o formulário","Aguarde a sua vez","Cante e divirta-se!"]
   })
 };
 const icons = { name: UserRound, song: Music2, artist: Mic2, comment: MessageCircleMore };
 
-function status(callback: (open: boolean) => void) {
-  const name = `karaokeStatus${Date.now()}`;
-  const w = window as unknown as Record<string, unknown>;
-  const script = document.createElement("script");
-  const clean = () => { delete w[name]; script.remove(); };
-  w[name] = (data: { accepting?: boolean }) => { callback(data.accepting !== false); clean(); };
-  script.src = `${ENDPOINT}?action=status&callback=${name}&t=${Date.now()}`;
-  script.onerror = clean;
-  document.body.appendChild(script);
+async function api(url = ENDPOINT, init?: RequestInit): Promise<ApiResponse> {
+  const response = await fetch(url, {
+    ...init,
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({})) as ApiResponse;
+  if (!response.ok || data.ok === false) {
+    const error = new Error(data.error || data.code || "REQUEST_FAILED");
+    Object.assign(error, { code: data.code });
+    throw error;
+  }
+  return data;
 }
 
-function verifyHostPin(pin: string, callback: (valid: boolean) => void) {
-  const name = `karaokeHost${Date.now()}`;
-  const w = window as unknown as Record<string, unknown>;
-  const script = document.createElement("script");
-  const clean = () => { delete w[name]; script.remove(); };
-  w[name] = (data: { ok?: boolean }) => { callback(data.ok === true); clean(); };
-  script.src = `${ENDPOINT}?action=verifyHost&pin=${encodeURIComponent(pin)}&callback=${name}&t=${Date.now()}`;
-  script.onerror = () => { callback(false); clean(); };
-  document.body.appendChild(script);
+function post(data: Record<string, unknown>) {
+  return api(ENDPOINT, { method: "POST", body: JSON.stringify(data) });
+}
+
+function acceptingFrom(data: ApiResponse) {
+  return (data.state?.accepting ?? data.accepting) !== false;
 }
 
 export default function KaraokeExperience() {
-  const [lang,setLang]=useState<Lang>("en");
+  const [lang,setLang]=useState<Lang|null>(null);
   const [menu,setMenu]=useState(false);
   const [values,setValues]=useState<Record<FieldKey,string>>({name:"",song:"",artist:"",comment:""});
   const [touched,setTouched]=useState<Partial<Record<FieldKey,boolean>>>({});
@@ -124,53 +146,89 @@ export default function KaraokeExperience() {
   const [newPin,setNewPin]=useState("");
   const [hostBusy,setHostBusy]=useState(false);
   const [message,setMessage]=useState("");
-  const text=copy[lang];
-  const active=languages.find(x=>x[0]===lang)!;
+  const [submitError,setSubmitError]=useState("");
+  const text=copy[lang||"en"];
+  const active=languages.find(x=>x[0]===lang)||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
 
-  useEffect(()=>{ status(setAccepting); const id=window.setInterval(()=>status(setAccepting),15000); return()=>clearInterval(id); },[]);
+  useEffect(()=>{
+    let mounted=true;
+    const refreshStatus=async()=>{
+      try{
+        const data=await api(`${ENDPOINT}?action=status&t=${Date.now()}`);
+        if(mounted)setAccepting(acceptingFrom(data));
+      }catch{
+        // Conserva el último estado conocido mientras se recupera la conexión.
+      }
+    };
+    refreshStatus();
+    const id=window.setInterval(refreshStatus,5000);
+    return()=>{mounted=false;clearInterval(id);};
+  },[]);
 
   const submit=async(e:FormEvent)=>{
     e.preventDefault(); setTouched({name:true,song:true,artist:true});
     if(!complete||!accepting)return;
-    setLoading(true);
+    setLoading(true);setSubmitError("");
     try{
-      await fetch(ENDPOINT,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({...values,language:active[2]})});
+      const data=await post({...values,language:active[2]});
+      setAccepting(acceptingFrom(data));
       setDone(true);
+    }catch(error){
+      const code=(error as Error & {code?:string}).code;
+      if(code==="CLOSED")setAccepting(false);
+      setSubmitError(code==="CLOSED"?text.closedText:text.failed);
     }finally{setLoading(false);}
   };
   const hostAction=async(action:"open"|"close"|"reset")=>{
     if(!hostAuthenticated){setMessage("Primero valida el PIN.");return;}
     if(action==="reset"&&!window.confirm("¿Archivar y reiniciar la actividad?"))return;
     setHostBusy(true);setMessage("Procesando...");
-    await fetch(ENDPOINT,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action,pin:pin.trim()})});
-    window.setTimeout(()=>status(open=>{setAccepting(open);setMessage(action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");setHostBusy(false);}),1200);
+    try{
+      const data=await post({action,pin:pin.trim(),source:"web"});
+      setAccepting(acceptingFrom(data));
+      setMessage(action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");
+    }catch(error){
+      const code=(error as Error & {code?:string}).code;
+      if(code==="INVALID_PIN")setHostAuthenticated(false);
+      setMessage(code==="INVALID_PIN"?"El PIN ya no es válido.":"No se pudo completar la acción.");
+    }finally{setHostBusy(false);}
   };
-  const loginHost=()=>{
+  const loginHost=async()=>{
     if(!pin.trim()){setMessage("Introduce el PIN.");return;}
     setHostBusy(true);setMessage("Verificando...");
-    verifyHostPin(pin.trim(),valid=>{
+    try{
+      const data=await api(`${ENDPOINT}?action=verifyHost&pin=${encodeURIComponent(pin.trim())}&t=${Date.now()}`);
+      const valid=data.ok===true;
       setHostAuthenticated(valid);
       setMessage(valid?"Acceso autorizado.":"PIN incorrecto.");
-      setHostBusy(false);
-    });
+    }catch{
+      setHostAuthenticated(false);setMessage("PIN incorrecto.");
+    }finally{setHostBusy(false);}
   };
   const changeHostPin=async()=>{
     if(!hostAuthenticated)return;
     if(!/^\d{6,12}$/.test(newPin)){setMessage("El PIN nuevo debe tener entre 6 y 12 números.");return;}
     setHostBusy(true);setMessage("Actualizando PIN...");
-    await fetch(ENDPOINT,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"changePin",pin:pin.trim(),newPin})});
-    window.setTimeout(()=>verifyHostPin(newPin,valid=>{
-      if(valid){setPin(newPin);setNewPin("");setMessage("PIN actualizado correctamente.");}
-      else setMessage("No se pudo actualizar el PIN.");
-      setHostBusy(false);
-    }),1200);
+    try{
+      await post({action:"changePin",pin:pin.trim(),newPin,source:"web"});
+      setPin(newPin);setNewPin("");setMessage("PIN actualizado correctamente.");
+    }catch{
+      setMessage("No se pudo actualizar el PIN.");
+    }finally{setHostBusy(false);}
   };
-  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setDone(false);};
+  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDone(false);};
 
   return <main className="page">
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
     <div className="brand">✦ GUEST STAR EXPERIENCE</div>
+    {!lang?<motion.section className="card languageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
+      <div className="badge"><Mic2 size={31}/></div>
+      <p className="eyebrow"><Sparkles size={14}/> IDIOMA DE LA CANCIÓN</p>
+      <h1>¿En qué idioma vas a cantar?</h1>
+      <p>Debes elegir un idioma antes de llenar la solicitud. Así buscaremos la mejor versión de karaoke y el anfitrión sabrá cuál elegiste.</p>
+      <div className="languageGrid">{languages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[2]}</strong><Check size={18}/></button>)}</div>
+    </motion.section>:<>
     <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[2]}</span><ChevronDown size={16}/></button>
       <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{languages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[2]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
     </div>
@@ -188,9 +246,10 @@ export default function KaraokeExperience() {
     <motion.div className="card" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
       {!done?<><header><div className="badge"><Mic2 size={31}/></div><p className="eyebrow"><Sparkles size={14}/> {text.live}</p><h1>{text.title}</h1><h2>{text.sub}</h2><p className="desc">{text.desc}</p></header>
       {accepting?<form onSubmit={submit}>{(["name","song","artist","comment"] as FieldKey[]).map(k=>{const Icon=icons[k],required=k!=="comment",bad=required&&touched[k]&&!values[k].trim();return <div className="field" key={k}><label htmlFor={k}>{text.fields[k][0]} {required&&<b>*</b>}</label><div className={`input ${bad?"bad":""}`}><Icon size={20}/>{k==="comment"?<textarea id={k} value={values[k]} placeholder={text.fields[k][1]} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>:<input id={k} required value={values[k]} placeholder={text.fields[k][1]} onBlur={()=>setTouched(t=>({...t,[k]:true}))} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>}</div>{bad&&<p>{text.error}</p>}</div>})}
-        <button className="submit" disabled={!complete||loading}>{loading?<><i className="loader"/>{text.sending}</>:<><Mic2 size={21}/>{text.submit}<Send className="send" size={17}/></>}</button>
+        <button className="submit" disabled={!complete||loading}>{loading?<><i className="loader"/>{text.sending}</>:<><Mic2 size={21}/>{text.submit}<Send className="send" size={17}/></>}</button>{submitError&&<p className="submitError" role="alert">{submitError}</p>}
       </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
     </motion.div>
     <footer>{text.steps.map((x,i)=><div className="stepWrap" key={x}><div className="step">{i===0?<MessageCircleMore/>:i===1?<Music2/>:<Mic2/>}<span>{x}</span></div>{i<2&&<ArrowRight className="arrow" size={16}/>}</div>)}</footer>
+    </>}
   </main>;
 }
