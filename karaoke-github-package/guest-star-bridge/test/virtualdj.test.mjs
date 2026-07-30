@@ -169,6 +169,53 @@ test("retira por cantante y título cuando VirtualDJ omite la ruta y altera el a
   assert.equal(removed.singer, "Gary");
 });
 
+test("avisa cuando VirtualDJ acepta el comando pero no retira la canción", async (t) => {
+  const queue = [
+    {
+      filepath: "/Music/Dancing Queen.mp4",
+      singer: "Moises",
+      title: "Dancing Queen",
+      artist: "ABBA"
+    }
+  ];
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(
+        /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
+      );
+      response.end(next ? queue[0]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  await assert.rejects(
+    removeKaraokeEntry(
+      {
+        host: "127.0.0.1",
+        port: server.address().port,
+        password: "",
+        timeoutMs: 1000
+      },
+      {
+        filePath: "/Music/Dancing Queen.mp4",
+        singer: "Moises",
+        song: "Dancing Queen",
+        artist: "ABBA"
+      }
+    ),
+    /todavía aparece en la cola/
+  );
+});
+
 test("lee la cola Karaoke completa respetando su orden", async (t) => {
   const queue = [
     {

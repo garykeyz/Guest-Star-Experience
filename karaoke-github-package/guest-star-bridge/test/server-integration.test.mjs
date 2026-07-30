@@ -275,6 +275,30 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     ["request-1"]
   );
 
+  const removedByBridge = await fetch(
+    `${bridgeUrl}/api/requests/request-1/remove`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }
+  ).then((response) => response.json());
+  assert.equal(removedByBridge.removed, true);
+  assert.equal(removedByBridge.verified, true);
+  assert.equal(removedByBridge.singer, "Ana");
+  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
+
+  const queuedAgain = await fetch(
+    `${bridgeUrl}/api/requests/request-1/queue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: localSong })
+    }
+  ).then((response) => response.json());
+  assert.equal(queuedAgain.ok, true);
+  assert.equal(vdjQueue.at(-1).singer, "Ana");
+
   await unlink(localSong);
   state = await waitForState(
     bridgeUrl,
@@ -297,6 +321,8 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     }
   ).then((response) => response.json());
   assert.equal(completed.status, "Ya cantó");
+  assert.equal(completed.removedFromVirtualDJ, true);
+  assert.equal(completed.singer, "Ana");
   state = await waitForState(
     bridgeUrl,
     (candidate) =>

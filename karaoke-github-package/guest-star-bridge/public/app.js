@@ -3,10 +3,14 @@ const requestsEl = $("#requests");
 const noticeEl = $("#notice");
 const settingsDialog = $("#settingsDialog");
 const successDialog = $("#successDialog");
+const confirmDialog = $("#confirmDialog");
 const folderList = $("#folderList");
 let state = null;
 let folders = [];
-let busy = false;
+let activityBusy = false;
+let scanBusy = false;
+let syncBusy = false;
+const actionLocks = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
 
@@ -33,6 +37,78 @@ function showSuccess(title, detail) {
   $("#successDetail").textContent = detail;
   if (successDialog.open) successDialog.close();
   successDialog.showModal();
+}
+
+function confirmAction({
+  title,
+  detail,
+  confirmLabel = "Confirmar",
+  danger = true
+}) {
+  return new Promise((resolve) => {
+    const accept = $("#acceptConfirm");
+    const cancel = $("#cancelConfirm");
+    $("#confirmTitle").textContent = title;
+    $("#confirmDetail").textContent = detail;
+    accept.textContent = confirmLabel;
+    accept.className = `button ${danger ? "danger" : "primary"}`;
+
+    let settled = false;
+    const finish = (confirmed) => {
+      if (settled) return;
+      settled = true;
+      accept.removeEventListener("click", acceptAction);
+      cancel.removeEventListener("click", cancelAction);
+      confirmDialog.removeEventListener("cancel", cancelDialog);
+      if (confirmDialog.open) confirmDialog.close();
+      resolve(confirmed);
+    };
+    const acceptAction = () => finish(true);
+    const cancelAction = () => finish(false);
+    const cancelDialog = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+
+    accept.addEventListener("click", acceptAction);
+    cancel.addEventListener("click", cancelAction);
+    confirmDialog.addEventListener("cancel", cancelDialog);
+    if (confirmDialog.open) confirmDialog.close();
+    confirmDialog.showModal();
+  });
+}
+
+function actionScope(id) {
+  return `request:${id}`;
+}
+
+function requestLabel(id) {
+  const item = state?.requests?.find((entry) => entry.id === id);
+  return item ? `${item.singer} — ${item.song}` : "La canción";
+}
+
+async function runAction(scope, progress, operation, successMessage) {
+  if (actionLocks.has(scope)) {
+    showNotice("Esta acción ya se está procesando. Espera la confirmación.");
+    return null;
+  }
+  actionLocks.add(scope);
+  showNotice(progress);
+  renderRequests();
+  try {
+    const data = await operation();
+    await refresh();
+    const success = successMessage(data);
+    showNotice(success.detail);
+    showSuccess(success.title, success.detail);
+    return data;
+  } catch (error) {
+    showNotice(`No se pudo completar la acción: ${error.message}`, true);
+    return null;
+  } finally {
+    actionLocks.delete(scope);
+    renderRequests();
+  }
 }
 
 function timeAgo(value) {
@@ -214,9 +290,9 @@ function updateStatus() {
     accepting ? "Solicitudes abiertas" : "Solicitudes cerradas",
     `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
   );
-  $("#openRequests").disabled = busy || accepting;
-  $("#closeRequests").disabled = busy || !accepting;
-  $("#resetRequests").disabled = busy;
+  $("#openRequests").disabled = activityBusy || accepting;
+  $("#closeRequests").disabled = activityBusy || !accepting;
+  $("#resetRequests").disabled = activityBusy;
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -288,115 +364,123 @@ function renderSourceLink(panel, url) {
 }
 
 async function queue(id, filePath, requeue = false) {
-  if (busy) return;
-  busy = true;
-  try {
-    const data = await api(`/api/requests/${encodeURIComponent(id)}/queue`, {
+  const label = requestLabel(id);
+  await runAction(
+    actionScope(id),
+    `Enviando ${label} a VirtualDJ…`,
+    () => api(`/api/requests/${encodeURIComponent(id)}/queue`, {
       method: "POST",
       body: JSON.stringify({ filePath, requeue })
-    });
-    showNotice(
-      data.warning ||
-      (data.restored
-        ? "Canción colocada nuevamente al final de la rotación."
+    }),
+    (data) => ({
+      title: data.restored
+        ? "Canción colocada nuevamente"
         : data.requeued
-          ? "Canción reenviada al final de la rotación de VirtualDJ."
-          : "Canción agregada a la cola Karaoke de VirtualDJ.")
-    );
-    await refresh();
-  } catch (error) {
-    showNotice(error.message, true);
-  } finally {
-    busy = false;
-  }
+          ? "Canción reenviada"
+          : "Canción agregada a VirtualDJ",
+      detail:
+        data.warning ||
+        `${label} quedó confirmada en la cola Karaoke de VirtualDJ.`
+    })
+  );
 }
 
 async function removeFromQueue(id) {
-  if (busy) return;
-  if (!window.confirm("¿Retirar esta canción de la rotación de VirtualDJ?")) return;
-  busy = true;
-  try {
-    const data = await api(`/api/requests/${encodeURIComponent(id)}/remove`, {
+  const label = requestLabel(id);
+  const confirmed = await confirmAction({
+    title: "Retirar de VirtualDJ",
+    detail: `¿Quieres retirar ${label} de la rotación de VirtualDJ?`,
+    confirmLabel: "Sí, retirar"
+  });
+  if (!confirmed) return;
+  await runAction(
+    actionScope(id),
+    `Retirando ${label} de VirtualDJ…`,
+    () => api(`/api/requests/${encodeURIComponent(id)}/remove`, {
       method: "POST",
       body: "{}"
-    });
-    showNotice(data.warning || "Canción retirada de la rotación de VirtualDJ.");
-    await refresh();
-  } catch (error) {
-    showNotice(error.message, true);
-  } finally {
-    busy = false;
-  }
+    }),
+    (data) => ({
+      title: "Canción retirada de VirtualDJ",
+      detail:
+        data.warning ||
+        `${label} fue retirada y la cola real de VirtualDJ confirmó el cambio.`
+    })
+  );
 }
 
 async function dismissRequeue(id) {
-  if (busy) return;
-  busy = true;
-  try {
-    const data = await api(
+  const label = requestLabel(id);
+  await runAction(
+    actionScope(id),
+    `Guardando ${label} fuera de la rotación…`,
+    () => api(
       `/api/requests/${encodeURIComponent(id)}/dismiss-requeue`,
       { method: "POST", body: "{}" }
-    );
-    showNotice(data.warning || "La canción permanecerá fuera de la rotación.");
-    await refresh();
-  } catch (error) {
-    showNotice(error.message, true);
-  } finally {
-    busy = false;
-  }
+    ),
+    (data) => ({
+      title: "Canción fuera de la rotación",
+      detail:
+        data.warning ||
+        `${label} permanecerá fuera de VirtualDJ.`
+    })
+  );
 }
 
 async function markOutcome(id, outcome) {
-  if (busy) return;
+  const songLabel = requestLabel(id);
   const label = outcome === "completed" ? "Ya cantó" : "Saltado";
   if (
     outcome === "skipped" &&
-    !window.confirm("¿Marcar esta canción como saltada y restarla del tiempo total?")
+    !(await confirmAction({
+      title: "Marcar como saltado",
+      detail: `¿Marcar ${songLabel} como saltado, retirarlo de VirtualDJ y restarlo del tiempo total?`,
+      confirmLabel: "Sí, marcar saltado"
+    }))
   ) {
     return;
   }
-  busy = true;
-  try {
-    const data = await api(
+  await runAction(
+    actionScope(id),
+    outcome === "completed"
+      ? `Marcando ${songLabel} como ya cantado…`
+      : `Marcando ${songLabel} como saltado…`,
+    () => api(
       `/api/requests/${encodeURIComponent(id)}/outcome`,
       {
         method: "POST",
         body: JSON.stringify({ outcome })
       }
-    );
-    showNotice(
-      data.warning ||
-      `${label}: el tiempo y la cola de VirtualDJ fueron actualizados.`
-    );
-    await refresh();
-  } catch (error) {
-    showNotice(error.message, true);
-  } finally {
-    busy = false;
-  }
+    ),
+    (data) => ({
+      title: outcome === "completed" ? "Cantante completado" : "Canción saltada",
+      detail:
+        data.warning ||
+        (outcome === "completed"
+          ? `${songLabel} quedó marcado como “Ya cantó”; permanece contado en el tiempo total y fue retirado de VirtualDJ.`
+          : `${songLabel} quedó marcado como “Saltado”; fue retirado de VirtualDJ y restado del tiempo total.`)
+    })
+  );
 }
 
 async function queueSuggestion(item, singerMode) {
-  if (busy) return;
-  busy = true;
-  try {
-    const data = await api("/api/suggestions/queue", {
+  const scope = `suggestion:${item.song}:${item.artist}`;
+  await runAction(
+    scope,
+    `Agregando ${item.song} a VirtualDJ…`,
+    () => api("/api/suggestions/queue", {
       method: "POST",
       body: JSON.stringify({
         song: item.song,
         artist: item.artist,
         singerMode
       })
-    });
-    showNotice(
-      `${data.song} fue agregada a VirtualDJ para ${data.singer}.`
-    );
-    await refresh();
-  } catch (error) {
-    showNotice(error.message, true);
-  } finally {
-    busy = false;
-  }
+    }),
+    (data) => ({
+      title: "Tema agregado a VirtualDJ",
+      detail: `${data.song} fue agregada a VirtualDJ para ${data.singer}.`
+    })
+  );
 }
 
 async function youtube(id, panel) {
@@ -522,6 +606,7 @@ function renderRequests() {
   state.requests.forEach((item, index) => {
     const fragment = template.content.cloneNode(true);
     const card = $(".request-card", fragment);
+    const requestPending = actionLocks.has(actionScope(item.id));
     $(".request-number", card).textContent = index + 1;
     $(".singer", card).textContent = item.singer;
     $(".song", card).textContent = item.song;
@@ -713,6 +798,13 @@ function renderRequests() {
         )
       );
     }
+    if (requestPending) {
+      card.classList.add("processing");
+      badge.textContent = "Procesando…";
+      card.querySelectorAll("button").forEach((element) => {
+        element.disabled = true;
+      });
+    }
     requestsEl.append(fragment);
   });
 }
@@ -864,21 +956,27 @@ async function refresh() {
 }
 
 async function scan() {
-  if (busy) return;
-  busy = true;
+  if (scanBusy) {
+    showNotice("La biblioteca ya se está actualizando.");
+    return;
+  }
+  scanBusy = true;
   try {
     applyState(await api("/api/library/scan", { method: "POST", body: "{}" }));
     showNotice(`Biblioteca actualizada: ${state.library.count} pistas encontradas.`);
   } catch (error) {
     showNotice(error.message, true);
   } finally {
-    busy = false;
+    scanBusy = false;
   }
 }
 
 async function syncRequests({ quiet = false } = {}) {
-  if (busy) return;
-  busy = true;
+  if (syncBusy) {
+    if (!quiet) showNotice("La sincronización ya está en curso.");
+    return;
+  }
+  syncBusy = true;
   updateStatus();
   try {
     applyState(
@@ -890,7 +988,7 @@ async function syncRequests({ quiet = false } = {}) {
   } catch (error) {
     showNotice(error.message, true);
   } finally {
-    busy = false;
+    syncBusy = false;
     updateStatus();
   }
 }
@@ -904,14 +1002,21 @@ function syncWhenActive() {
 }
 
 async function controlActivity(action) {
-  if (busy) return;
+  if (activityBusy) {
+    showNotice("Ya se está procesando un cambio de actividad.");
+    return;
+  }
   if (
     action === "reset" &&
-    !window.confirm("¿Archivar todas las solicitudes y comenzar una actividad nueva?")
+    !(await confirmAction({
+      title: "Reiniciar actividad",
+      detail: "¿Archivar todas las solicitudes y comenzar una actividad nueva?",
+      confirmLabel: "Sí, reiniciar"
+    }))
   ) {
     return;
   }
-  busy = true;
+  activityBusy = true;
   updateStatus();
   try {
     applyState(
@@ -925,7 +1030,7 @@ async function controlActivity(action) {
   } catch (error) {
     showNotice(error.message, true);
   } finally {
-    busy = false;
+    activityBusy = false;
     updateStatus();
   }
 }
@@ -956,7 +1061,11 @@ $("#chooseFolder").addEventListener("click", async () => {
   }
 });
 $("#forgetHostPin").addEventListener("click", async () => {
-  if (!window.confirm("¿Olvidar el PIN guardado en este Mac?")) return;
+  if (!(await confirmAction({
+    title: "Olvidar PIN",
+    detail: "¿Olvidar el PIN guardado en este Mac?",
+    confirmLabel: "Sí, olvidar"
+  }))) return;
   try {
     await api("/api/config", {
       method: "POST",
@@ -970,7 +1079,11 @@ $("#forgetHostPin").addEventListener("click", async () => {
   }
 });
 $("#forgetVdjPassword").addEventListener("click", async () => {
-  if (!window.confirm("¿Quitar la contraseña guardada de VirtualDJ?")) return;
+  if (!(await confirmAction({
+    title: "Quitar contraseña",
+    detail: "¿Quitar la contraseña guardada de VirtualDJ?",
+    confirmLabel: "Sí, quitar"
+  }))) return;
   try {
     await api("/api/config", {
       method: "POST",

@@ -39,3 +39,22 @@ test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () =
   assert.match(bridgeHtml, /class="request-language"/);
   assert.match(appSource, /Idioma: \$\{item\.language\}/);
 });
+
+test("las acciones usan confirmación interna y notifican su resultado", () => {
+  assert.doesNotMatch(appSource, /window\.confirm/);
+  assert.match(appSource, /function confirmAction/);
+  assert.match(appSource, /function runAction/);
+  assert.match(appSource, /showSuccess\(success\.title, success\.detail\)/);
+  assert.match(appSource, /Canción retirada de VirtualDJ/);
+  assert.match(appSource, /Cantante completado/);
+  assert.match(appSource, /Canción saltada/);
+  assert.match(bridgeHtml, /id="confirmDialog"/);
+  assert.match(bridgeHtml, /id="acceptConfirm"/);
+});
+
+test("la sincronización de fondo no bloquea los botones por canción", () => {
+  assert.match(appSource, /let syncBusy = false/);
+  assert.match(appSource, /const actionLocks = new Set/);
+  assert.doesNotMatch(appSource, /let busy = false/);
+  assert.match(appSource, /actionLocks\.has\(actionScope\(item\.id\)\)/);
+});
