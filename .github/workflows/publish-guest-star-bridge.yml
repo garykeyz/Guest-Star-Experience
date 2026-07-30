@@ -46,7 +46,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.0.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.1.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -54,7 +54,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.0-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.1-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -67,10 +67,10 @@ jobs:
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-M1-v3.0.0-app.zip \
-              Guest-Star-Bridge-M1-v3.0.0.dmg \
-              guest-star-experience-sync-v3.0.0.zip \
-              guest-star-bridge-v3.0.0-source.zip \
+              Guest-Star-Bridge-M1-v3.0.1-app.zip \
+              Guest-Star-Bridge-M1-v3.0.1.dmg \
+              guest-star-experience-sync-v3.0.1.zip \
+              guest-star-bridge-v3.0.1-source.zip \
               Code.gs \
               > SHA256SUMS.txt
           )
@@ -79,12 +79,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v3.0.0"
+          tag="v3.0.1"
           assets=(
-            "release-output/Guest-Star-Bridge-M1-v3.0.0-app.zip"
-            "release-output/Guest-Star-Bridge-M1-v3.0.0.dmg"
-            "release-output/guest-star-experience-sync-v3.0.0.zip"
-            "release-output/guest-star-bridge-v3.0.0-source.zip"
+            "release-output/Guest-Star-Bridge-M1-v3.0.1-app.zip"
+            "release-output/Guest-Star-Bridge-M1-v3.0.1.dmg"
+            "release-output/guest-star-experience-sync-v3.0.1.zip"
+            "release-output/guest-star-bridge-v3.0.1-source.zip"
             "release-output/Code.gs"
             "release-output/SHA256SUMS.txt"
           )
@@ -94,6 +94,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Bridge 3.0.0" \
+              --title "Guest Star Bridge 3.0.1" \
               --notes "Descarga oficial para Mac Apple Silicon. Incluye APP ZIP, DMG, Code.gs y paquetes de código fuente."
           fi

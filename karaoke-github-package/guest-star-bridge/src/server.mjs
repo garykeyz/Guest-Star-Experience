@@ -43,7 +43,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "3.0.0";
+const BRIDGE_VERSION = "3.0.1";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -1054,7 +1054,16 @@ async function removeQueuedRequest(id) {
         warning ||
         `La canción se retiró de VirtualDJ, pero la hoja no se actualizó: ${errorMessage(error)}`;
     }
-    return { ok: true, removed: result.removed === true, warning };
+    await reconcileVirtualDjQueue(true);
+    return {
+      ok: true,
+      removed: result.removed === true,
+      verified: result.verified === true || result.reason === "not-found",
+      singer: item.singer,
+      song: item.song,
+      status: item.status,
+      warning
+    };
   } catch (error) {
     vdjError = errorMessage(error);
     throw error;
@@ -1091,8 +1100,9 @@ async function setRequestOutcome(id, outcome) {
   const status = outcome === "completed" ? "Ya cantó" : "Saltado";
   const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
   let warning = "";
+  let removedFromVirtualDJ = false;
 
-  if (entry && (queuedIds.has(id) || vdjQueuePositions.has(id))) {
+  if (entry) {
     try {
       const result = await removeKaraokeEntry(config.virtualDJ, entry);
       if (result.reason === "ambiguous") {
@@ -1100,6 +1110,8 @@ async function setRequestOutcome(id, outcome) {
           "VirtualDJ tiene más de una copia idéntica. Retira la correcta manualmente antes de marcar el resultado."
         );
       }
+      removedFromVirtualDJ =
+        result.removed === true || result.reason === "not-found";
     } catch (error) {
       throw new Error(
         `No se pudo actualizar la cola real de VirtualDJ: ${errorMessage(error)}`
@@ -1128,7 +1140,15 @@ async function setRequestOutcome(id, outcome) {
       `El resultado quedó visible en el Bridge, pero la hoja no se actualizó: ${errorMessage(error)}`;
   }
   await reconcileVirtualDjQueue(true);
-  return { ok: true, status, outcome, warning };
+  return {
+    ok: true,
+    status,
+    outcome,
+    singer: item.singer,
+    song: item.song,
+    removedFromVirtualDJ,
+    warning
+  };
 }
 
 async function queueHitSuggestion(body = {}) {

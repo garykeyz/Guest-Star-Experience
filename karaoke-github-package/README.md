@@ -26,7 +26,7 @@ los contadores que Google haya convertido en fechas de 1899 y mantiene un estado
 compartido para **abrir, cerrar y reiniciar** desde la web, Google Sheets o el
 Bridge local.
 
-## Guest Star Bridge 3.0.0 para Mac
+## Guest Star Bridge 3.0.1 para Mac
 
 La carpeta `guest-star-bridge` conecta las solicitudes de esta misma hoja con:
 

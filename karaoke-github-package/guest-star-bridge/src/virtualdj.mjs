@@ -42,6 +42,28 @@ function normalizeVdjMetadata(value) {
     .trim();
 }
 
+function sameKaraokeIdentity(candidate, target) {
+  const sameSinger =
+    normalizeVdjSinger(candidate?.singer) === normalizeVdjSinger(target?.singer);
+  if (!sameSinger) return false;
+  const candidatePath = normalizeVdjPath(candidate?.filePath);
+  const targetPath = normalizeVdjPath(target?.filePath);
+  if (candidatePath && targetPath) return candidatePath === targetPath;
+
+  const candidateSong = normalizeVdjMetadata(candidate?.song);
+  const targetSong = normalizeVdjMetadata(target?.song);
+  if (!candidateSong || !targetSong || candidateSong !== targetSong) return false;
+  const candidateArtist = normalizeVdjMetadata(candidate?.artist);
+  const targetArtist = normalizeVdjMetadata(target?.artist);
+  return (
+    !candidateArtist ||
+    !targetArtist ||
+    candidateArtist === targetArtist ||
+    candidateArtist.includes(targetArtist) ||
+    targetArtist.includes(candidateArtist)
+  );
+}
+
 export function buildKaraokeRemoveScript(index) {
   const safeIndex = Math.max(0, Math.floor(Number(index) || 0));
   const steps = ['browser_window "karaoke"', 'browser_scroll "top"'];
@@ -204,6 +226,13 @@ export async function removeKaraokeEntry(config, entry) {
     };
   }
 
+  const selectedEntry = entries[selected];
   await executeVdj(config, buildKaraokeRemoveScript(selected));
-  return { removed: true, index: selected };
+  const updatedEntries = await listKaraokeEntries(config);
+  if (updatedEntries.some((candidate) => sameKaraokeIdentity(candidate, selectedEntry))) {
+    throw new Error(
+      "VirtualDJ recibió el comando, pero la canción todavía aparece en la cola Karaoke."
+    );
+  }
+  return { removed: true, verified: true, index: selected };
 }
