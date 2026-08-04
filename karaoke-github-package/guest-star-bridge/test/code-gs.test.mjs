@@ -43,16 +43,53 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.0"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.2"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
+  assert.match(source, /touchState_\("start",\s*source,\s*true\)/);
+  assert.match(source, /\["start", "open", "close", "reset"\]/);
   assert.match(source, /sourceUrl:\s*String\(row\[10\]/);
   assert.match(source, /fileName:\s*String\(row\[13\]/);
   assert.match(source, /durationSeconds:\s*durationCellSeconds_\(row\[6\]\)/);
   assert.match(source, /transitionSeconds:\s*durationCellSeconds_\(row\[7\]\)/);
   assert.match(source, /body\.action === "bridgeConfigUpdate"/);
   assert.match(source, /activityStartedAt:\s*cfg\.activityStartedAt/);
+  assert.match(source, /sheetRow:\s*index \+ 2/);
+});
+
+test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {
+  const originalSpreadsheet = context.spreadsheet_;
+  context.spreadsheet_ = () => ({
+    getSheetByName: () => ({
+      getLastRow: () => 3,
+      getRange: () => ({
+        getDisplayValues: () => [
+          ["Ana", "Dancing Queen", "ABBA", "", "English", "", "", "", "", "", "Agregada a VirtualDJ"],
+          ["Luis", "Vivir Mi Vida", "Marc Anthony", "", "Español", "", "", "", "", "", "Ya cantó"]
+        ]
+      })
+    })
+  });
+
+  const active = context.requestDuplicateWarning_({
+    name: "Ana",
+    song: "Dancing Queen",
+    artist: "ABBA"
+  });
+  const completed = context.requestDuplicateWarning_({
+    name: "Otro",
+    song: "Vivir Mi Vida",
+    artist: "Marc Anthony"
+  });
+  context.spreadsheet_ = originalSpreadsheet;
+
+  assert.equal(active.repeatedSinger, true);
+  assert.equal(active.duplicateSong, true);
+  assert.equal(active.duplicateSongState, "active");
+  assert.equal(completed.duplicateSongState, "completed");
+  assert.match(source, /DUPLICATE_CONFIRMATION_REQUIRED/);
+  assert.match(source, /!body\.confirmDuplicate/);
 });
 
 test("setup y el recálculo funcionan sin una interfaz de Google Sheets", () => {
@@ -67,6 +104,8 @@ test("setup y el recálculo funcionan sin una interfaz de Google Sheets", () => 
   assert.doesNotMatch(setupBody, /SpreadsheetApp\.getUi/);
   assert.doesNotMatch(recalculateBody, /SpreadsheetApp\.getUi/);
   assert.match(setupBody, /return state;/);
+  assert.match(source, /ensureBaseConfig_\(sheet\);/);
+  assert.match(source, /\["Último reinicio", new Date\(\)\]/);
 });
 
 test("YouTube devuelve hasta seis opciones confiables y exige letras visibles", () => {
@@ -82,11 +121,53 @@ test("YouTube devuelve hasta seis opciones confiables y exige letras visibles", 
 });
 
 test("la hoja entrega el idioma al Bridge y a la búsqueda de YouTube", () => {
+  assert.match(
+    source,
+    /!body\.name \|\| !body\.song \|\| !body\.artist \|\| !body\.language/
+  );
   assert.match(source, /language:\s*String\(row\[5\]/);
+  assert.match(
+    source,
+    /findSong_\(body\.song,\s*body\.artist,\s*body\.language\)/
+  );
   assert.match(
     source,
     /findKaraokeCandidates_\(body\.song,\s*body\.artist,\s*body\.language\)/
   );
+});
+
+test("el formulario guarda un solo enlace karaoke usando la misma prioridad del Bridge", () => {
+  const originalCandidates = context.findKaraokeCandidates_;
+  context.findKaraokeCandidates_ = () => [
+    {
+      id: "sing-king",
+      url: "https://www.youtube.com/watch?v=singking123",
+      durationSeconds: 243,
+      resultType: "karaoke",
+      channel: "Sing King"
+    },
+    {
+      id: "karafun",
+      url: "https://www.youtube.com/watch?v=karafun456",
+      durationSeconds: 250,
+      resultType: "karaoke",
+      channel: "KaraFun Karaoke"
+    }
+  ];
+
+  const selected = context.findSong_("Hello", "Adele", "English");
+  context.findKaraokeCandidates_ = originalCandidates;
+
+  assert.equal(selected.url, "https://www.youtube.com/watch?v=singking123");
+  assert.equal(selected.seconds, 243);
+  assert.equal(selected.resultType, "karaoke");
+  assert.doesNotMatch(source, /official audio/);
+  assert.match(source, /remainingSeconds \/ 86400, song\.url, "Pendiente"/);
+});
+
+test("el enlace elegido en el Bridge reemplaza la única fuente de la fila", () => {
+  assert.match(source, /const sourceUrl = clean_\(body\.sourceUrl\)/);
+  assert.match(source, /sheet\.getRange\(row, 11\)\.setValue\(sourceUrl\)/);
 });
 
 test("Español usa la lista ampliada de Latinoamérica sin crear otro idioma", () => {

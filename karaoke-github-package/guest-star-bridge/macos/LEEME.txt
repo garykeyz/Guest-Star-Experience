@@ -1,29 +1,29 @@
-GUEST STAR BRIDGE PARA MAC M1 / M2 / M3 / M4
+GUEST STAR BRIDGE 3.0.2 UNIVERSAL PARA MAC
 
-1. Arrastra “Guest Star Bridge.app” a la carpeta Aplicaciones.
-2. La primera vez, haz clic derecho sobre la aplicación y selecciona Abrir.
+Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
+
+1. Mueve “Guest Star Bridge.app” a Aplicaciones.
+2. La primera vez, haz clic derecho sobre la app y selecciona Abrir.
 3. Pulsa Abrir en la confirmación de macOS.
-4. Desde ese momento puedes abrirla normalmente con doble clic.
+4. Lee “INSTALACION-OTRA-MAC.txt” para la configuración completa.
 
 La aplicación:
 
-- inicia el Bridge silenciosamente, sin mostrar Terminal;
-- abre el panel dentro de una ventana propia de Guest Star Bridge;
-- no abre Safari, Chrome ni una pestaña del navegador;
-- incluye su propio motor Node para Apple Silicon;
-- conserva la configuración en Library/Application Support/Guest Star Bridge;
-- permite recordar la carpeta de karaoke y el PIN por separado;
-- deja elegir manualmente cuál opción de YouTube copiar;
-- actualiza la búsqueda local en tiempo real cuando un archivo aparece o desaparece;
-- vuelve a ofrecer enlaces Karaoke/Lyrics si una pista deja de estar local;
-- verifica la cola real de VirtualDJ y avisa si una canción fue retirada;
-- permite volver a agregar una canción retirada al final de la rotación;
-- organiza las canciones enviadas según su posición actual en VirtualDJ;
-- permite reenviar o retirar canciones de la rotación de VirtualDJ;
-- cierra el proceso local al salir de la aplicación;
-- continúa sincronizando Google Sheets, la carpeta local y VirtualDJ.
+- inicia silenciosamente y no muestra Terminal;
+- abre su interfaz dentro de una ventana independiente;
+- incluye motores nativos para Intel y Apple Silicon;
+- recibe las solicitudes de Google Sheets prácticamente al instante;
+- guarda en Sheets un solo enlace karaoke/lyrics según el idioma y la prioridad;
+- muestra hasta seis opciones en el Bridge para que el host elija;
+- permite copiar una opción y actualizar el mismo enlace en Sheets;
+- verifica la cola Karaoke real de VirtualDJ y su orden;
+- permite marcar Ya cantó o Saltado con confirmación visible;
+- permite deshacer y restaurar la pista en su turno anterior, al final o fuera;
+- mide el tiempo transcurrido y recalcula las sumas cada segundo;
+- usa la duración exacta que VirtualDJ reporta para cada pista;
+- conserva la carpeta de karaoke y el PIN por separado si así lo eliges.
 
 VirtualDJ debe estar abierto y Network Control debe permanecer activado.
 
-Esta compilación no está firmada con un certificado comercial de Apple. Por eso
-macOS puede pedir la confirmación de clic derecho → Abrir la primera vez.
+Esta compilación utiliza una firma local de integridad, no un certificado
+comercial de Apple. Por eso macOS puede pedir clic derecho → Abrir la primera vez.

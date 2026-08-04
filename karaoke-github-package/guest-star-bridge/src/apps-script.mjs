@@ -8,7 +8,7 @@ async function parseResponse(response) {
   }
 }
 
-const REQUIRED_CODE_VERSION = "3.0.0";
+const REQUIRED_CODE_VERSION = "3.0.2";
 
 export async function appsScriptAction(config, action, extra = {}) {
   if (!config.appsScriptUrl) throw new Error("Configura el enlace de Google Apps Script.");
@@ -52,8 +52,20 @@ export async function fetchBridgeQueue(config) {
   return data;
 }
 
-export function updateBridgeRequest(config, id, status, fileName = "") {
-  return appsScriptAction(config, "bridgeUpdate", { id, status, fileName });
+export function updateBridgeRequest(
+  config,
+  id,
+  status,
+  fileName = "",
+  extra = {}
+) {
+  return appsScriptAction(config, "bridgeUpdate", {
+    id,
+    status,
+    fileName,
+    durationSeconds: extra.durationSeconds,
+    sourceUrl: extra.sourceUrl
+  });
 }
 
 export function updateBridgeConfig(config, sheetConfig = {}) {
@@ -70,7 +82,7 @@ export function searchKaraokeYouTube(config, song, artist, language = "") {
 }
 
 export async function controlActivity(config, action) {
-  if (!["open", "close", "reset"].includes(action)) {
+  if (!["start", "open", "close", "reset"].includes(action)) {
     throw new Error("Acción de actividad no permitida.");
   }
   let data;
@@ -103,6 +115,9 @@ export async function controlActivity(config, action) {
   }
   if (action === "reset" && data.state.lastAction !== "reset") {
     throw new Error("Google Sheets no confirmó el reinicio de la actividad.");
+  }
+  if (action === "start" && data.state.lastAction !== "start") {
+    throw new Error("Google Sheets no confirmó el inicio de la actividad.");
   }
   if (action === "reset" && data.requests.length !== 0) {
     throw new Error("Google Sheets no archivó todas las solicitudes al reiniciar.");

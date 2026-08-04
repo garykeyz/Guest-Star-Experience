@@ -43,3 +43,10 @@ test("escanea subcarpetas y omite archivos que no son multimedia", async () => {
   assert.equal(files.length, 1);
   assert.match(files[0], /Malagueña - Karaoke\.mp4$/);
 });
+
+test("no convierte un fallo temporal de carpeta en una biblioteca vacía", async () => {
+  await assert.rejects(
+    scanLibrary([join(tmpdir(), "guest-star-folder-that-is-not-mounted")]),
+    /carpeta de karaoke no está disponible/
+  );
+});

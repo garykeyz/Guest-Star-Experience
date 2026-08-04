@@ -16,6 +16,21 @@ function cleanEntry(value = {}) {
   return entry.id && entry.filePath && entry.singer ? entry : null;
 }
 
+function cleanRecovery(value = {}) {
+  const id = String(value.id || "").trim();
+  if (!id) return null;
+  const position = Number(value.originalPosition);
+  return {
+    id,
+    outcome: String(value.outcome || "").trim(),
+    previousStatus: String(value.previousStatus || "Pendiente").trim(),
+    originalPosition:
+      Number.isInteger(position) && position >= 0 ? position : null,
+    markedAt: String(value.markedAt || "").trim(),
+    entry: cleanEntry(value.entry || {})
+  };
+}
+
 export function normalizeQueueState(value = {}) {
   const entries = Array.isArray(value.entries)
     ? value.entries.map(cleanEntry).filter(Boolean)
@@ -23,10 +38,15 @@ export function normalizeQueueState(value = {}) {
   const suppressedIds = Array.isArray(value.suppressedIds)
     ? [...new Set(value.suppressedIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
+  const recoveries = Array.isArray(value.recoveries)
+    ? value.recoveries.map(cleanRecovery).filter(Boolean)
+    : [];
   return {
     activityId: String(value.activityId || "").trim(),
+    activityStartedAt: String(value.activityStartedAt || "").trim(),
     entries,
-    suppressedIds
+    suppressedIds,
+    recoveries
   };
 }
 
@@ -39,11 +59,19 @@ export async function loadQueueState() {
   }
 }
 
-export async function saveQueueState(activityId, entries, suppressedIds = []) {
+export async function saveQueueState(
+  activityId,
+  entries,
+  suppressedIds = [],
+  recoveries = [],
+  activityStartedAt = ""
+) {
   const clean = normalizeQueueState({
     activityId,
+    activityStartedAt,
     entries: Array.from(entries || []),
-    suppressedIds: Array.from(suppressedIds || [])
+    suppressedIds: Array.from(suppressedIds || []),
+    recoveries: Array.from(recoveries || [])
   });
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");

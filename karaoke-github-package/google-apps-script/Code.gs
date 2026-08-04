@@ -8,7 +8,7 @@ const HEADERS = [
   "Fuente", "Estado", "ID", "Archivo local", "Actualizado"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "3.0.0";
+const BRIDGE_API_VERSION = "3.0.2";
 const YOUTUBE_CHANNEL_PRIORITIES = {
   english: [
     "Sing King",
@@ -134,11 +134,24 @@ function doPost(e) {
 
     const cfg = config_();
     if (!cfg.accepting) return json_({ ok: false, code: "CLOSED" });
-    if (!body.name || !body.song || !body.artist) {
+    if (!body.name || !body.song || !body.artist || !body.language) {
       return json_({ ok: false, code: "MISSING_FIELDS" });
     }
 
-    const song = findSong_(body.song, body.artist);
+    const duplicateWarning = requestDuplicateWarning_(body);
+    if (
+      !body.confirmDuplicate &&
+      (duplicateWarning.repeatedSinger || duplicateWarning.duplicateSong)
+    ) {
+      return json_({
+        ok: false,
+        code: "DUPLICATE_CONFIRMATION_REQUIRED",
+        duplicates: duplicateWarning,
+        state: publicState_()
+      });
+    }
+
+    const song = findSong_(body.song, body.artist, body.language);
     const accumulatedSeconds =
       cfg.accumulatedSeconds + song.seconds + cfg.transition;
     const remainingSeconds = Math.max(
@@ -176,10 +189,12 @@ function hostAction_(body) {
 
   if (body.action === "bridgeControl") {
     const control = String(body.control || "").toLowerCase();
-    if (["open", "close", "reset"].indexOf(control) < 0) {
+    if (["start", "open", "close", "reset"].indexOf(control) < 0) {
       return json_({ ok: false, code: "INVALID_CONTROL" });
     }
-    if (control === "open") {
+    if (control === "start") {
+      startActivity_(source);
+    } else if (control === "open") {
       setAccepting_(true, source);
     } else if (control === "close") {
       setAccepting_(false, source);
@@ -193,6 +208,8 @@ function hostAction_(body) {
       state: publicState_(),
       requests: bridgeQueue_()
     });
+  } else if (body.action === "start") {
+    startActivity_(source);
   } else if (body.action === "open") {
     setAccepting_(true, source);
   } else if (body.action === "close") {
@@ -249,15 +266,55 @@ function hostAction_(body) {
   return json_({ ok: true, state: publicState_() });
 }
 
+function requestDuplicateWarning_(body) {
+  const sheet = spreadsheet_().getSheetByName(REQUESTS);
+  const last = sheet.getLastRow();
+  const targetSinger = normalizeYoutubeText_(body.name);
+  const targetSong = normalizeYoutubeText_(body.song);
+  const targetArtist = normalizeYoutubeText_(body.artist);
+  const warning = {
+    repeatedSinger: false,
+    duplicateSong: false,
+    duplicateSongState: ""
+  };
+  if (last < 2 || !targetSinger || !targetSong) return warning;
+
+  const rows = sheet.getRange(2, 2, last - 1, 11).getDisplayValues();
+  rows.forEach(function(row) {
+    const singer = normalizeYoutubeText_(row[0]);
+    const song = normalizeYoutubeText_(row[1]);
+    const artist = normalizeYoutubeText_(row[2]);
+    const status = normalizeYoutubeText_(row[10]);
+    if (singer && singer === targetSinger) warning.repeatedSinger = true;
+
+    const artistMatches =
+      !targetArtist ||
+      !artist ||
+      artist === targetArtist ||
+      artist.indexOf(targetArtist) >= 0 ||
+      targetArtist.indexOf(artist) >= 0;
+    if (song && song === targetSong && artistMatches) {
+      warning.duplicateSong = true;
+      if (status === "ya canto") {
+        warning.duplicateSongState = "completed";
+      } else if (warning.duplicateSongState !== "completed") {
+        warning.duplicateSongState = "active";
+      }
+    }
+  });
+  return warning;
+}
+
 function bridgeQueue_() {
   ensureRequestIds_();
   const sheet = spreadsheet_().getSheetByName(REQUESTS);
   const last = sheet.getLastRow();
   if (last < 2) return [];
   return sheet.getRange(2, 1, last - 1, HEADERS.length).getValues()
-    .map(function(row) {
+    .map(function(row, index) {
       const stamp = row[0] instanceof Date ? row[0].toISOString() : String(row[0] || "");
       return {
+        sheetRow: index + 2,
         timestamp: stamp,
         singer: String(row[1] || ""),
         song: String(row[2] || ""),
@@ -292,10 +349,36 @@ function bridgeUpdate_(body) {
     const statusRange = sheet.getRange(row, 12);
     const previousStatus = statusRange.getDisplayValue();
     const nextStatus = clean_(body.status || "Pendiente");
+    const durationSeconds = Math.round(Number(body.durationSeconds));
+    let durationChanged = false;
     statusRange.setValue(nextStatus);
     sheet.getRange(row, 14).setValue(clean_(body.fileName));
     sheet.getRange(row, 15).setValue(new Date());
-    if (skippedStatus_(previousStatus) !== skippedStatus_(nextStatus)) {
+    const sourceUrl = clean_(body.sourceUrl);
+    if (
+      sourceUrl &&
+      /^https:\/\/(?:www\.)?(?:youtube\.com\/watch\?|youtu\.be\/)/i.test(sourceUrl)
+    ) {
+      sheet.getRange(row, 11).setValue(sourceUrl);
+    }
+    if (
+      isFinite(durationSeconds) &&
+      durationSeconds >= 30 &&
+      durationSeconds <= 12 * 60 * 60
+    ) {
+      const durationRange = sheet.getRange(row, 7);
+      const previousDuration = durationCellSeconds_(durationRange.getValue());
+      if (Math.abs(previousDuration - durationSeconds) >= 1) {
+        durationRange
+          .setValue(durationSeconds / 86400)
+          .setNumberFormat("[h]:mm:ss");
+        durationChanged = true;
+      }
+    }
+    if (
+      durationChanged ||
+      skippedStatus_(previousStatus) !== skippedStatus_(nextStatus)
+    ) {
       recalculateActivity_();
     }
     return true;
@@ -342,6 +425,16 @@ function resetActivity_(source) {
   touchState_("reset", source, true);
 }
 
+function startActivity_(source) {
+  const cfg = spreadsheet_().getSheetByName(CONFIG);
+  ensureBaseConfig_(cfg);
+  ensureConfigState_(cfg);
+  cfg.getRange("B4").setValue(true);
+  cfg.getRange("B7").setValue(new Date());
+  recalculateActivity_();
+  touchState_("start", source, true);
+}
+
 function setAccepting_(accepting, source) {
   const cfg = spreadsheet_().getSheetByName(CONFIG);
   const current = cfg.getRange("B4").getValue() !== false;
@@ -384,6 +477,7 @@ function publicState_() {
 
 function config_() {
   const sheet = spreadsheet_().getSheetByName(CONFIG);
+  ensureBaseConfig_(sheet);
   ensureConfigState_(sheet);
   const hours = boundedNumber_(sheet.getRange("B2").getValue(), 2, 0.25, 168);
   const totalSeconds = Math.round(hours * 3600);
@@ -552,37 +646,16 @@ function recalculateActivity_() {
   return accumulatedSeconds;
 }
 
-function findSong_(title, artist) {
-  const key = youtubeKey_();
-  if (!key) return { seconds: 240, url: "", found: false };
-  const query = encodeURIComponent(artist + " " + title + " official audio");
-  const searchUrl =
-    "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=" +
-    query + "&key=" + encodeURIComponent(key);
-  const search = fetchJson_(searchUrl);
-  const ids = (search.items || []).map(function(item) {
-    return item.id && item.id.videoId;
-  }).filter(Boolean);
-  if (!ids.length) return { seconds: 240, url: "", found: false };
-  const detailsUrl =
-    "https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id=" +
-    ids.join(",") + "&key=" + encodeURIComponent(key);
-  const details = fetchJson_(detailsUrl);
-  const candidates = (details.items || []).map(function(item) {
-    return {
-      id: item.id,
-      seconds: isoSeconds_(item.contentDetails.duration),
-      title: String(item.snippet.title || "").toLowerCase()
-    };
-  }).filter(function(item) {
-    return item.seconds >= 90 && item.seconds <= 900;
-  });
-  const preferred = candidates.find(function(item) {
-    return !/(live|remix|sped up|slowed|karaoke)/i.test(item.title);
-  }) || candidates[0];
-  return preferred
-    ? { seconds: preferred.seconds, url: "https://youtu.be/" + preferred.id, found: true }
-    : { seconds: 240, url: "", found: false };
+function findSong_(title, artist, language) {
+  const preferred = findKaraokeCandidates_(title, artist, language)[0];
+  if (!preferred) return { seconds: 240, url: "", found: false };
+  return {
+    seconds: Math.max(30, Number(preferred.durationSeconds) || 240),
+    url: String(preferred.url || ""),
+    found: Boolean(preferred.url),
+    resultType: String(preferred.resultType || ""),
+    channel: String(preferred.channel || "")
+  };
 }
 
 function normalizeYoutubeText_(value) {
@@ -855,17 +928,30 @@ function setup() {
 }
 
 function ensureBaseConfig_(sheet) {
-  if (!sheet.getRange("A1").getValue()) {
-    sheet.getRange("A1:B7").setValues([
-      ["Configuración", "Valor"],
-      ["Duración total (horas)", 2],
-      ["Transición por participante (segundos)", 30],
-      ["Aceptar solicitudes", true],
-      ["Tiempo acumulado", 0],
-      ["Tiempo restante", 2 / 24],
-      ["Último reinicio", new Date()]
-    ]);
+  const defaults = [
+    ["Configuración", "Valor"],
+    ["Duración total (horas)", 2],
+    ["Transición por participante (segundos)", 30],
+    ["Aceptar solicitudes", true],
+    ["Tiempo acumulado", 0],
+    ["Tiempo restante", 2 / 24],
+    ["Último reinicio", new Date()]
+  ];
+  const range = sheet.getRange("A1:B7");
+  const values = range.getValues();
+  let changed = false;
+  for (let index = 0; index < defaults.length; index++) {
+    if (String(values[index][0] || "") !== defaults[index][0]) {
+      values[index][0] = defaults[index][0];
+      changed = true;
+    }
+    if (values[index][1] === "" || values[index][1] === null) {
+      values[index][1] = defaults[index][1];
+      changed = true;
+    }
   }
+  if (changed) range.setValues(values);
+  sheet.getRange("B5:B6").setNumberFormat("[h]:mm:ss");
 }
 
 function ensureConfigState_(sheet) {
@@ -934,6 +1020,10 @@ function abrirSolicitudes() {
   setAccepting_(true, "sheet");
 }
 
+function iniciarActividad() {
+  startActivity_("sheet");
+}
+
 function cerrarSolicitudes() {
   setAccepting_(false, "sheet");
 }
@@ -963,6 +1053,7 @@ function onOpen() {
     .addItem("Preparar / reparar Guest Star Bridge", "setup")
     .addItem("Recalcular tiempos", "recalcularTiempos")
     .addSeparator()
+    .addItem("Iniciar actividad", "iniciarActividad")
     .addItem("Abrir solicitudes", "abrirSolicitudes")
     .addItem("Cerrar solicitudes", "cerrarSolicitudes")
     .addItem("Reiniciar actividad", "reiniciarActividad")

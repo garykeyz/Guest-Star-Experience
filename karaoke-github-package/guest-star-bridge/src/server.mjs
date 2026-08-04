@@ -30,7 +30,9 @@ import { orderRequestViews } from "./request-order.mjs";
 import {
   buildKaraokeScript,
   executeVdj,
+  insertKaraokeEntry,
   listKaraokeEntries,
+  normalizeVdjPath,
   normalizeVdjSinger,
   queryVdj,
   removeKaraokeEntry
@@ -43,7 +45,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "3.0.1";
+const BRIDGE_VERSION = "3.0.2";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -70,9 +72,9 @@ let activityState = {
   transitionSeconds: 30,
   accumulatedSeconds: 0,
   remainingSeconds: 7200,
-  activityStartedAt: "",
+  activityStartedAt: storedQueueState.activityStartedAt || "",
   stateRevision: 0,
-  activityId: "",
+  activityId: storedQueueState.activityId || "",
   updatedAt: "",
   lastAction: "",
   lastSource: ""
@@ -83,11 +85,15 @@ const queuedEntries = new Map(
 );
 const queuedIds = new Set();
 const suppressedQueueIds = new Set(storedQueueState.suppressedIds);
+const outcomeRecoveries = new Map(
+  storedQueueState.recoveries.map((recovery) => [recovery.id, recovery])
+);
 const removedExternallyIds = new Set();
 const queueLocks = new Set();
 const youtubeCache = new Map();
 const youtubeSearchAt = new Map();
 const youtubeSearches = new Map();
+const hitYoutubeCache = new Map();
 const clipboardHandledIds = new Set();
 const reportedStatuses = new Map();
 const eventClients = new Set();
@@ -100,6 +106,9 @@ let vdjQueueCheckPromise = null;
 let vdjQueueHasSnapshot = false;
 let vdjQueueCount = 0;
 let lastVdjQueueAt = null;
+let vdjQueueEntries = [];
+let vdjAvailablePaths = new Set();
+let vdjRequestFilePaths = new Map();
 let clipboardState = {
   requestId: "",
   url: "",
@@ -142,8 +151,14 @@ async function readJson(request) {
 function requestView(item) {
   const matches = findMatches(libraryFiles, item.song, item.artist);
   const top = matches[0];
-  const localAvailable = Boolean(top?.exact);
   const queuedEntry = queuedEntries.get(item.id);
+  const verifiedQueuePath =
+    vdjRequestFilePaths.get(item.id) || queuedEntry?.filePath || "";
+  const localAvailable = Boolean(
+    top?.exact ||
+    (verifiedQueuePath &&
+      vdjAvailablePaths.has(normalizeVdjPath(verifiedQueuePath)))
+  );
   const isQueued =
     !suppressedQueueIds.has(item.id) && queuedIds.has(item.id);
   const removedExternally =
@@ -156,6 +171,8 @@ function requestView(item) {
   const queueIndex = vdjQueuePositions.get(item.id);
   const outcome = requestOutcome(item.status);
   if (outcome) {
+    const recovery = outcomeRecoveries.get(item.id);
+    const recoveryEntry = recovery?.entry || queuedEntry;
     return {
       ...item,
       outcome,
@@ -165,8 +182,14 @@ function requestView(item) {
       localAvailable,
       localState: outcome,
       matches,
-      queuedFilePath: queuedEntry?.filePath || "",
+      queuedFilePath:
+        recoveryEntry?.filePath || verifiedQueuePath || queuedEntry?.filePath || "",
       queuePosition: null,
+      canUndo: true,
+      canRestoreToQueue: Boolean(recoveryEntry || localAvailable),
+      undoOriginalPosition: Number.isInteger(recovery?.originalPosition)
+        ? recovery.originalPosition + 1
+        : null,
       youtube: youtubeCache.get(item.id) || [],
       youtubeSearched: youtubeCache.has(item.id),
       youtubeSearching: youtubeSearches.has(item.id),
@@ -198,7 +221,8 @@ function requestView(item) {
             ? "possible"
             : "missing",
     matches,
-    queuedFilePath: queuedEntry?.filePath || (isQueued && top?.exact ? top.filePath : ""),
+    queuedFilePath:
+      verifiedQueuePath || (isQueued && top?.exact ? top.filePath : ""),
     queuePosition: Number.isInteger(queueIndex) ? queueIndex + 1 : null,
     youtube: youtubeCache.get(item.id) || [],
     youtubeSearched: youtubeCache.has(item.id),
@@ -217,6 +241,27 @@ function numberOr(value, fallback) {
 
 function normalizedActivity(data = {}) {
   const source = data?.state && typeof data.state === "object" ? data.state : data;
+  const activityId = String(source.activityId ?? activityState.activityId ?? "");
+  const suppliedStartedAt = String(source.activityStartedAt || "");
+  const suppliedStartedAtMs = Date.parse(suppliedStartedAt);
+  const sameActivity = activityId
+    ? activityId === String(activityState.activityId || "")
+    : !activityState.activityId;
+  const savedStartedAt = sameActivity
+    ? String(activityState.activityStartedAt || "")
+    : "";
+  const savedStartedAtMs = Date.parse(savedStartedAt);
+  const resetAt = String(source.lastAction || "") === "reset"
+    ? String(source.updatedAt || "")
+    : "";
+  const resetAtMs = Date.parse(resetAt);
+  const activityStartedAt = Number.isFinite(suppliedStartedAtMs)
+    ? new Date(suppliedStartedAtMs).toISOString()
+    : Number.isFinite(savedStartedAtMs)
+      ? new Date(savedStartedAtMs).toISOString()
+      : Number.isFinite(resetAtMs)
+        ? new Date(resetAtMs).toISOString()
+        : new Date().toISOString();
   return {
     accepting:
       source.accepting === undefined
@@ -235,14 +280,12 @@ function normalizedActivity(data = {}) {
       0,
       numberOr(source.remainingSeconds, activityState.remainingSeconds)
     ),
-    activityStartedAt: String(
-      source.activityStartedAt ?? activityState.activityStartedAt ?? ""
-    ),
+    activityStartedAt,
     stateRevision: Math.max(
       0,
       numberOr(source.stateRevision, activityState.stateRevision)
     ),
-    activityId: String(source.activityId ?? activityState.activityId ?? ""),
+    activityId,
     updatedAt: String(source.updatedAt ?? activityState.updatedAt ?? ""),
     lastAction: String(source.lastAction ?? activityState.lastAction ?? ""),
     lastSource: String(source.lastSource ?? activityState.lastSource ?? "")
@@ -262,6 +305,9 @@ function clearTransientCaches() {
   vdjQueueHasSnapshot = false;
   vdjQueueCount = 0;
   lastVdjQueueAt = null;
+  vdjQueueEntries = [];
+  vdjAvailablePaths = new Set();
+  vdjRequestFilePaths = new Map();
   clipboardState = {
     requestId: "",
     url: "",
@@ -281,6 +327,7 @@ function bridgeRequests(data = {}) {
   return (Array.isArray(data.requests) ? data.requests : [])
     .map((item) => ({
       id: String(item.id || ""),
+      sheetRow: Math.max(0, Math.floor(numberOr(item.sheetRow, 0))),
       timestamp: item.timestamp || "",
       singer: String(item.singer || item.name || "").trim(),
       song: String(item.song || "").trim(),
@@ -329,7 +376,9 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
   await saveQueueState(
     queueActivityId,
     queuedEntries.values(),
-    suppressedQueueIds.values()
+    suppressedQueueIds.values(),
+    outcomeRecoveries.values(),
+    activityState.activityStartedAt
   );
 }
 
@@ -338,6 +387,7 @@ async function resetLocalActivity(activityId) {
   queuedIds.clear();
   suppressedQueueIds.clear();
   removedExternallyIds.clear();
+  outcomeRecoveries.clear();
   vdjQueuePositions.clear();
   clearTransientCaches();
   await persistQueuedEntries(activityId);
@@ -358,6 +408,11 @@ async function reconcileDeletedRequests(nextRequests, nextActivity) {
     if (activeIds.has(id)) continue;
     removedExternallyIds.delete(id);
     vdjQueuePositions.delete(id);
+  }
+  for (const id of [...outcomeRecoveries.keys()]) {
+    if (activeIds.has(id)) continue;
+    outcomeRecoveries.delete(id);
+    changed = true;
   }
   for (const id of [...youtubeCache.keys()]) {
     if (activeIds.has(id)) continue;
@@ -416,12 +471,15 @@ async function reconcileDeletedRequests(nextRequests, nextActivity) {
 async function reconcileTerminalRequests(nextRequests) {
   let changed = false;
   for (const item of nextRequests) {
-    if (!requestOutcome(item.status)) continue;
+    const outcome = requestOutcome(item.status);
+    if (!outcome) continue;
     const id = item.id;
     const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
+    let originalPosition = vdjQueuePositions.get(id);
     if (entry && (queuedIds.has(id) || queuedEntries.has(id))) {
       try {
         const result = await removeKaraokeEntry(config.virtualDJ, entry);
+        if (Number.isInteger(result.index)) originalPosition = result.index;
         if (result.reason === "ambiguous") {
           vdjError =
             `VirtualDJ tiene copias ambiguas de “${item.song}”; retírala manualmente de la cola.`;
@@ -430,6 +488,19 @@ async function reconcileTerminalRequests(nextRequests) {
         vdjError =
           `El estado se guardó, pero no se pudo retirar “${item.song}” de VirtualDJ: ${errorMessage(error)}`;
       }
+    }
+    if (!outcomeRecoveries.has(id)) {
+      outcomeRecoveries.set(id, {
+        id,
+        outcome,
+        previousStatus: entry ? "Agregada a VirtualDJ" : "Pendiente",
+        originalPosition: Number.isInteger(originalPosition)
+          ? originalPosition
+          : null,
+        markedAt: new Date().toISOString(),
+        entry: entry || null
+      });
+      changed = true;
     }
     const hadPosition = vdjQueuePositions.has(id);
     const removedQueued = queuedIds.delete(id);
@@ -502,19 +573,30 @@ function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
 async function reconcileVirtualDjQueue(force = false) {
   if (vdjQueueCheckPromise) return vdjQueueCheckPromise;
   if (queueLocks.size) return;
-  const shouldCheck =
-    force ||
-    requests.length > 0 ||
-    queuedEntries.size > 0 ||
-    requests.some(
-      (item) => sheetMarksVirtualDj(item) || removedExternallyIds.has(item.id)
-    );
-  if (!shouldCheck) return;
 
   vdjQueueCheckPromise = (async () => {
     broadcastState();
     try {
       const actualEntries = await listKaraokeEntries(config.virtualDJ);
+      const inspectedEntries = await Promise.all(
+        actualEntries.map(async (entry) => {
+          let localAvailable = false;
+          if (entry.filePath) {
+            try {
+              localAvailable = (await stat(entry.filePath)).isFile();
+            } catch {
+              localAvailable = false;
+            }
+          }
+          return { ...entry, localAvailable };
+        })
+      );
+      vdjQueueEntries = inspectedEntries;
+      vdjAvailablePaths = new Set(
+        inspectedEntries
+          .filter((entry) => entry.localAvailable && entry.filePath)
+          .map((entry) => normalizeVdjPath(entry.filePath))
+      );
       const activeIds = new Set(requests.map((item) => item.id));
       const tracked = [...queuedEntries.values()].filter(
         (entry) => {
@@ -528,8 +610,10 @@ async function reconcileVirtualDjQueue(force = false) {
       );
       const reconciliation = reconcileTrackedQueue(tracked, actualEntries);
       const nextPositions = new Map();
+      const nextRequestFilePaths = new Map();
       const newlyMissing = [];
       const restored = [];
+      const durationUpdates = new Set();
       let adopted = false;
 
       for (const entry of tracked) {
@@ -538,6 +622,17 @@ async function reconcileVirtualDjQueue(force = false) {
         if (actual) {
           queuedIds.add(entry.id);
           nextPositions.set(entry.id, actual.index);
+          if (actual.filePath) nextRequestFilePaths.set(entry.id, actual.filePath);
+          if (
+            Number(actual.durationSeconds) > 0 &&
+            Math.abs(
+              Number(item?.durationSeconds || 0) -
+              Number(actual.durationSeconds)
+            ) >= 1
+          ) {
+            item.durationSeconds = Number(actual.durationSeconds);
+            durationUpdates.add(entry.id);
+          }
           if (
             removedExternallyIds.delete(entry.id) ||
             (item && !sheetMarksVirtualDj(item))
@@ -590,9 +685,21 @@ async function reconcileVirtualDjQueue(force = false) {
         queuedIds.add(item.id);
         removedExternallyIds.delete(item.id);
         nextPositions.set(item.id, actual.index);
+        if (actual.filePath) nextRequestFilePaths.set(item.id, actual.filePath);
+        if (
+          Number(actual.durationSeconds) > 0 &&
+          Math.abs(
+            Number(item.durationSeconds || 0) -
+            Number(actual.durationSeconds)
+          ) >= 1
+        ) {
+          item.durationSeconds = Number(actual.durationSeconds);
+          durationUpdates.add(item.id);
+        }
       }
 
       vdjQueuePositions = nextPositions;
+      vdjRequestFilePaths = nextRequestFilePaths;
       vdjQueueHasSnapshot = true;
       vdjQueueCount = actualEntries.length;
       lastVdjQueueAt = new Date().toISOString();
@@ -609,7 +716,8 @@ async function reconcileVirtualDjQueue(force = false) {
             config,
             id,
             item.status,
-            basename(queuedEntries.get(id)?.filePath || item.fileName || "")
+            basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
+            { durationSeconds: item.durationSeconds }
           );
         } catch {
           // La tarjeta local conserva la pregunta y la hoja se reintentará después.
@@ -624,10 +732,27 @@ async function reconcileVirtualDjQueue(force = false) {
             config,
             id,
             item.status,
-            basename(queuedEntries.get(id)?.filePath || item.fileName || "")
+            basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
+            { durationSeconds: item.durationSeconds }
           );
         } catch {
           // La cola real de VirtualDJ sigue siendo la fuente de verdad.
+        }
+      }
+      for (const id of durationUpdates) {
+        if (newlyMissing.includes(id) || restored.includes(id)) continue;
+        const item = requests.find((entry) => entry.id === id);
+        if (!item) continue;
+        try {
+          await updateBridgeRequest(
+            config,
+            id,
+            item.status,
+            basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
+            { durationSeconds: item.durationSeconds }
+          );
+        } catch {
+          // La duración exacta local permanece visible y se reintentará.
         }
       }
     } catch (error) {
@@ -652,6 +777,14 @@ function stateView() {
   if (vdjQueueCount > 0) activitySummary.suggestHits = false;
   const hitSuggestions = activitySummary.suggestHits
     ? selectHitSuggestions(requests, libraryFiles, activityState.activityId, 6)
+        .map((item) => {
+          const key = hitSuggestionKey(item);
+          return {
+            ...item,
+            youtube: hitYoutubeCache.get(key) || [],
+            youtubeSearched: hitYoutubeCache.has(key)
+          };
+        })
     : [];
   return {
     ok: true,
@@ -676,7 +809,16 @@ function stateView() {
       queueCount: vdjQueueCount,
       lastQueueCheckAt: lastVdjQueueAt,
       queueVerified: vdjQueueHasSnapshot,
-      checkingQueue: Boolean(vdjQueueCheckPromise)
+      checkingQueue: Boolean(vdjQueueCheckPromise),
+      entries: vdjQueueEntries.map((entry) => ({
+        position: entry.index + 1,
+        singer: entry.singer || "Sin cantante",
+        song:
+          entry.song || basename(entry.filePath || "") || "Pista sin título",
+        artist: entry.artist || "",
+        durationSeconds: Math.max(0, Number(entry.durationSeconds) || 0),
+        localAvailable: entry.localAvailable === true
+      }))
     },
     clipboard: clipboardState,
     hitSuggestions,
@@ -720,7 +862,14 @@ function refreshLocalAvailability() {
   const snapshot = requests.map((item) => ({
     id: item.id,
     available: Boolean(
-      findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact
+      findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact ||
+      vdjAvailablePaths.has(
+        normalizeVdjPath(
+          vdjRequestFilePaths.get(item.id) ||
+          queuedEntries.get(item.id)?.filePath ||
+          ""
+        )
+      )
     )
   }));
   const result = reconcileLocalAvailability(localAvailability, snapshot);
@@ -862,6 +1011,7 @@ async function syncNow() {
   await reconcileVirtualDjQueue();
   await reportLocalStates();
   await prepareMissingYoutube();
+  await prepareHitSuggestionYoutube();
   await autoQueueExactMatches();
   broadcastState();
 }
@@ -878,14 +1028,27 @@ async function reportLocalStates() {
       continue;
     }
     const top = findMatches(libraryFiles, item.song, item.artist, 1)[0];
-    const status = top?.exact
+    const verifiedQueuePath =
+      vdjRequestFilePaths.get(item.id) ||
+      queuedEntries.get(item.id)?.filePath ||
+      "";
+    const verifiedInVirtualDJ = Boolean(
+      verifiedQueuePath &&
+      vdjAvailablePaths.has(normalizeVdjPath(verifiedQueuePath))
+    );
+    const status = top?.exact || verifiedInVirtualDJ
       ? "Local encontrado"
       : top
         ? "Coincidencia para revisar"
         : "No está local";
     if (reportedStatuses.get(item.id) === status || item.status === status) continue;
     try {
-      await updateBridgeRequest(config, item.id, status, top?.exact ? top.fileName : "");
+      await updateBridgeRequest(
+        config,
+        item.id,
+        status,
+        top?.exact ? top.fileName : basename(verifiedQueuePath || "")
+      );
       reportedStatuses.set(item.id, status);
       item.status = status;
     } catch {
@@ -1054,7 +1217,6 @@ async function removeQueuedRequest(id) {
         warning ||
         `La canción se retiró de VirtualDJ, pero la hoja no se actualizó: ${errorMessage(error)}`;
     }
-    await reconcileVirtualDjQueue(true);
     return {
       ok: true,
       removed: result.removed === true,
@@ -1069,6 +1231,7 @@ async function removeQueuedRequest(id) {
     throw error;
   } finally {
     queueLocks.delete(id);
+    await reconcileVirtualDjQueue(true);
   }
 }
 
@@ -1097,58 +1260,230 @@ async function setRequestOutcome(id, outcome) {
   if (!["completed", "skipped"].includes(outcome)) {
     throw new Error("Resultado de canción no permitido.");
   }
+  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  queueLocks.add(id);
   const status = outcome === "completed" ? "Ya cantó" : "Saltado";
-  const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
-  let warning = "";
-  let removedFromVirtualDJ = false;
+  try {
+    const previousStatus = item.status || "Pendiente";
+    const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
+    let originalPosition = vdjQueuePositions.get(id);
+    let warning = "";
+    let removedFromVirtualDJ = false;
 
-  if (entry) {
-    try {
-      const result = await removeKaraokeEntry(config.virtualDJ, entry);
-      if (result.reason === "ambiguous") {
+    if (entry) {
+      try {
+        const result = await removeKaraokeEntry(config.virtualDJ, entry);
+        if (result.reason === "ambiguous") {
+          throw new Error(
+            "VirtualDJ tiene más de una copia idéntica. Retira la correcta manualmente antes de marcar el resultado."
+          );
+        }
+        if (Number.isInteger(result.index)) originalPosition = result.index;
+        removedFromVirtualDJ =
+          result.removed === true || result.reason === "not-found";
+      } catch (error) {
         throw new Error(
-          "VirtualDJ tiene más de una copia idéntica. Retira la correcta manualmente antes de marcar el resultado."
+          `No se pudo actualizar la cola real de VirtualDJ: ${errorMessage(error)}`
         );
       }
-      removedFromVirtualDJ =
-        result.removed === true || result.reason === "not-found";
-    } catch (error) {
-      throw new Error(
-        `No se pudo actualizar la cola real de VirtualDJ: ${errorMessage(error)}`
-      );
     }
-  }
 
-  queuedIds.delete(id);
-  removedExternallyIds.delete(id);
-  if (vdjQueuePositions.has(id)) removeQueuePosition(id);
-  queuedEntries.delete(id);
-  suppressedQueueIds.add(id);
-  await persistQueuedEntries();
-  item.status = status;
+    outcomeRecoveries.set(id, {
+      id,
+      outcome,
+      previousStatus,
+      originalPosition: Number.isInteger(originalPosition)
+        ? originalPosition
+        : null,
+      markedAt: new Date().toISOString(),
+      entry: entry || null
+    });
+    queuedIds.delete(id);
+    removedExternallyIds.delete(id);
+    if (vdjQueuePositions.has(id)) removeQueuePosition(id);
+    queuedEntries.delete(id);
+    suppressedQueueIds.add(id);
+    await persistQueuedEntries();
+    item.status = status;
+
+    try {
+      const data = await updateBridgeRequest(
+        config,
+        id,
+        status,
+        basename(entry?.filePath || item.fileName || ""),
+        { durationSeconds: item.durationSeconds }
+      );
+      if (data?.state) applyActivityState(data);
+    } catch (error) {
+      warning =
+        `El resultado quedó visible en el Bridge, pero la hoja no se actualizó: ${errorMessage(error)}`;
+    }
+    return {
+      ok: true,
+      status,
+      outcome,
+      singer: item.singer,
+      song: item.song,
+      removedFromVirtualDJ,
+      undoOriginalPosition: Number.isInteger(originalPosition)
+        ? originalPosition + 1
+        : null,
+      warning
+    };
+  } finally {
+    queueLocks.delete(id);
+    await reconcileVirtualDjQueue(true);
+  }
+}
+
+async function undoRequestOutcome(id, placement) {
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!requestOutcome(item.status)) {
+    throw new Error("Esta solicitud ya no está marcada como cantada o saltada.");
+  }
+  if (!["original", "end", "pending"].includes(placement)) {
+    throw new Error("Elige cómo deseas restaurar la canción.");
+  }
+  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  queueLocks.add(id);
 
   try {
-    const data = await updateBridgeRequest(
+    const recovery = outcomeRecoveries.get(id);
+    const entry =
+      recovery?.entry ||
+      queuedEntryFromRequest(item) ||
+      queuedEntryFromRequest(
+        item,
+        findMatches(libraryFiles, item.song, item.artist, 1)[0]?.filePath || ""
+      );
+    if (placement === "original" && !Number.isInteger(recovery?.originalPosition)) {
+      throw new Error(
+        "No se pudo recuperar el turno anterior. Puedes agregarla al final."
+      );
+    }
+    if (placement !== "pending" && !entry) {
+      throw new Error(
+        "El archivo ya no está disponible localmente. Deshaz el estado sin agregarla o vuelve a descargar la pista."
+      );
+    }
+
+    const pendingStatus = "Fuera de VirtualDJ";
+    const pendingUpdate = await updateBridgeRequest(
       config,
       id,
-      status,
-      basename(entry?.filePath || item.fileName || "")
+      pendingStatus,
+      basename(entry?.filePath || item.fileName || ""),
+      { durationSeconds: item.durationSeconds }
     );
-    if (data?.state) applyActivityState(data);
-  } catch (error) {
-    warning =
-      `El resultado quedó visible en el Bridge, pero la hoja no se actualizó: ${errorMessage(error)}`;
+    if (pendingUpdate?.state) applyActivityState(pendingUpdate);
+    item.status = pendingStatus;
+    queuedIds.delete(id);
+    removedExternallyIds.delete(id);
+    vdjQueuePositions.delete(id);
+    queuedEntries.delete(id);
+    suppressedQueueIds.add(id);
+
+    let restoredPosition = null;
+    if (placement !== "pending") {
+      const desiredPosition =
+        placement === "original"
+          ? recovery.originalPosition
+          : Number.MAX_SAFE_INTEGER;
+      const restored = await insertKaraokeEntry(
+        config.virtualDJ,
+        entry,
+        desiredPosition
+      );
+      restoredPosition = restored.index;
+      queuedEntries.set(id, entry);
+      queuedIds.add(id);
+      suppressedQueueIds.delete(id);
+      vdjQueuePositions.set(id, restored.index);
+      item.status = "Reagregada a VirtualDJ";
+      const queuedUpdate = await updateBridgeRequest(
+        config,
+        id,
+        item.status,
+        basename(entry.filePath),
+        { durationSeconds: item.durationSeconds }
+      );
+      if (queuedUpdate?.state) applyActivityState(queuedUpdate);
+    }
+
+    outcomeRecoveries.delete(id);
+    await persistQueuedEntries();
+    return {
+      ok: true,
+      placement,
+      restoredToVirtualDJ: placement !== "pending",
+      queuePosition: Number.isInteger(restoredPosition)
+        ? restoredPosition + 1
+        : null,
+      singer: item.singer,
+      song: item.song,
+      status: item.status
+    };
+  } finally {
+    queueLocks.delete(id);
+    await reconcileVirtualDjQueue(true);
   }
-  await reconcileVirtualDjQueue(true);
-  return {
-    ok: true,
-    status,
-    outcome,
-    singer: item.singer,
-    song: item.song,
-    removedFromVirtualDJ,
-    warning
-  };
+}
+
+function hitSuggestionKey(item = {}) {
+  return [item.song, item.artist, item.language]
+    .map((value) => normalizeText(value))
+    .join("|");
+}
+
+async function findHitSuggestionYoutube(body = {}) {
+  const suggestions = selectHitSuggestions(
+    requests,
+    libraryFiles,
+    activityState.activityId,
+    6
+  );
+  const suggestion = suggestions.find(
+    (item) =>
+      normalizeText(item.song) === normalizeText(body.song) &&
+      normalizeText(item.artist) === normalizeText(body.artist)
+  );
+  if (!suggestion) throw new Error("La sugerencia ya no está disponible.");
+  const key = hitSuggestionKey(suggestion);
+  if (body.force === true) hitYoutubeCache.delete(key);
+  if (hitYoutubeCache.has(key)) return hitYoutubeCache.get(key);
+  const data = await searchKaraokeYouTube(
+    config,
+    suggestion.song,
+    suggestion.artist,
+    suggestion.language
+  );
+  const items = selectYoutubeOptions(
+    Array.isArray(data.items) ? data.items : [],
+    1
+  );
+  hitYoutubeCache.set(key, items);
+  return items;
+}
+
+async function prepareHitSuggestionYoutube() {
+  if (!config.appsScriptUrl || !config.hostPin || vdjQueueCount > 0) return;
+  const target = selectHitSuggestions(
+    requests,
+    libraryFiles,
+    activityState.activityId,
+    6
+  ).find(
+    (item) => !item.localAvailable && !hitYoutubeCache.has(hitSuggestionKey(item))
+  );
+  if (!target) return;
+  try {
+    await findHitSuggestionYoutube(target);
+  } catch {
+    hitYoutubeCache.set(hitSuggestionKey(target), []);
+  }
+  broadcastState();
 }
 
 async function queueHitSuggestion(body = {}) {
@@ -1261,7 +1596,14 @@ async function prepareMissingYoutube() {
   const missing = requests.filter(
     (item) =>
       !requestOutcome(item.status) &&
-      !findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact
+      !findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact &&
+      !vdjAvailablePaths.has(
+        normalizeVdjPath(
+          vdjRequestFilePaths.get(item.id) ||
+          queuedEntries.get(item.id)?.filePath ||
+          ""
+        )
+      )
   );
   const unhandled = missing.filter((item) => !clipboardHandledIds.has(item.id));
   const now = Date.now();
@@ -1390,7 +1732,7 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
-  const activityMatch = pathname.match(/^\/api\/activity\/(open|close|reset)$/);
+  const activityMatch = pathname.match(/^\/api\/activity\/(start|open|close|reset)$/);
   if (request.method === "POST" && activityMatch) {
     const action = activityMatch[1];
     const data = await controlActivity(config, action);
@@ -1468,11 +1810,30 @@ async function api(request, response, url) {
     json(response, 200, data);
     return;
   }
+  const undoOutcomeMatch =
+    pathname.match(/^\/api\/requests\/([^/]+)\/undo-outcome$/);
+  if (request.method === "POST" && undoOutcomeMatch) {
+    const body = await readJson(request);
+    const data = await undoRequestOutcome(
+      decodeURIComponent(undoOutcomeMatch[1]),
+      String(body.placement || "")
+    );
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/suggestions/queue") {
     const body = await readJson(request);
     const data = await queueHitSuggestion(body);
     broadcastState();
     json(response, 200, data);
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/suggestions/youtube") {
+    const body = await readJson(request);
+    const items = await findHitSuggestionYoutube(body);
+    broadcastState();
+    json(response, 200, { ok: true, items });
     return;
   }
   const youtubeCopyMatch =
@@ -1485,6 +1846,25 @@ async function api(request, response, url) {
     if (!selected) throw new Error("Elige uno de los enlaces mostrados por el Bridge.");
     try {
       await copyMacClipboard(selected.url);
+      const item = requests.find((entry) => entry.id === id);
+      if (item) {
+        const updated = await updateBridgeRequest(
+          config,
+          id,
+          item.status,
+          basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
+          {
+            durationSeconds:
+              Number(selected.durationSeconds) || item.durationSeconds,
+            sourceUrl: selected.url
+          }
+        );
+        if (updated?.state) applyActivityState(updated);
+        item.sourceUrl = selected.url;
+        if (Number(selected.durationSeconds) > 0) {
+          item.durationSeconds = Number(selected.durationSeconds);
+        }
+      }
       clipboardHandledIds.add(id);
       clipboardState = {
         requestId: id,
@@ -1506,7 +1886,11 @@ async function api(request, response, url) {
       throw error;
     }
     broadcastState();
-    json(response, 200, { ok: true, url: selected.url });
+    json(response, 200, {
+      ok: true,
+      url: selected.url,
+      sheetUpdated: true
+    });
     return;
   }
   const youtubeMatch = pathname.match(/^\/api\/requests\/([^/]+)\/youtube$/);

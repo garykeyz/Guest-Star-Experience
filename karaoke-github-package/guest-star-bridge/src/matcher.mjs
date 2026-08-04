@@ -79,7 +79,7 @@ async function walk(folder, output, seen) {
   try {
     info = await stat(folder);
   } catch {
-    return;
+    throw new Error(`No se pudo revisar la carpeta de karaoke: ${folder}`);
   }
   if (!info.isDirectory()) return;
   let realKey = `${info.dev}:${info.ino}`;
@@ -89,7 +89,7 @@ async function walk(folder, output, seen) {
   try {
     entries = await readdir(folder, { withFileTypes: true });
   } catch {
-    return;
+    throw new Error(`No se pudo leer la carpeta de karaoke: ${folder}`);
   }
   for (const entry of entries) {
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -105,6 +105,17 @@ async function walk(folder, output, seen) {
 export async function scanLibrary(folders) {
   const files = [];
   const seen = new Set();
-  for (const folder of folders) await walk(folder, files, seen);
+  for (const folder of folders) {
+    let info;
+    try {
+      info = await stat(folder);
+    } catch {
+      throw new Error(`La carpeta de karaoke no está disponible: ${folder}`);
+    }
+    if (!info.isDirectory()) {
+      throw new Error(`La ruta de karaoke ya no es una carpeta: ${folder}`);
+    }
+    await walk(folder, files, seen);
+  }
   return [...new Set(files)].sort((a, b) => a.localeCompare(b));
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { orderRequestViews } from "../src/request-order.mjs";
 
-test("ordena la rotación por la posición real de VirtualDJ", () => {
+test("conserva el orden de llegada aunque cambie la posición de VirtualDJ", () => {
   const ordered = orderRequestViews([
     { id: "pending", timestamp: "2026-07-29T10:00:00Z", queued: false },
     { id: "second", timestamp: "2026-07-29T09:00:00Z", queued: true, queuePosition: 2 },
@@ -11,11 +11,11 @@ test("ordena la rotación por la posición real de VirtualDJ", () => {
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["first", "second", "pending"]
+    ["second", "pending", "first"]
   );
 });
 
-test("una canción recolocada pasa al final de la rotación", () => {
+test("recolocar una canción no altera su número de llegada", () => {
   const before = orderRequestViews([
     { id: "a", timestamp: "2026-07-29T09:00:00Z", queued: true, queuePosition: 1 },
     { id: "b", timestamp: "2026-07-29T10:00:00Z", queued: true, queuePosition: 2 }
@@ -27,11 +27,11 @@ test("una canción recolocada pasa al final de la rotación", () => {
 
   assert.deepEqual(
     after.map((item) => item.id),
-    ["b", "a"]
+    ["a", "b"]
   );
 });
 
-test("deja los resultados finales debajo de la rotación activa", () => {
+test("los resultados finales conservan su llegada para separarlos en la interfaz", () => {
   const result = orderRequestViews([
     { id: "done", timestamp: "2026-07-29T09:00:00Z", outcome: "completed" },
     { id: "pending", timestamp: "2026-07-29T10:00:00Z", queued: false },
@@ -43,5 +43,5 @@ test("deja los resultados finales debajo de la rotación activa", () => {
     }
   ]);
 
-  assert.deepEqual(result.map((item) => item.id), ["queued", "pending", "done"]);
+  assert.deepEqual(result.map((item) => item.id), ["done", "pending", "queued"]);
 });

@@ -1,12 +1,16 @@
 #!/bin/bash
 set -u
 
-APP_VERSION="3.0.1"
+APP_VERSION="3.0.2"
 PANEL_URL="http://127.0.0.1:8787"
 CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE_DIR="$(cd "$CONTENTS_DIR/.." && pwd)"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-RUNTIME="$RESOURCES_DIR/runtime/node"
+case "$(/usr/bin/uname -m)" in
+  arm64) RUNTIME="$RESOURCES_DIR/runtime/node-arm64/node" ;;
+  x86_64) RUNTIME="$RESOURCES_DIR/runtime/node-x64/node" ;;
+  *) RUNTIME="" ;;
+esac
 SUPPORT_DIR="$HOME/Library/Application Support/Guest Star Bridge"
 BRIDGE_DIR="$SUPPORT_DIR/bridge"
 DATA_DIR="$SUPPORT_DIR/data"
@@ -30,7 +34,7 @@ is_bridge_process() {
   candidate_pid="$1"
   running_command="$(/bin/ps -p "$candidate_pid" -o command= 2>/dev/null || true)"
   case "$running_command" in
-    *"$RUNTIME"*"src/server.mjs"*) return 0 ;;
+    *"Guest Star Bridge.app/Contents/Resources/runtime/"*"src/server.mjs"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -114,8 +118,8 @@ if [ "$bridge_updated" -eq 1 ]; then
   /bin/rm -f "$PID_FILE"
 fi
 
-if [ ! -x "$RUNTIME" ]; then
-  show_alert "El motor Apple Silicon de la aplicación no está disponible."
+if [ -z "$RUNTIME" ] || [ ! -x "$RUNTIME" ]; then
+  show_alert "El motor compatible con esta Mac no está disponible. Descarga nuevamente el paquete Universal."
   exit 1
 fi
 

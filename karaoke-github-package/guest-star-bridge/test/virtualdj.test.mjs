@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import {
+  buildKaraokeInsertScript,
   buildKaraokeRemoveScript,
   buildKaraokeScript,
   executeVdj,
+  insertKaraokeEntry,
   listKaraokeEntries,
+  parseVdjDuration,
   queryVdj,
   removeKaraokeEntry
 } from "../src/virtualdj.mjs";
@@ -26,6 +29,24 @@ test("construye una eliminación dirigida dentro de la cola karaoke", () => {
     buildKaraokeRemoveScript(2),
     'browser_window "karaoke" & browser_scroll "top" & browser_scroll +1 & browser_scroll +1 & browser_remove'
   );
+});
+
+test("construye una restauración en el turno exacto de karaoke", () => {
+  const script = buildKaraokeInsertScript(
+    "/Music/Dancing Queen.mp4",
+    "Moises",
+    1,
+    3
+  );
+  assert.match(script, /karaoke_add/);
+  assert.equal((script.match(/browser_move -1/g) || []).length, 2);
+});
+
+test("lee duraciones exactas reportadas por VirtualDJ", () => {
+  assert.equal(parseVdjDuration("3:43"), 223);
+  assert.equal(parseVdjDuration("0:04:12.500"), 252);
+  assert.equal(parseVdjDuration("245000ms"), 245);
+  assert.equal(parseVdjDuration("false"), 0);
 });
 
 test("usa los endpoints execute y query de Network Control con Bearer", async (t) => {
@@ -263,14 +284,16 @@ test("lee la cola Karaoke completa respetando su orden", async (t) => {
       filePath: "/Music/Primera.mp4",
       singer: "Ana",
       song: "Hello",
-      artist: "Adele"
+      artist: "Adele",
+      durationSeconds: 0
     },
     {
       index: 1,
       filePath: "/Music/Segunda.mp4",
       singer: "Carlos",
       song: "Treasure",
-      artist: "Bruno Mars"
+      artist: "Bruno Mars",
+      durationSeconds: 0
     }
   ]);
   assert.ok(received.every((item) => item.url === "/query"));
@@ -278,6 +301,86 @@ test("lee la cola Karaoke completa respetando su orden", async (t) => {
     received.some(
       (item) => item.script === 'get_next_karaoke_song "singer" 1'
     )
+  );
+});
+
+test("restaura una canción en su posición anterior y verifica el orden", async (t) => {
+  const queue = [
+    {
+      filepath: "/Music/Primera.mp4",
+      singer: "Ana",
+      title: "Hello",
+      artist: "Adele",
+      length: "3:30"
+    },
+    {
+      filepath: "/Music/Tercera.mp4",
+      singer: "Carlos",
+      title: "Treasure",
+      artist: "Bruno Mars",
+      length: "3:45"
+    }
+  ];
+  let selected = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      const path = script.match(/karaoke_add "([^"]+)"/)?.[1];
+      const singer = script.match(/browsed_song "singer" "([^"]+)"/)?.[1];
+      if (path && singer) {
+        queue.push({
+          filepath: path,
+          singer,
+          title: "Dancing Queen",
+          artist: "ABBA",
+          length: "3:43"
+        });
+        selected = queue.length - 1;
+      }
+      const moves = (script.match(/browser_move -1/g) || []).length;
+      for (let index = 0; index < moves; index++) {
+        const [entry] = queue.splice(selected, 1);
+        selected = Math.max(0, selected - 1);
+        queue.splice(selected, 0, entry);
+      }
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(
+        /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
+      );
+      const index = Number(next?.[2] || 0);
+      response.end(next ? queue[index]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const restored = await insertKaraokeEntry(
+    {
+      host: "127.0.0.1",
+      port: server.address().port,
+      password: "",
+      timeoutMs: 1000
+    },
+    {
+      filePath: "/Music/Dancing Queen.mp4",
+      singer: "Moises",
+      song: "Dancing Queen",
+      artist: "ABBA"
+    },
+    1
+  );
+
+  assert.equal(restored.verified, true);
+  assert.equal(restored.index, 1);
+  assert.deepEqual(
+    queue.map((entry) => entry.singer),
+    ["Ana", "Moises", "Carlos"]
   );
 });
 
