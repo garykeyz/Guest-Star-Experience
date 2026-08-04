@@ -44,6 +44,11 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
     /\["lipo", str\(node_x64\), "-verify_arch", "x86_64"\]/
   );
   assert.doesNotMatch(buildSource, /\["lipo", "-verify_arch"/);
+  assert.match(
+    buildSource,
+    /\["\/usr\/bin\/ditto", str\(app_bundle\), str\(distributed_app\)\]/
+  );
+  assert.match(buildSource, /"--sequesterRsrc"/);
   assert.match(buildSource, /hdiutil/);
   assert.match(buildSource, /hdiutil",\s*"verify/);
   assert.match(buildSource, /unzip",\s*"-tq/);

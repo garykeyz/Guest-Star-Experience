@@ -266,7 +266,21 @@ def prepare_distribution(
     if distribution.exists():
         shutil.rmtree(distribution)
     distribution.mkdir(parents=True)
-    shutil.copytree(app_bundle, distribution / APP_NAME, symlinks=True)
+    distributed_app = distribution / APP_NAME
+    # ditto conserva firmas ad-hoc guardadas como atributos extendidos (por
+    # ejemplo, la del helper Bash). shutil.copytree las descarta en macOS y
+    # produce un ZIP cuya aplicación deja de pasar codesign al descomprimirla.
+    run(["/usr/bin/ditto", str(app_bundle), str(distributed_app)])
+    run(
+        [
+            "codesign",
+            "--verify",
+            "--deep",
+            "--strict",
+            "--verbose=2",
+            str(distributed_app),
+        ]
+    )
     shutil.copy2(readme, distribution / "LEEME.txt")
     shutil.copy2(installation_guide, distribution / "INSTALACION-OTRA-MAC.txt")
 
