@@ -59,12 +59,18 @@ export function buildActivitySummary(activity = {}, requests = [], now = Date.no
   const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
   const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
   const startedAtMs = Date.parse(String(activity.activityStartedAt || ""));
-  const elapsedSeconds = Number.isFinite(startedAtMs)
+  const activityRunning = Number.isFinite(startedAtMs);
+  const elapsedSeconds = activityRunning
     ? Math.max(0, Math.floor((Number(now) - startedAtMs) / 1000))
     : 0;
 
   return {
     targetSeconds,
+    activityRunning,
+    eventEndsAt:
+      activityRunning && targetSeconds > 0
+        ? new Date(startedAtMs + targetSeconds * 1000).toISOString()
+        : "",
     elapsedSeconds,
     clockRemainingSeconds: Math.max(0, targetSeconds - elapsedSeconds),
     clockOverrunSeconds: Math.max(0, elapsedSeconds - targetSeconds),

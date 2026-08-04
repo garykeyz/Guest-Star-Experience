@@ -64,8 +64,20 @@ test("permite deshacer el resultado y elegir dónde restaurar la pista", () => {
 test("el reloj visible avanza cada segundo y recalcula todos los totales", () => {
   assert.match(appSource, /window\.setInterval\(updateTimeDashboard, 1000\)/);
   assert.match(appSource, /Date\.now\(\) - started/);
+  assert.match(appSource, /Pulsa Iniciar actividad para activar el reloj/);
+  assert.match(appSource, /activityBusy \|\| running/);
   assert.match(appSource, /Pista \$\{activityDuration\(songSeconds\)\}/);
   assert.match(appSource, /transición \$\{activityDuration\(transitionSeconds\)\}/);
+});
+
+test("el Bridge respeta el estado sin iniciar y no inventa una hora local", () => {
+  const normalizedActivitySource = serverSource.slice(
+    serverSource.indexOf("function normalizedActivity"),
+    serverSource.indexOf("function clearTransientCaches")
+  );
+  assert.match(normalizedActivitySource, /hasSuppliedStart/);
+  assert.match(normalizedActivitySource, /activityRunning:/);
+  assert.doesNotMatch(normalizedActivitySource, /new Date\(\)\.toISOString\(\)/);
 });
 
 test("el enlace seleccionado se copia y se guarda como fuente única en Sheets", () => {

@@ -64,3 +64,27 @@ test("normaliza los resultados finales en español", () => {
   assert.equal(requestOutcome("Saltado"), "skipped");
   assert.equal(requestOutcome("Agregada a VirtualDJ"), "");
 });
+
+test("mantiene el reloj en cero hasta iniciar y calcula la hora final exacta", () => {
+  const waiting = buildActivitySummary(
+    { activityHours: 2, transitionSeconds: 30, activityStartedAt: "" },
+    [],
+    Date.parse("2026-08-04T12:00:00.000Z")
+  );
+  assert.equal(waiting.activityRunning, false);
+  assert.equal(waiting.elapsedSeconds, 0);
+  assert.equal(waiting.eventEndsAt, "");
+
+  const running = buildActivitySummary(
+    {
+      activityHours: 2,
+      transitionSeconds: 30,
+      activityStartedAt: "2026-08-04T10:30:00.000Z"
+    },
+    [],
+    Date.parse("2026-08-04T11:15:07.000Z")
+  );
+  assert.equal(running.activityRunning, true);
+  assert.equal(running.elapsedSeconds, 2707);
+  assert.equal(running.eventEndsAt, "2026-08-04T12:30:00.000Z");
+});

@@ -45,7 +45,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "3.0.2";
+const BRIDGE_VERSION = "3.0.3";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -73,6 +73,7 @@ let activityState = {
   accumulatedSeconds: 0,
   remainingSeconds: 7200,
   activityStartedAt: storedQueueState.activityStartedAt || "",
+  activityRunning: Boolean(storedQueueState.activityStartedAt),
   stateRevision: 0,
   activityId: storedQueueState.activityId || "",
   updatedAt: "",
@@ -242,6 +243,10 @@ function numberOr(value, fallback) {
 function normalizedActivity(data = {}) {
   const source = data?.state && typeof data.state === "object" ? data.state : data;
   const activityId = String(source.activityId ?? activityState.activityId ?? "");
+  const hasSuppliedStart = Object.prototype.hasOwnProperty.call(
+    source,
+    "activityStartedAt"
+  );
   const suppliedStartedAt = String(source.activityStartedAt || "");
   const suppliedStartedAtMs = Date.parse(suppliedStartedAt);
   const sameActivity = activityId
@@ -251,17 +256,13 @@ function normalizedActivity(data = {}) {
     ? String(activityState.activityStartedAt || "")
     : "";
   const savedStartedAtMs = Date.parse(savedStartedAt);
-  const resetAt = String(source.lastAction || "") === "reset"
-    ? String(source.updatedAt || "")
-    : "";
-  const resetAtMs = Date.parse(resetAt);
-  const activityStartedAt = Number.isFinite(suppliedStartedAtMs)
-    ? new Date(suppliedStartedAtMs).toISOString()
+  const activityStartedAt = hasSuppliedStart
+    ? Number.isFinite(suppliedStartedAtMs)
+      ? new Date(suppliedStartedAtMs).toISOString()
+      : ""
     : Number.isFinite(savedStartedAtMs)
       ? new Date(savedStartedAtMs).toISOString()
-      : Number.isFinite(resetAtMs)
-        ? new Date(resetAtMs).toISOString()
-        : new Date().toISOString();
+      : "";
   return {
     accepting:
       source.accepting === undefined
@@ -281,6 +282,10 @@ function normalizedActivity(data = {}) {
       numberOr(source.remainingSeconds, activityState.remainingSeconds)
     ),
     activityStartedAt,
+    activityRunning:
+      source.activityRunning === undefined
+        ? Boolean(activityStartedAt)
+        : source.activityRunning !== false && Boolean(activityStartedAt),
     stateRevision: Math.max(
       0,
       numberOr(source.stateRevision, activityState.stateRevision)

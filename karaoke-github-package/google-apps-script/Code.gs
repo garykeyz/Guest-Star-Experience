@@ -8,7 +8,7 @@ const HEADERS = [
   "Fuente", "Estado", "ID", "Archivo local", "Actualizado"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "3.0.2";
+const BRIDGE_API_VERSION = "3.0.3";
 const YOUTUBE_CHANNEL_PRIORITIES = {
   english: [
     "Sing King",
@@ -421,7 +421,7 @@ function resetActivity_(source) {
   const cfg = ss.getSheetByName(CONFIG);
   const hours = boundedNumber_(cfg.getRange("B2").getValue(), 2, 0.25, 168);
   writeActivityTimes_(0, Math.round(hours * 3600));
-  cfg.getRange("B7").setValue(new Date());
+  cfg.getRange("B7").clearContent();
   touchState_("reset", source, true);
 }
 
@@ -429,10 +429,12 @@ function startActivity_(source) {
   const cfg = spreadsheet_().getSheetByName(CONFIG);
   ensureBaseConfig_(cfg);
   ensureConfigState_(cfg);
+  const current = cfg.getRange("B7").getValue();
+  if (current instanceof Date && isFinite(current.getTime())) return;
   cfg.getRange("B4").setValue(true);
   cfg.getRange("B7").setValue(new Date());
   recalculateActivity_();
-  touchState_("start", source, true);
+  touchState_("start", source, false);
 }
 
 function setAccepting_(accepting, source) {
@@ -467,6 +469,7 @@ function publicState_() {
     accumulatedSeconds: cfg.accumulatedSeconds,
     remainingSeconds: cfg.remainingSeconds,
     activityStartedAt: cfg.activityStartedAt,
+    activityRunning: cfg.activityRunning,
     stateRevision: cfg.stateRevision,
     activityId: cfg.activityId,
     updatedAt: cfg.updatedAt,
@@ -497,6 +500,8 @@ function config_() {
     remainingSeconds: Math.max(0, totalSeconds - accumulatedSeconds),
     activityStartedAt:
       started instanceof Date ? started.toISOString() : String(started || ""),
+    activityRunning:
+      started instanceof Date && isFinite(started.getTime()),
     stateRevision: Math.max(0, Number(sheet.getRange("B8").getValue()) || 0),
     activityId: String(sheet.getRange("B9").getDisplayValue() || ""),
     updatedAt: updated instanceof Date ? updated.toISOString() : String(updated || ""),
@@ -514,6 +519,7 @@ function bridgeConfig_() {
     accumulatedSeconds: cfg.accumulatedSeconds,
     remainingSeconds: cfg.remainingSeconds,
     activityStartedAt: cfg.activityStartedAt,
+    activityRunning: cfg.activityRunning,
     stateRevision: cfg.stateRevision,
     activityId: cfg.activityId,
     updatedAt: cfg.updatedAt,
@@ -935,20 +941,31 @@ function ensureBaseConfig_(sheet) {
     ["Aceptar solicitudes", true],
     ["Tiempo acumulado", 0],
     ["Tiempo restante", 2 / 24],
-    ["Último reinicio", new Date()]
+    ["Inicio de la actividad", ""]
   ];
   const range = sheet.getRange("A1:B7");
   const values = range.getValues();
+  const legacyStartLabel = String(values[6][0] || "");
   let changed = false;
   for (let index = 0; index < defaults.length; index++) {
     if (String(values[index][0] || "") !== defaults[index][0]) {
       values[index][0] = defaults[index][0];
       changed = true;
     }
-    if (values[index][1] === "" || values[index][1] === null) {
+    if (
+      index !== 6 &&
+      (values[index][1] === "" || values[index][1] === null)
+    ) {
       values[index][1] = defaults[index][1];
       changed = true;
     }
+  }
+  if (
+    legacyStartLabel &&
+    legacyStartLabel !== defaults[6][0]
+  ) {
+    values[6][1] = "";
+    changed = true;
   }
   if (changed) range.setValues(values);
   sheet.getRange("B5:B6").setNumberFormat("[h]:mm:ss");
