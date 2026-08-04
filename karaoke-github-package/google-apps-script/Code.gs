@@ -8,7 +8,7 @@ const HEADERS = [
   "Fuente", "Estado", "ID", "Archivo local", "Actualizado"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "3.0.4";
+const BRIDGE_API_VERSION = "3.0.5";
 const YOUTUBE_CHANNEL_PRIORITIES = {
   english: [
     "Sing King",
@@ -216,6 +216,8 @@ function hostAction_(body) {
     setAccepting_(false, source);
   } else if (body.action === "reset") {
     resetActivity_(source);
+  } else if (body.action === "publicStatusVisibility") {
+    setPublicStatusVisibility_(body.show === true, source);
   } else if (body.action === "changePin") {
     const next = String(body.newPin || "").trim();
     if (!/^\d{6,12}$/.test(next)) {
@@ -453,6 +455,17 @@ function setAccepting_(accepting, source) {
   }
 }
 
+function setPublicStatusVisibility_(show, source) {
+  const cfg = spreadsheet_().getSheetByName(CONFIG);
+  ensureConfigState_(cfg);
+  const current = cfg.getRange("B13").getValue() === true;
+  const next = Boolean(show);
+  cfg.getRange("B13").setValue(next);
+  if (current !== next) {
+    touchState_(next ? "showPublicStatus" : "hidePublicStatus", source, false);
+  }
+}
+
 function touchState_(action, source, newActivity) {
   const cfg = spreadsheet_().getSheetByName(CONFIG);
   ensureConfigState_(cfg);
@@ -476,6 +489,8 @@ function publicState_() {
     remainingSeconds: cfg.remainingSeconds,
     activityStartedAt: cfg.activityStartedAt,
     activityRunning: cfg.activityRunning,
+    showPublicStatus: cfg.showPublicStatus,
+    queuePeopleCount: activeQueuePeopleCount_(),
     stateRevision: cfg.stateRevision,
     activityId: cfg.activityId,
     updatedAt: cfg.updatedAt,
@@ -508,6 +523,7 @@ function config_() {
       started instanceof Date ? started.toISOString() : String(started || ""),
     activityRunning:
       started instanceof Date && isFinite(started.getTime()),
+    showPublicStatus: sheet.getRange("B13").getValue() === true,
     stateRevision: Math.max(0, Number(sheet.getRange("B8").getValue()) || 0),
     activityId: String(sheet.getRange("B9").getDisplayValue() || ""),
     updatedAt: updated instanceof Date ? updated.toISOString() : String(updated || ""),
@@ -526,12 +542,34 @@ function bridgeConfig_() {
     remainingSeconds: cfg.remainingSeconds,
     activityStartedAt: cfg.activityStartedAt,
     activityRunning: cfg.activityRunning,
+    showPublicStatus: cfg.showPublicStatus,
     stateRevision: cfg.stateRevision,
     activityId: cfg.activityId,
     updatedAt: cfg.updatedAt,
     lastAction: cfg.lastAction,
     lastSource: cfg.lastSource
   };
+}
+
+function activeQueuePeopleCount_() {
+  const sheet = spreadsheet_().getSheetByName(REQUESTS);
+  const last = sheet.getLastRow();
+  if (last < 2) return 0;
+  const rows = sheet.getRange(2, 2, last - 1, 11).getDisplayValues();
+  const people = {};
+  rows.forEach(function(row) {
+    const singer = normalizeYoutubeText_(row[0]);
+    const status = normalizeYoutubeText_(row[10]);
+    if (!singer) return;
+    if (
+      status === "ya canto" ||
+      status === "completada" ||
+      status === "saltado" ||
+      status === "omitida"
+    ) return;
+    people[singer] = true;
+  });
+  return Object.keys(people).length;
 }
 
 function updateBridgeConfig_(body, source) {
@@ -993,9 +1031,10 @@ function ensureConfigState_(sheet) {
     ["ID de actividad"],
     ["Último cambio de estado"],
     ["Última acción"],
-    ["Origen del cambio"]
+    ["Origen del cambio"],
+    ["Mostrar estado público"]
   ];
-  const labelRange = sheet.getRange("A8:A12");
+  const labelRange = sheet.getRange("A8:A13");
   const currentLabels = labelRange.getDisplayValues();
   let labelsChanged = false;
   for (let index = 0; index < labels.length; index++) {
@@ -1011,6 +1050,10 @@ function ensureConfigState_(sheet) {
   if (!sheet.getRange("B10").getValue()) sheet.getRange("B10").setValue(new Date());
   if (!sheet.getRange("B11").getDisplayValue()) sheet.getRange("B11").setValue("setup");
   if (!sheet.getRange("B12").getDisplayValue()) sheet.getRange("B12").setValue("sheet");
+  const publicStatus = sheet.getRange("B13").getValue();
+  if (publicStatus === "" || publicStatus === null) {
+    sheet.getRange("B13").setValue(false);
+  }
 }
 
 function ensureSheetWidth_(sheet, requiredColumns) {

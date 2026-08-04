@@ -58,11 +58,11 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="3\.0\.4"/);
+  assert.match(shellSource, /APP_VERSION="3\.0\.5"/);
 });
 
-test("la publicación y el instructivo entregan el paquete Universal 3.0.4", () => {
-  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v3\.0\.4-app\.zip/);
+test("la publicación y el instructivo entregan el paquete Universal 3.0.5", () => {
+  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v3\.0\.5-app\.zip/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);

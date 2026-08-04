@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.4"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.5"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -73,6 +73,36 @@ test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /body\.action === "bridgeConfigUpdate"/);
   assert.match(source, /activityStartedAt:\s*cfg\.activityStartedAt/);
   assert.match(source, /sheetRow:\s*index \+ 2/);
+});
+
+test("cuenta personas activas una sola vez y excluye quienes finalizaron", () => {
+  const originalSpreadsheet = context.spreadsheet_;
+  context.spreadsheet_ = () => ({
+    getSheetByName: () => ({
+      getLastRow: () => 6,
+      getRange: () => ({
+        getDisplayValues: () => [
+          ["Ana", "", "", "", "", "", "", "", "", "", "Pendiente"],
+          ["Ana", "", "", "", "", "", "", "", "", "", "Agregada a VirtualDJ"],
+          ["Luis", "", "", "", "", "", "", "", "", "", "Ya cantó"],
+          ["Marta", "", "", "", "", "", "", "", "", "", "Saltado"],
+          ["Carlos", "", "", "", "", "", "", "", "", "", "Fuera de VirtualDJ"]
+        ]
+      })
+    })
+  });
+  assert.equal(context.activeQueuePeopleCount_(), 2);
+  context.spreadsheet_ = originalSpreadsheet;
+});
+
+test("el HOST controla si los huéspedes ven el estado de la actividad", () => {
+  assert.match(source, /body\.action === "publicStatusVisibility"/);
+  assert.match(source, /setPublicStatusVisibility_\(body\.show === true, source\)/);
+  assert.match(source, /showPublicStatus:\s*cfg\.showPublicStatus/);
+  assert.match(source, /queuePeopleCount:\s*activeQueuePeopleCount_\(\)/);
+  assert.match(source, /\["Mostrar estado público"\]/);
+  assert.match(source, /getRange\("A8:A13"\)/);
+  assert.match(source, /getRange\("B13"\)\.setValue\(false\)/);
 });
 
 test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {

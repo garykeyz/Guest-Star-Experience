@@ -16,6 +16,7 @@ const formSource = await readFile(
   "utf8"
 );
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
+const faviconSource = await readFile(resolve(root, "../app/icon.svg"), "utf8");
 
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.doesNotMatch(appSource, /window\.open/);
@@ -121,6 +122,24 @@ test("el formulario confirma repeticiones en el idioma elegido", () => {
   assert.match(formSource, /duplicateCopy: Record<Lang, DuplicateCopy>/);
   assert.match(formSource, /confirmDuplicate/);
   assert.match(formSource, /duplicateDialog/);
+});
+
+test("muestra opcionalmente el estado público y el HOST puede ocultarlo", () => {
+  assert.match(formSource, /activityCopy: Record<Lang, ActivityCopy>/);
+  assert.match(formSource, /activity\.showPublicStatus/);
+  assert.match(formSource, /className="publicActivityStatus"/);
+  assert.match(formSource, /queuePeopleCount/);
+  assert.match(formSource, /setClockNow\(Date\.now\(\)\),1000/);
+  assert.match(formSource, /action:"publicStatusVisibility"/);
+  assert.match(formSource, /Mostrar estado al público/);
+  assert.match(formSource, /Ocultar estado al público/);
+});
+
+test("la página incluye un favicon propio de Guest Star", () => {
+  assert.match(faviconSource, /<svg/);
+  assert.match(faviconSource, /linearGradient id="bg"/);
+  assert.match(faviconSource, /<rect x="197" y="112"/);
+  assert.match(faviconSource, /<path d="m374 77/);
 });
 
 test("el Plan B alterna idiomas y permite buscar un enlace Karaoke", () => {

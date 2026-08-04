@@ -51,7 +51,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.4.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.5.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -59,7 +59,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.4-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.5-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -74,10 +74,10 @@ jobs:
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-Universal-v3.0.4-app.zip \
-              Guest-Star-Bridge-Universal-v3.0.4.dmg \
-              guest-star-experience-sync-v3.0.4.zip \
-              guest-star-bridge-v3.0.4-source.zip \
+              Guest-Star-Bridge-Universal-v3.0.5-app.zip \
+              Guest-Star-Bridge-Universal-v3.0.5.dmg \
+              guest-star-experience-sync-v3.0.5.zip \
+              guest-star-bridge-v3.0.5-source.zip \
               Code.gs \
               INSTALACION-OTRA-MAC.txt \
               > SHA256SUMS.txt
@@ -87,12 +87,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v3.0.4"
+          tag="v3.0.5"
           assets=(
-            "release-output/Guest-Star-Bridge-Universal-v3.0.4-app.zip"
-            "release-output/Guest-Star-Bridge-Universal-v3.0.4.dmg"
-            "release-output/guest-star-experience-sync-v3.0.4.zip"
-            "release-output/guest-star-bridge-v3.0.4-source.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.5-app.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.5.dmg"
+            "release-output/guest-star-experience-sync-v3.0.5.zip"
+            "release-output/guest-star-bridge-v3.0.5-source.zip"
             "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/SHA256SUMS.txt"
@@ -103,6 +103,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Bridge 3.0.4 Universal" \
-              --notes "Corrige la transición de 30 segundos que Google Sheets podía convertir erróneamente en 4:40:30 por la zona horaria histórica de Santo Domingo. Tiempo confirmado, cobertura y faltante usan duraciones exactas y toda la cola real de VirtualDJ. Descarga Universal para Mac Intel y Apple Silicon M1–M5; incluye APP ZIP, DMG, Code.gs e instructivo."
+              --title "Guest Star Bridge 3.0.5 Universal" \
+              --notes "Incluye la corrección exacta de transición y totales de la 3.0.4. Añade en la página de solicitudes un panel público opcional con actividad iniciada, tiempo transcurrido, tiempo faltante y personas en cola; el HOST puede mostrarlo u ocultarlo. También incorpora el favicon de Guest Star. Descarga Universal para Mac Intel y Apple Silicon M1–M5; incluye APP ZIP, DMG, Code.gs e instructivo."
           fi
