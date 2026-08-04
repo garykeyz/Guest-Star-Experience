@@ -19,14 +19,14 @@ Cloudflare:
 6. Selecciona **Nueva versión**, ejecutar como tú y acceso para **Cualquier persona**.
 7. Confirma que la URL `/exec` continúe siendo la misma.
 
-El menú **🎤 Karaoke** permitirá abrir, cerrar y reiniciar desde la hoja. El botón **HOST** de la página utiliza el mismo PIN.
+El menú **🎤 Karaoke** permitirá iniciar, abrir, cerrar y reiniciar desde la hoja. El botón **HOST** de la página utiliza el mismo PIN.
 
 Esta versión guarda los tiempos como duraciones reales, repara automáticamente
 los contadores que Google haya convertido en fechas de 1899 y mantiene un estado
-compartido para **abrir, cerrar y reiniciar** desde la web, Google Sheets o el
+compartido para **iniciar, abrir, cerrar y reiniciar** desde la web, Google Sheets o el
 Bridge local.
 
-## Guest Star Bridge 3.0.1 para Mac
+## Guest Star Bridge 3.0.2 Universal para Mac
 
 La carpeta `guest-star-bridge` conecta las solicitudes de esta misma hoja con:
 
@@ -45,25 +45,33 @@ actualiza al momento. Si una pista desaparece, el Bridge vuelve a buscar hasta
 seis opciones de YouTube para que el host elija cuál copiar. El escaneo cada
 10 segundos permanece como respaldo.
 
-La versión 3.0.0 exige que el huésped elija el idioma de la canción antes de
+La versión 3.0.2 exige que el huésped elija el idioma de la canción antes de
 mostrar el formulario. El idioma se guarda en Sheets, aparece en la tarjeta del
 Bridge y determina el orden de canales usado para las seis opciones de YouTube.
 **Español** usa la lista ampliada de Latinoamérica.
 
-La versión 3.0.0 verifica la cola Karaoke real de VirtualDJ en cada
+La versión 3.0.2 verifica la cola Karaoke real de VirtualDJ en cada
 sincronización. Si una canción enviada ya no está en la cola, pregunta si debe
-volver a colocarla al final o dejarla fuera. La interfaz refleja el orden real
-de la rotación, mientras las solicitudes todavía no enviadas conservan su orden
-de llegada. Las solicitudes nuevas de Google Sheets se consultan cada dos
+volver a colocarla al final o dejarla fuera. La interfaz conserva el número por
+orden de llegada y separa pendientes, en cola y finalizadas; un panel desplegable
+muestra la cola real, el turno, el acumulado y la hora estimada sin saturar la
+vista principal. Las solicitudes nuevas de Google Sheets se consultan cada dos
 segundos y también al volver a enfocar la aplicación.
 
-Esta versión añade un reloj continuo de la actividad, la suma del tiempo ya
-cantado y realmente en cola, el faltante o exceso frente a la duración
-configurada y los estados **Ya cantó** y **Saltado**. La duración, transición y
-apertura de solicitudes se pueden editar desde el Bridge. Si la cola queda
+Esta versión actualiza el reloj y todas las sumas cada segundo, toma la duración
+exacta de VirtualDJ y permite deshacer **Ya cantó** o **Saltado**, restaurando la
+pista en su turno anterior, al final o fuera de la cola. La duración, transición
+y apertura de solicitudes se pueden editar desde el Bridge. Si la cola queda
 vacía, muestra temas hit para el EMCEE o para elegir un cantante al azar.
+Esas sugerencias alternan español e inglés; si falta una pista, permiten buscar
+y copiar su mejor enlace Karaoke. El formulario advierte en el idioma elegido
+cuando el cantante repite o cuando la canción ya fue pedida o cantada.
 
-Para Mac M1/M2/M3/M4 también se incluye una compilación instalable en formato
-DMG. La aplicación trae su propio Node.js ARM64, inicia el servidor en segundo
-plano sin mostrar Terminal y presenta el panel dentro de su propia ventana de
-macOS, sin abrir una pestaña del navegador.
+El formulario guarda en la columna Fuente un solo resultado Karaoke/Lyrics,
+respetando el idioma y la prioridad de canales; ya no guarda el video original.
+El Bridge conserva seis opciones para el host y actualiza esa única fuente si se
+elige otro enlace.
+
+El paquete Universal funciona en Mac Intel y Apple Silicon M1–M5. La aplicación
+trae ambos motores nativos, inicia el servidor en segundo plano sin mostrar
+Terminal y presenta el panel dentro de su propia ventana de macOS.

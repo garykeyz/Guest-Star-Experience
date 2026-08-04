@@ -63,12 +63,29 @@
       </section>
       <section id="coverageAdvice" class="coverage-advice hidden"></section>
 
+      <section id="eventReminder" class="event-reminder" aria-live="polite">
+        <div>
+          <small>HORA FINAL DEL EVENTO</small>
+          <strong id="eventEndTime">Calculando…</strong>
+        </div>
+        <p id="eventEndDetail">EMCEE: respeta la hora final al organizar la rotación.</p>
+      </section>
+
+      <details id="vdjQueuePanel" class="vdj-queue-panel">
+        <summary>
+          <span><b>Cola actual de VirtualDJ</b><small id="vdjQueueSummary">Comprobando…</small></span>
+          <i aria-hidden="true">⌄</i>
+        </summary>
+        <div id="vdjQueueList" class="vdj-live-list"></div>
+      </details>
+
       <section class="toolbar">
         <div>
           <h2>Solicitudes de karaoke</h2>
           <p>La biblioteca y el orden real de VirtualDJ se actualizan automáticamente.</p>
         </div>
         <div class="button-row">
+          <button class="button primary" id="startRequests">Iniciar actividad</button>
           <button class="button success" id="openRequests">Abrir solicitudes</button>
           <button class="button danger" id="closeRequests">Cerrar solicitudes</button>
           <button class="button ghost" id="resetRequests">Reiniciar actividad</button>
@@ -79,7 +96,7 @@
       </section>
 
       <section id="notice" class="notice hidden" role="status"></section>
-      <section id="requests" class="request-list" aria-live="polite"></section>
+      <section id="requests" class="request-groups" aria-live="polite"></section>
       <section id="hitSuggestions" class="hit-suggestions hidden"></section>
     </main>
 
@@ -205,14 +222,20 @@
               <p class="singer"></p>
               <h3 class="song"></h3>
               <p class="artist"></p>
+              <p class="request-meta"></p>
               <p class="request-language"></p>
             </div>
             <span class="state-badge"></span>
           </div>
-          <div class="source-panel hidden"></div>
-          <div class="match-panel"></div>
-          <div class="youtube-panel hidden"></div>
-          <div class="outcome-panel"></div>
+          <details class="request-details">
+            <summary><span>Ver opciones y acciones</span><i aria-hidden="true">⌄</i></summary>
+            <div class="request-details-body">
+              <div class="source-panel hidden"></div>
+              <div class="match-panel"></div>
+              <div class="youtube-panel hidden"></div>
+              <div class="outcome-panel"></div>
+            </div>
+          </details>
         </div>
       </article>
     </template>

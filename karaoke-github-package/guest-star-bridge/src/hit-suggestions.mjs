@@ -42,15 +42,27 @@ export function selectHitSuggestions(
     return language.includes("espanol") || language.includes("spanish");
   }).length;
   const preferred = englishCount > spanishCount ? "English" : "Español";
-  const primary = HITS.filter((item) => item.language === preferred);
-  const secondary = HITS.filter((item) => item.language !== preferred);
   const seed = seedFrom(activityId);
-  const ordered = [
-    ...rotate(primary, seed),
-    ...rotate(secondary, Math.floor(seed / 7))
-  ];
+  const english = rotate(
+    HITS.filter((item) => item.language === "English"),
+    seed
+  );
+  const spanish = rotate(
+    HITS.filter((item) => item.language === "Español"),
+    Math.floor(seed / 7)
+  );
+  const primary = preferred === "English" ? english : spanish;
+  const secondary = preferred === "English" ? spanish : english;
+  const ordered = [];
+  const target = Math.max(1, limit);
+  for (let index = 0; ordered.length < target; index++) {
+    if (primary[index]) ordered.push(primary[index]);
+    if (ordered.length >= target) break;
+    if (secondary[index]) ordered.push(secondary[index]);
+    if (!primary[index] && !secondary[index]) break;
+  }
 
-  return ordered.slice(0, Math.max(1, limit)).map((item) => {
+  return ordered.slice(0, target).map((item) => {
     const match = findMatches(libraryFiles, item.song, item.artist, 1)[0];
     return {
       ...item,

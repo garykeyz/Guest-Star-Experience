@@ -25,6 +25,21 @@ type ApiResponse = ApiState & {
   code?: string;
   error?: string;
   state?: ApiState;
+  duplicates?: DuplicateWarning;
+};
+type DuplicateWarning = {
+  repeatedSinger?: boolean;
+  duplicateSong?: boolean;
+  duplicateSongState?: "active" | "completed" | "";
+};
+type DuplicateCopy = {
+  title: string;
+  singer: string;
+  active: string;
+  completed: string;
+  question: string;
+  continue: string;
+  cancel: string;
 };
 
 const ENDPOINT = "/api/karaoke";
@@ -32,6 +47,15 @@ const languages: [Lang, string, string][] = [
   ["es","🇪🇸","Español"],["en","🇺🇸","English"],["fr","🇫🇷","Français"],
   ["it","🇮🇹","Italiano"],["de","🇩🇪","Deutsch"],["ru","🇷🇺","Русский"],["pt","🇵🇹","Português"]
 ];
+const duplicateCopy: Record<Lang, DuplicateCopy> = {
+  en: {title:"Please confirm",singer:"You already have another request in this activity.",active:"This song has already been requested and is still active.",completed:"This song has already been sung during this activity.",question:"Do you still want to submit it?",continue:"Yes, continue",cancel:"Go back"},
+  es: {title:"Confirma antes de continuar",singer:"Ya tienes otra solicitud en esta actividad.",active:"Esta canción ya fue solicitada y sigue activa.",completed:"Esta canción ya fue cantada durante esta actividad.",question:"¿Aun así quieres enviarla?",continue:"Sí, continuar",cancel:"Volver"},
+  fr: {title:"Veuillez confirmer",singer:"Vous avez déjà une autre demande pour cette activité.",active:"Cette chanson a déjà été demandée et reste active.",completed:"Cette chanson a déjà été chantée pendant cette activité.",question:"Voulez-vous quand même l’envoyer ?",continue:"Oui, continuer",cancel:"Revenir"},
+  it: {title:"Conferma prima di continuare",singer:"Hai già un’altra richiesta in questa attività.",active:"Questo brano è già stato richiesto ed è ancora attivo.",completed:"Questo brano è già stato cantato durante questa attività.",question:"Vuoi inviarlo comunque?",continue:"Sì, continua",cancel:"Indietro"},
+  de: {title:"Bitte bestätigen",singer:"Du hast bereits einen weiteren Wunsch für diese Veranstaltung.",active:"Dieser Song wurde bereits gewünscht und ist noch aktiv.",completed:"Dieser Song wurde während dieser Veranstaltung bereits gesungen.",question:"Möchtest du ihn trotzdem senden?",continue:"Ja, fortfahren",cancel:"Zurück"},
+  ru: {title:"Подтвердите отправку",singer:"У вас уже есть другая заявка в этом мероприятии.",active:"Эта песня уже заказана и ещё активна.",completed:"Эту песню уже исполняли во время этого мероприятия.",question:"Всё равно отправить заявку?",continue:"Да, продолжить",cancel:"Назад"},
+  pt: {title:"Confirme antes de continuar",singer:"Já tem outro pedido nesta atividade.",active:"Esta música já foi pedida e continua ativa.",completed:"Esta música já foi cantada durante esta atividade.",question:"Deseja enviá-la mesmo assim?",continue:"Sim, continuar",cancel:"Voltar"}
+};
 const common = (x: Partial<Copy>): Copy => ({
   live:"LIVE EXPERIENCE",title:"KARAOKE NIGHT",sub:"Ready to sing?",desc:"Request your favorite song and get ready to shine on stage.",
   fields:{name:["Your Name","What should we call you?"],song:["Song Title","What would you like to sing?"],artist:["Artist","Who performs it?"],comment:["Comment","Optional dedication or note..."]},
@@ -118,7 +142,7 @@ async function api(url = ENDPOINT, init?: RequestInit): Promise<ApiResponse> {
   const data = await response.json().catch(() => ({})) as ApiResponse;
   if (!response.ok || data.ok === false) {
     const error = new Error(data.error || data.code || "REQUEST_FAILED");
-    Object.assign(error, { code: data.code });
+    Object.assign(error, data);
     throw error;
   }
   return data;
@@ -147,7 +171,9 @@ export default function KaraokeExperience() {
   const [hostBusy,setHostBusy]=useState(false);
   const [message,setMessage]=useState("");
   const [submitError,setSubmitError]=useState("");
+  const [duplicateWarning,setDuplicateWarning]=useState<DuplicateWarning|null>(null);
   const text=copy[lang||"en"];
+  const warningText=duplicateCopy[lang||"en"];
   const active=languages.find(x=>x[0]===lang)||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
 
@@ -166,28 +192,37 @@ export default function KaraokeExperience() {
     return()=>{mounted=false;clearInterval(id);};
   },[]);
 
-  const submit=async(e:FormEvent)=>{
-    e.preventDefault(); setTouched({name:true,song:true,artist:true});
+  const sendRequest=async(confirmDuplicate=false)=>{
     if(!complete||!accepting)return;
     setLoading(true);setSubmitError("");
     try{
-      const data=await post({...values,language:active[2]});
+      const data=await post({...values,language:active[2],confirmDuplicate});
       setAccepting(acceptingFrom(data));
+      setDuplicateWarning(null);
       setDone(true);
     }catch(error){
-      const code=(error as Error & {code?:string}).code;
+      const detail=error as Error & {code?:string;duplicates?:DuplicateWarning};
+      const code=detail.code;
       if(code==="CLOSED")setAccepting(false);
-      setSubmitError(code==="CLOSED"?text.closedText:text.failed);
+      if(code==="DUPLICATE_CONFIRMATION_REQUIRED"&&detail.duplicates){
+        setDuplicateWarning(detail.duplicates);
+      }else{
+        setSubmitError(code==="CLOSED"?text.closedText:text.failed);
+      }
     }finally{setLoading(false);}
   };
-  const hostAction=async(action:"open"|"close"|"reset")=>{
+  const submit=(e:FormEvent)=>{
+    e.preventDefault();setTouched({name:true,song:true,artist:true});
+    void sendRequest(false);
+  };
+  const hostAction=async(action:"start"|"open"|"close"|"reset")=>{
     if(!hostAuthenticated){setMessage("Primero valida el PIN.");return;}
     if(action==="reset"&&!window.confirm("¿Archivar y reiniciar la actividad?"))return;
     setHostBusy(true);setMessage("Procesando...");
     try{
       const data=await post({action,pin:pin.trim(),source:"web"});
       setAccepting(acceptingFrom(data));
-      setMessage(action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");
+      setMessage(action==="start"?"Actividad iniciada; el reloj ya está corriendo.":action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");
     }catch(error){
       const code=(error as Error & {code?:string}).code;
       if(code==="INVALID_PIN")setHostAuthenticated(false);
@@ -217,11 +252,20 @@ export default function KaraokeExperience() {
       setMessage("No se pudo actualizar el PIN.");
     }finally{setHostBusy(false);}
   };
-  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDone(false);};
+  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setDone(false);};
 
   return <main className="page">
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
     <div className="brand">✦ GUEST STAR EXPERIENCE</div>
+    <AnimatePresence>{duplicateWarning&&<motion.div className="duplicateBackdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
+      <motion.section className="duplicateDialog" role="alertdialog" aria-modal="true" aria-labelledby="duplicate-title" initial={{opacity:0,scale:.94,y:14}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.96,y:10}}>
+        <span className="duplicateIcon">!</span><h2 id="duplicate-title">{warningText.title}</h2>
+        {duplicateWarning.repeatedSinger&&<p>{warningText.singer}</p>}
+        {duplicateWarning.duplicateSong&&<p>{duplicateWarning.duplicateSongState==="completed"?warningText.completed:warningText.active}</p>}
+        <strong>{warningText.question}</strong>
+        <div><button type="button" onClick={()=>setDuplicateWarning(null)}>{warningText.cancel}</button><button type="button" className="continue" disabled={loading} onClick={()=>void sendRequest(true)}>{loading?text.sending:warningText.continue}</button></div>
+      </motion.section>
+    </motion.div>}</AnimatePresence>
     {!lang?<motion.section className="card languageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
       <div className="badge"><Mic2 size={31}/></div>
       <p className="eyebrow"><Sparkles size={14}/> IDIOMA DE LA CANCIÓN</p>
@@ -237,7 +281,7 @@ export default function KaraokeExperience() {
       <strong><Radio size={17}/> Control del anfitrión</strong>
       {!hostAuthenticated?<><input type="password" inputMode="numeric" placeholder="PIN privado" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
       <div><button disabled={hostBusy} onClick={loginHost}>Entrar</button></div></>:<>
-      <div><button disabled={hostBusy} onClick={()=>hostAction("open")}>Abrir</button><button disabled={hostBusy} onClick={()=>hostAction("close")}>Cerrar</button><button disabled={hostBusy} onClick={()=>hostAction("reset")}>Reiniciar</button></div>
+      <div><button disabled={hostBusy} onClick={()=>hostAction("start")}>Iniciar</button><button disabled={hostBusy} onClick={()=>hostAction("open")}>Abrir</button><button disabled={hostBusy} onClick={()=>hostAction("close")}>Cerrar</button><button disabled={hostBusy} onClick={()=>hostAction("reset")}>Reiniciar</button></div>
       <input type="password" inputMode="numeric" placeholder="PIN nuevo (6–12 números)" value={newPin} onChange={e=>setNewPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
       <div><button disabled={hostBusy||!newPin} onClick={changeHostPin}>Actualizar PIN</button><button onClick={()=>{setHostAuthenticated(false);setPin("");setNewPin("");setMessage("");}}>Salir</button></div>
       </>}

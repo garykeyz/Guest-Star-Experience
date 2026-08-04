@@ -7,27 +7,35 @@ import os
 import plistlib
 import re
 import shutil
-import stat
 import struct
 import subprocess
 import tarfile
+import tempfile
+import zipfile
 from pathlib import Path
 
-import pycdlib
 from PIL import Image, ImageDraw
 
 
 APP_NAME = "Guest Star Bridge.app"
 BUNDLE_ID = "com.gstarxp.guest-star-bridge"
+MINIMUM_MACOS = "11.0"
 
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Construye la app y una imagen montable para macOS Apple Silicon."
+        description=(
+            "Construye Guest Star Bridge Universal para Mac Intel y Apple Silicon."
+        )
     )
-    parser.add_argument("--node-tarball", required=True, type=Path)
+    parser.add_argument("--node-arm64-tarball", required=True, type=Path)
+    parser.add_argument("--node-x64-tarball", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args()
+
+
+def run(command: list[str], cwd: Path | None = None) -> None:
+    subprocess.run(command, cwd=cwd, check=True)
 
 
 def write_info_plist(path: Path, version: str) -> None:
@@ -42,9 +50,10 @@ def write_info_plist(path: Path, version: str) -> None:
         "CFBundleName": "Guest Star Bridge",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": version,
+        "CFBundleSupportedPlatforms": ["MacOSX"],
         "CFBundleVersion": str(version_number),
-        "LSArchitecturePriority": ["arm64"],
-        "LSMinimumSystemVersion": "11.0",
+        "LSArchitecturePriority": ["arm64", "x86_64"],
+        "LSMinimumSystemVersion": MINIMUM_MACOS,
         "LSMultipleInstancesProhibited": True,
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
         "NSHighResolutionCapable": True,
@@ -151,7 +160,7 @@ def write_icns(output_path: Path, work_dir: Path) -> None:
     output_path.write_bytes(b"icns" + struct.pack(">I", len(body) + 8) + body)
 
 
-def extract_node(node_tarball: Path, runtime_dir: Path) -> None:
+def extract_node(node_tarball: Path, runtime_dir: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(node_tarball, "r:gz") as archive:
         members = archive.getmembers()
@@ -169,10 +178,10 @@ def extract_node(node_tarball: Path, runtime_dir: Path) -> None:
         ]
         if not node_members or not license_members:
             raise RuntimeError("El paquete de Node no contiene los archivos requeridos.")
-        node_member = min(node_members, key=lambda member: len(Path(member.name).parts))
+        node_member = min(node_members, key=lambda item: len(Path(item.name).parts))
         license_member = min(
             license_members,
-            key=lambda member: len(Path(member.name).parts),
+            key=lambda item: len(Path(item.name).parts),
         )
         node_source = archive.extractfile(node_member)
         license_source = archive.extractfile(license_member)
@@ -184,9 +193,9 @@ def extract_node(node_tarball: Path, runtime_dir: Path) -> None:
         with (runtime_dir / "NODE-LICENSE.txt").open("wb") as handle:
             shutil.copyfileobj(license_source, handle)
     node_path.chmod(0o755)
-    magic = node_path.read_bytes()[:4]
-    if magic not in {b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"}:
+    if node_path.read_bytes()[:4] not in {b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"}:
         raise RuntimeError("El ejecutable incluido no parece ser Mach-O para macOS.")
+    return node_path
 
 
 def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
@@ -197,93 +206,150 @@ def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
         shutil.copy2(bridge_root / filename, destination / filename)
 
 
-def add_tree_to_iso(
-    iso: pycdlib.PyCdlib,
-    source_root: Path,
-    iso_root: str,
-    joliet_root: str,
+def compile_universal_launcher(source: Path, destination: Path) -> None:
+    run(
+        [
+            "xcrun",
+            "clang",
+            "-arch",
+            "arm64",
+            "-arch",
+            "x86_64",
+            f"-mmacosx-version-min={MINIMUM_MACOS}",
+            "-Os",
+            "-Wall",
+            "-Wextra",
+            str(source),
+            "-o",
+            str(destination),
+        ]
+    )
+    destination.chmod(0o755)
+    run(["lipo", "-verify_arch", "arm64", "x86_64", str(destination)])
+
+
+def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> None:
+    run(["lipo", "-verify_arch", "arm64", str(node_arm64)])
+    run(["lipo", "-verify_arch", "x86_64", str(node_x64)])
+    for executable in (node_arm64, node_x64):
+        run(
+            [
+                "codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                str(executable),
+            ]
+        )
+    run(
+        [
+            "codesign",
+            "--force",
+            "--deep",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            str(app_bundle),
+        ]
+    )
+    run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app_bundle)])
+    run(["plutil", "-lint", str(app_bundle / "Contents" / "Info.plist")])
+
+
+def prepare_distribution(
+    distribution: Path,
+    app_bundle: Path,
+    readme: Path,
+    installation_guide: Path,
 ) -> None:
-    mappings: dict[Path, tuple[str, str]] = {
-        source_root: (iso_root, joliet_root)
-    }
-    directory_counter = 0
-    file_counter = 0
-
-    for current, directories, files in os.walk(source_root):
-        current_path = Path(current)
-        current_iso, current_joliet = mappings[current_path]
-        directories.sort()
-        files.sort()
-
-        for name in directories:
-            directory_counter += 1
-            path = current_path / name
-            iso_name = f"D{directory_counter:06d}"
-            iso_path = f"{current_iso}/{iso_name}"
-            joliet_path = f"{current_joliet}/{name}"
-            iso.add_directory(
-                iso_path=iso_path,
-                rr_name=name,
-                joliet_path=joliet_path,
-                file_mode=stat.S_IMODE(path.stat().st_mode),
-            )
-            mappings[path] = (iso_path, joliet_path)
-
-        for name in files:
-            file_counter += 1
-            path = current_path / name
-            extension = re.sub(r"[^A-Z0-9]", "", path.suffix.upper().lstrip("."))[:3]
-            extension = extension or "BIN"
-            iso_name = f"F{file_counter:06d}.{extension};1"
-            iso.add_file(
-                str(path),
-                iso_path=f"{current_iso}/{iso_name}",
-                rr_name=name,
-                joliet_path=f"{current_joliet}/{name}",
-                file_mode=stat.S_IMODE(path.stat().st_mode),
-            )
+    if distribution.exists():
+        shutil.rmtree(distribution)
+    distribution.mkdir(parents=True)
+    shutil.copytree(app_bundle, distribution / APP_NAME, symlinks=True)
+    shutil.copy2(readme, distribution / "LEEME.txt")
+    shutil.copy2(installation_guide, distribution / "INSTALACION-OTRA-MAC.txt")
 
 
-def create_disk_image(app_bundle: Path, readme: Path, output_path: Path) -> None:
-    iso = pycdlib.PyCdlib()
-    iso.new(
-        interchange_level=3,
-        vol_ident="GSTAR_BRIDGE",
-        app_ident_str="Guest Star Bridge for Apple Silicon",
-        joliet=3,
-        rock_ridge="1.09",
-    )
-    iso.add_directory(
-        iso_path="/GSTARAPP",
-        rr_name=APP_NAME,
-        joliet_path=f"/{APP_NAME}",
-        file_mode=0o755,
-    )
-    add_tree_to_iso(iso, app_bundle, "/GSTARAPP", f"/{APP_NAME}")
-    iso.add_file(
-        str(readme),
-        iso_path="/LEEME.TXT;1",
-        rr_name="LEEME.txt",
-        joliet_path="/LEEME.txt",
-        file_mode=0o644,
-    )
-    iso.add_symlink(
-        symlink_path="/APPS",
-        rr_symlink_name="Applications",
-        rr_path="/Applications",
-    )
-    iso.write(str(output_path))
-    iso.close()
-
-
-def create_zip(app_bundle: Path, output_path: Path) -> None:
+def create_disk_image(distribution: Path, output_path: Path, version: str) -> None:
     if output_path.exists():
         output_path.unlink()
-    subprocess.run(
-        ["zip", "-q", "-r", "-y", str(output_path), app_bundle.name],
-        cwd=app_bundle.parent,
-        check=True,
+    applications_link = distribution / "Applications"
+    if applications_link.exists() or applications_link.is_symlink():
+        applications_link.unlink()
+    os.symlink("/Applications", applications_link)
+    run(
+        [
+            "hdiutil",
+            "create",
+            "-volname",
+            f"Guest Star Bridge {version}",
+            "-srcfolder",
+            str(distribution),
+            "-ov",
+            "-format",
+            "UDZO",
+            str(output_path),
+        ]
     )
+    run(["hdiutil", "verify", str(output_path)])
+    applications_link.unlink()
+
+
+def create_zip(distribution: Path, output_path: Path) -> None:
+    if output_path.exists():
+        output_path.unlink()
+    run(
+        [
+            "/usr/bin/ditto",
+            "-c",
+            "-k",
+            "--sequesterRsrc",
+            str(distribution),
+            str(output_path),
+        ]
+    )
+    run(["unzip", "-tq", str(output_path)])
+    executable_name = f"{APP_NAME}/Contents/MacOS/GuestStarBridge"
+    with zipfile.ZipFile(output_path) as archive:
+        try:
+            info = archive.getinfo(executable_name)
+        except KeyError as error:
+            raise RuntimeError("El ZIP no contiene la aplicación esperada.") from error
+        mode = (info.external_attr >> 16) & 0o777
+        if mode & 0o111 == 0:
+            raise RuntimeError("El ZIP perdió el permiso ejecutable del iniciador.")
+    with tempfile.TemporaryDirectory(prefix="guest-star-zip-check-") as temp:
+        extracted_root = Path(temp)
+        run(["/usr/bin/ditto", "-x", "-k", str(output_path), str(extracted_root)])
+        extracted_app = extracted_root / APP_NAME
+        run(
+            [
+                "codesign",
+                "--verify",
+                "--deep",
+                "--strict",
+                "--verbose=2",
+                str(extracted_app),
+            ]
+        )
+        run(
+            [
+                "lipo",
+                "-verify_arch",
+                "arm64",
+                "x86_64",
+                str(extracted_app / "Contents" / "MacOS" / "GuestStarBridge"),
+            ]
+        )
+        for relative in (
+            "Contents/Resources/runtime/node-arm64/node",
+            "Contents/Resources/runtime/node-x64/node",
+            "Contents/MacOS/GuestStarBridge.sh",
+        ):
+            path = extracted_app / relative
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise RuntimeError(f"El ZIP no conservó el ejecutable {relative}.")
 
 
 def main() -> None:
@@ -291,6 +357,7 @@ def main() -> None:
     bridge_root = Path(__file__).resolve().parent.parent
     version = json.loads((bridge_root / "package.json").read_text())["version"]
     output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
     staging = output_dir / "macos-installer-staging"
     app_bundle = staging / APP_NAME
     contents = app_bundle / "Contents"
@@ -299,32 +366,46 @@ def main() -> None:
 
     if staging.exists():
         shutil.rmtree(staging)
-    staging.mkdir(parents=True)
     resources.mkdir(parents=True)
     macos_dir.mkdir(parents=True)
 
-    launcher = bridge_root / "macos" / "GuestStarBridge"
-    shutil.copy2(launcher, macos_dir / "GuestStarBridge")
-    (macos_dir / "GuestStarBridge").chmod(0o755)
+    compile_universal_launcher(
+        bridge_root / "macos" / "GuestStarLauncher.c",
+        macos_dir / "GuestStarBridge",
+    )
+    shutil.copy2(
+        bridge_root / "macos" / "GuestStarBridge",
+        macos_dir / "GuestStarBridge.sh",
+    )
+    (macos_dir / "GuestStarBridge.sh").chmod(0o755)
     shutil.copy2(
         bridge_root / "macos" / "GuestStarWindow.js",
         resources / "GuestStarWindow.js",
     )
     write_info_plist(contents / "Info.plist", version)
     write_icns(resources / "AppIcon.icns", staging)
-    extract_node(args.node_tarball.resolve(), resources / "runtime")
+    node_arm64 = extract_node(
+        args.node_arm64_tarball.resolve(),
+        resources / "runtime" / "node-arm64",
+    )
+    node_x64 = extract_node(
+        args.node_x64_tarball.resolve(),
+        resources / "runtime" / "node-x64",
+    )
     copy_bridge_source(bridge_root, resources / "bridge")
+    sign_and_verify_app(app_bundle, node_arm64, node_x64)
 
-    dmg_path = output_dir / f"Guest-Star-Bridge-M1-v{version}.dmg"
-    zip_path = output_dir / f"Guest-Star-Bridge-M1-v{version}-app.zip"
-    if dmg_path.exists():
-        dmg_path.unlink()
-    create_disk_image(
+    distribution = staging / "distribution"
+    prepare_distribution(
+        distribution,
         app_bundle,
         bridge_root / "macos" / "LEEME.txt",
-        dmg_path,
+        bridge_root / "macos" / "INSTALACION-OTRA-MAC.txt",
     )
-    create_zip(app_bundle, zip_path)
+    dmg_path = output_dir / f"Guest-Star-Bridge-Universal-v{version}.dmg"
+    zip_path = output_dir / f"Guest-Star-Bridge-Universal-v{version}-app.zip"
+    create_disk_image(distribution, dmg_path, version)
+    create_zip(distribution, zip_path)
 
     print(
         json.dumps(
@@ -333,6 +414,7 @@ def main() -> None:
                 "dmg": str(dmg_path),
                 "zip": str(zip_path),
                 "version": version,
+                "architectures": ["arm64", "x86_64"],
             },
             ensure_ascii=False,
         )

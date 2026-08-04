@@ -93,7 +93,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     if (body.action === "bridgeQueue") {
       payload = {
         ok: true,
-        codeVersion: "3.0.0",
+        codeVersion: "3.0.2",
         state: { ...activity },
         requests
       };
@@ -110,7 +110,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       }
       payload = {
         ok: true,
-        codeVersion: "3.0.0",
+        codeVersion: "3.0.2",
         control: body.control,
         state: { ...activity },
         requests
@@ -120,6 +120,10 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       if (item) {
         item.status = body.status;
         item.fileName = body.fileName || item.fileName;
+        if (Number(body.durationSeconds) > 0) {
+          item.durationSeconds = Number(body.durationSeconds);
+        }
+        if (body.sourceUrl) item.sourceUrl = body.sourceUrl;
       }
     } else if (body.action === "youtubeSearch") {
       payload = {
@@ -148,13 +152,15 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       filepath: localSong,
       singer: "Ana",
       title: "Hello",
-      artist: "Adele"
+      artist: "Adele",
+      length: "4:03"
     },
     {
       filepath: otherPath,
       singer: "Otro",
       title: "Other Song",
-      artist: "Other Artist"
+      artist: "Other Artist",
+      length: "3:00"
     }
   ];
   let selected = 0;
@@ -173,8 +179,17 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
           filepath: path,
           singer,
           title: "Hello",
-          artist: "Adele"
+          artist: "Adele",
+          length: "4:03"
         });
+        selected = vdjQueue.length - 1;
+        const movesUp = (script.match(/browser_move -1/g) || []).length;
+        for (let move = 0; move < movesUp && selected > 0; move++) {
+          const previous = vdjQueue[selected - 1];
+          vdjQueue[selected - 1] = vdjQueue[selected];
+          vdjQueue[selected] = previous;
+          selected -= 1;
+        }
       }
       response.end("true");
       return;
@@ -235,11 +250,16 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     bridgeUrl,
     (candidate) =>
       candidate.requests?.find((item) => item.id === "request-1")?.queued === true &&
+      candidate.requests?.find((item) => item.id === "request-1")?.durationSeconds === 243 &&
       candidate.requests?.find((item) => item.id === "request-2")?.youtube?.length === 1
   );
   assert.equal(
     state.requests.find((item) => item.id === "request-1").queuePosition,
     1
+  );
+  assert.equal(
+    state.requests.find((item) => item.id === "request-1").durationSeconds,
+    243
   );
 
   vdjQueue.splice(0, 1);
@@ -299,6 +319,76 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   assert.equal(queuedAgain.ok, true);
   assert.equal(vdjQueue.at(-1).singer, "Ana");
 
+  const completed = await fetch(
+    `${bridgeUrl}/api/requests/request-1/outcome`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome: "completed" })
+    }
+  ).then((response) => response.json());
+  assert.equal(completed.status, "Ya cantó");
+  assert.equal(completed.removedFromVirtualDJ, true);
+  assert.equal(completed.singer, "Ana");
+  assert.equal(completed.undoOriginalPosition, 2);
+  state = await waitForState(
+    bridgeUrl,
+    (candidate) =>
+      candidate.requests?.find((item) => item.id === "request-1")?.outcome ===
+      "completed"
+  );
+  assert.equal(state.activitySummary.completedSeconds, 273);
+  assert.equal(
+    state.requests.find((item) => item.id === "request-1").canRestoreToQueue,
+    true
+  );
+  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
+
+  const undoneToOriginalTurn = await fetch(
+    `${bridgeUrl}/api/requests/request-1/undo-outcome`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ placement: "original" })
+    }
+  ).then((response) => response.json());
+  assert.equal(undoneToOriginalTurn.restoredToVirtualDJ, true);
+  assert.equal(undoneToOriginalTurn.queuePosition, 2);
+  assert.deepEqual(vdjQueue.map((entry) => entry.singer), ["Otro", "Ana"]);
+
+  const skipped = await fetch(
+    `${bridgeUrl}/api/requests/request-1/outcome`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome: "skipped" })
+    }
+  ).then((response) => response.json());
+  assert.equal(skipped.status, "Saltado");
+  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
+
+  const undoneOutsideQueue = await fetch(
+    `${bridgeUrl}/api/requests/request-1/undo-outcome`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ placement: "pending" })
+    }
+  ).then((response) => response.json());
+  assert.equal(undoneOutsideQueue.restoredToVirtualDJ, false);
+  assert.equal(undoneOutsideQueue.status, "Fuera de VirtualDJ");
+
+  const queuedAfterUndo = await fetch(
+    `${bridgeUrl}/api/requests/request-1/queue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: localSong })
+    }
+  ).then((response) => response.json());
+  assert.equal(queuedAfterUndo.ok, true);
+  assert.equal(vdjQueue.at(-1).singer, "Ana");
+
   await unlink(localSong);
   state = await waitForState(
     bridgeUrl,
@@ -311,26 +401,6 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     state.requests.find((item) => item.id === "request-1").youtube[0].resultType,
     "karaoke"
   );
-
-  const completed = await fetch(
-    `${bridgeUrl}/api/requests/request-1/outcome`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ outcome: "completed" })
-    }
-  ).then((response) => response.json());
-  assert.equal(completed.status, "Ya cantó");
-  assert.equal(completed.removedFromVirtualDJ, true);
-  assert.equal(completed.singer, "Ana");
-  state = await waitForState(
-    bridgeUrl,
-    (candidate) =>
-      candidate.requests?.find((item) => item.id === "request-1")?.outcome ===
-      "completed"
-  );
-  assert.equal(state.activitySummary.completedSeconds, 270);
-  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
 
   state = await fetch(`${bridgeUrl}/api/activity/close`, {
     method: "POST",

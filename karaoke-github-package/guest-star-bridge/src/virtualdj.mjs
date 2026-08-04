@@ -17,6 +17,24 @@ export function buildKaraokeScript(filePath, singer) {
   ].join(" & ");
 }
 
+export function buildKaraokeInsertScript(
+  filePath,
+  singer,
+  targetIndex,
+  currentCount
+) {
+  const count = Math.max(0, Math.floor(Number(currentCount) || 0));
+  const desired = Math.min(
+    count,
+    Math.max(0, Math.floor(Number(targetIndex) || 0))
+  );
+  const steps = [buildKaraokeScript(filePath, singer)];
+  for (let position = count; position > desired; position--) {
+    steps.push("browser_move -1");
+  }
+  return steps.join(" & ");
+}
+
 function normalizedQueryValue(value) {
   const text = String(value || "").trim();
   const unquoted =
@@ -30,6 +48,29 @@ export function normalizeVdjPath(value) {
 
 export function normalizeVdjSinger(value) {
   return normalizedQueryValue(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+export function parseVdjDuration(value) {
+  const text = normalizedQueryValue(value)
+    .replace(/\s*(?:ms|milliseconds?)$/i, "")
+    .trim();
+  if (!text) return 0;
+
+  const clock = text.match(
+    /^(?:(\d+):)?([0-5]?\d):([0-5]\d)(?:[.,]\d+)?$/
+  );
+  if (clock) {
+    return (
+      Number(clock[1] || 0) * 3600 +
+      Number(clock[2] || 0) * 60 +
+      Number(clock[3] || 0)
+    );
+  }
+
+  const numeric = Number(text.replace(",", "."));
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  const seconds = numeric > 43200 ? numeric / 1000 : numeric;
+  return seconds > 0 && seconds <= 43200 ? Math.round(seconds) : 0;
 }
 
 function normalizeVdjMetadata(value) {
@@ -137,18 +178,20 @@ export async function listKaraokeEntries(config) {
   const entries = [];
 
   for (let index = 0; index < count; index++) {
-    const [filePath, singer, song, artist] = await Promise.all([
+    const [filePath, singer, song, artist, length] = await Promise.all([
       queryVdj(config, karaokeSongQuery("filepath", index)),
       queryVdj(config, karaokeSongQuery("singer", index)),
       queryVdj(config, karaokeSongQuery("title", index)),
-      queryVdj(config, karaokeSongQuery("artist", index))
+      queryVdj(config, karaokeSongQuery("artist", index)),
+      queryVdj(config, karaokeSongQuery("length", index))
     ]);
     const entry = {
       index,
       filePath: normalizedQueryValue(filePath),
       singer: normalizedQueryValue(singer),
       song: normalizedQueryValue(song),
-      artist: normalizedQueryValue(artist)
+      artist: normalizedQueryValue(artist),
+      durationSeconds: parseVdjDuration(length)
     };
     if (!entry.filePath && !entry.singer && !entry.song && !entry.artist) {
       throw new Error(
@@ -159,6 +202,56 @@ export async function listKaraokeEntries(config) {
   }
 
   return entries;
+}
+
+export async function insertKaraokeEntry(config, entry, targetIndex) {
+  const filePath = normalizedQueryValue(entry?.filePath);
+  const singer = normalizedQueryValue(entry?.singer);
+  if (!filePath || !singer) {
+    throw new Error("Faltan el archivo o el cantante para restaurar la canción.");
+  }
+
+  const before = await listKaraokeEntries(config);
+  const existing = before.find((candidate) =>
+    sameKaraokeIdentity(candidate, entry)
+  );
+  if (existing) {
+    return {
+      inserted: false,
+      alreadyQueued: true,
+      index: existing.index,
+      verified: true
+    };
+  }
+
+  const desired = Math.min(
+    before.length,
+    Math.max(0, Math.floor(Number(targetIndex) || 0))
+  );
+  await executeVdj(
+    config,
+    buildKaraokeInsertScript(filePath, singer, desired, before.length)
+  );
+  const after = await listKaraokeEntries(config);
+  const restored = after.find((candidate) =>
+    sameKaraokeIdentity(candidate, entry)
+  );
+  if (!restored) {
+    throw new Error(
+      "VirtualDJ recibió el comando, pero no confirmó la canción restaurada."
+    );
+  }
+  if (restored.index !== desired) {
+    throw new Error(
+      `VirtualDJ agregó la canción, pero quedó en el turno ${restored.index + 1} en vez del ${desired + 1}.`
+    );
+  }
+  return {
+    inserted: true,
+    alreadyQueued: false,
+    index: restored.index,
+    verified: true
+  };
 }
 
 export async function removeKaraokeEntry(config, entry) {

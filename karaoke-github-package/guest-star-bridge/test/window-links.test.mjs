@@ -52,9 +52,66 @@ test("las acciones usan confirmación interna y notifican su resultado", () => {
   assert.match(bridgeHtml, /id="acceptConfirm"/);
 });
 
+test("permite deshacer el resultado y elegir dónde restaurar la pista", () => {
+  assert.match(appSource, /function undoOutcome\(id, placement\)/);
+  assert.match(appSource, /Deshacer y volver al turno/);
+  assert.match(appSource, /Deshacer y enviar al final/);
+  assert.match(appSource, /Solo deshacer · dejar fuera/);
+  assert.match(serverSource, /\/undo-outcome/);
+  assert.match(serverSource, /async function undoRequestOutcome/);
+});
+
+test("el reloj visible avanza cada segundo y recalcula todos los totales", () => {
+  assert.match(appSource, /window\.setInterval\(updateTimeDashboard, 1000\)/);
+  assert.match(appSource, /Date\.now\(\) - started/);
+  assert.match(appSource, /Pista \$\{activityDuration\(songSeconds\)\}/);
+  assert.match(appSource, /transición \$\{activityDuration\(transitionSeconds\)\}/);
+});
+
+test("el enlace seleccionado se copia y se guarda como fuente única en Sheets", () => {
+  assert.match(
+    appSource,
+    /quedó como el único enlace de esa solicitud en Google Sheets/
+  );
+  assert.match(serverSource, /sourceUrl: selected\.url/);
+  assert.match(serverSource, /item\.sourceUrl = selected\.url/);
+});
+
 test("la sincronización de fondo no bloquea los botones por canción", () => {
   assert.match(appSource, /let syncBusy = false/);
   assert.match(appSource, /const actionLocks = new Set/);
   assert.doesNotMatch(appSource, /let busy = false/);
   assert.match(appSource, /actionLocks\.has\(actionScope\(item\.id\)\)/);
+});
+
+test("separa solicitudes compactas por estado sin perder el orden de llegada", () => {
+  assert.match(appSource, /Pendientes de entrar a la cola/);
+  assert.match(appSource, /En la cola de VirtualDJ/);
+  assert.match(appSource, /Ya cantaron \/ finalizadas/);
+  assert.match(appSource, /Llegada #\$\{arrival\.number\}/);
+  assert.match(appSource, /total solicitado al llegar/);
+  assert.match(bridgeHtml, /class="request-details"/);
+  assert.match(bridgeHtml, /id="startRequests"/);
+});
+
+test("muestra la cola real de VirtualDJ y la hora final sin saturar la lista", () => {
+  assert.match(bridgeHtml, /id="vdjQueuePanel"/);
+  assert.match(bridgeHtml, /id="eventEndTime"/);
+  assert.match(appSource, /function renderVdjQueue/);
+  assert.match(appSource, /EMCEE: organiza los turnos/);
+  assert.match(serverSource, /entries: vdjQueueEntries\.map/);
+});
+
+test("el formulario confirma repeticiones en el idioma elegido", () => {
+  assert.match(formSource, /DUPLICATE_CONFIRMATION_REQUIRED/);
+  assert.match(formSource, /duplicateCopy: Record<Lang, DuplicateCopy>/);
+  assert.match(formSource, /confirmDuplicate/);
+  assert.match(formSource, /duplicateDialog/);
+});
+
+test("el Plan B alterna idiomas y permite buscar un enlace Karaoke", () => {
+  assert.match(appSource, /Temas hit equilibrados en español e inglés/);
+  assert.match(appSource, /Buscar enlace Karaoke/);
+  assert.match(appSource, /Copiar enlace Karaoke/);
+  assert.match(serverSource, /\/api\/suggestions\/youtube/);
 });

@@ -30,23 +30,27 @@ jobs:
           python3 -m pip install --disable-pip-version-check \
             -r karaoke-github-package/guest-star-bridge/macos/requirements-build.txt
 
-      - name: Download Apple Silicon runtime
+      - name: Download Intel and Apple Silicon runtimes
         run: |
           curl -fsSL \
             https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-arm64.tar.gz \
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz"
+          curl -fsSL \
+            https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
+            -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
 
       - name: Build app and downloadable packages
         run: |
           mkdir -p "$GITHUB_WORKSPACE/release-output"
           python3 karaoke-github-package/guest-star-bridge/macos/build_installer.py \
-            --node-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" \
+            --node-arm64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" \
+            --node-x64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" \
             --output-dir "$GITHUB_WORKSPACE/release-output"
 
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.1.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.2.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -54,7 +58,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.1-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.2-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -63,15 +67,18 @@ jobs:
 
           cp karaoke-github-package/google-apps-script/Code.gs \
             "$GITHUB_WORKSPACE/release-output/Code.gs"
+          cp karaoke-github-package/guest-star-bridge/macos/INSTALACION-OTRA-MAC.txt \
+            "$GITHUB_WORKSPACE/release-output/INSTALACION-OTRA-MAC.txt"
 
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-M1-v3.0.1-app.zip \
-              Guest-Star-Bridge-M1-v3.0.1.dmg \
-              guest-star-experience-sync-v3.0.1.zip \
-              guest-star-bridge-v3.0.1-source.zip \
+              Guest-Star-Bridge-Universal-v3.0.2-app.zip \
+              Guest-Star-Bridge-Universal-v3.0.2.dmg \
+              guest-star-experience-sync-v3.0.2.zip \
+              guest-star-bridge-v3.0.2-source.zip \
               Code.gs \
+              INSTALACION-OTRA-MAC.txt \
               > SHA256SUMS.txt
           )
 
@@ -79,13 +86,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v3.0.1"
+          tag="v3.0.2"
           assets=(
-            "release-output/Guest-Star-Bridge-M1-v3.0.1-app.zip"
-            "release-output/Guest-Star-Bridge-M1-v3.0.1.dmg"
-            "release-output/guest-star-experience-sync-v3.0.1.zip"
-            "release-output/guest-star-bridge-v3.0.1-source.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.2-app.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.2.dmg"
+            "release-output/guest-star-experience-sync-v3.0.2.zip"
+            "release-output/guest-star-bridge-v3.0.2-source.zip"
             "release-output/Code.gs"
+            "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/SHA256SUMS.txt"
           )
 
@@ -94,6 +102,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Bridge 3.0.1" \
-              --notes "Descarga oficial para Mac Apple Silicon. Incluye APP ZIP, DMG, Code.gs y paquetes de código fuente."
+              --title "Guest Star Bridge 3.0.2 Universal" \
+              --notes "Descarga oficial Universal para Mac Intel y Apple Silicon M1–M5. Corrige la apertura en otras Macs, el reloj en vivo, las duraciones exactas, el enlace karaoke único en Sheets y permite deshacer Ya cantó/Saltado restaurando la pista en su turno anterior, al final o fuera de la cola. Incluye APP ZIP, DMG, Code.gs e instructivo."
           fi

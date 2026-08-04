@@ -11,6 +11,8 @@ let activityBusy = false;
 let scanBusy = false;
 let syncBusy = false;
 const actionLocks = new Set();
+const hitSearchLocks = new Set();
+const expandedRequestIds = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
 
@@ -144,6 +146,15 @@ function dateTime(value) {
   });
 }
 
+function clockTime(value) {
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleTimeString("es", {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
 function liveActivitySummary() {
   const summary = { ...(state?.activitySummary || {}) };
   const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
@@ -162,6 +173,11 @@ function updateTimeDashboard() {
   const summary = liveActivitySummary();
   const target = Number(summary.targetSeconds) || 0;
   $("#elapsedTime").textContent = activityDuration(summary.elapsedSeconds);
+  const activityDetail = $("#activityStatus p");
+  if (activityDetail) {
+    activityDetail.textContent =
+      `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`;
+  }
   $("#elapsedDetail").textContent = summary.clockOverrunSeconds
     ? `La actividad superó su duración por ${activityDuration(summary.clockOverrunSeconds)}`
     : `Quedan ${activityDuration(summary.clockRemainingSeconds)} de reloj`;
@@ -173,6 +189,18 @@ function updateTimeDashboard() {
   $("#plannedDetail").textContent = summary.skippedSeconds
     ? `${activityDuration(summary.skippedSeconds)} restado como saltado`
     : "Las canciones saltadas no se incluyen";
+
+  const started = Date.parse(String(state?.activity?.activityStartedAt || ""));
+  if (Number.isFinite(started) && target > 0) {
+    const eventEnd = new Date(started + target * 1000);
+    $("#eventEndTime").textContent = clockTime(eventEnd);
+    $("#eventEndDetail").textContent =
+      `EMCEE: organiza los turnos para terminar a las ${clockTime(eventEnd)} y no sobrepasar el evento.`;
+  } else {
+    $("#eventEndTime").textContent = "Pulsa Iniciar actividad";
+    $("#eventEndDetail").textContent =
+      "El reloj y la hora final comenzarán cuando el host inicie la actividad.";
+  }
 
   const card = $("#coverageCard");
   card.classList.remove("ok", "warning", "over");
@@ -217,6 +245,7 @@ function updateTimeDashboard() {
 
 function activityMessage(activity) {
   const action = {
+    start: "La actividad fue iniciada",
     open: "Las solicitudes fueron abiertas",
     close: "Las solicitudes fueron cerradas",
     reset: "La actividad fue reiniciada"
@@ -292,6 +321,7 @@ function updateStatus() {
   );
   $("#openRequests").disabled = activityBusy || accepting;
   $("#closeRequests").disabled = activityBusy || !accepting;
+  $("#startRequests").disabled = activityBusy;
   $("#resetRequests").disabled = activityBusy;
   const revision = Number(activity.stateRevision) || 0;
   if (
@@ -463,6 +493,34 @@ async function markOutcome(id, outcome) {
   );
 }
 
+async function undoOutcome(id, placement) {
+  const songLabel = requestLabel(id);
+  const actionText = {
+    original: "restaurando su turno anterior",
+    end: "enviándola al final de la rotación",
+    pending: "deshaciendo el estado sin agregarla a la cola"
+  }[placement];
+  await runAction(
+    actionScope(id),
+    `${songLabel}: ${actionText}…`,
+    () => api(
+      `/api/requests/${encodeURIComponent(id)}/undo-outcome`,
+      {
+        method: "POST",
+        body: JSON.stringify({ placement })
+      }
+    ),
+    (data) => ({
+      title: "Acción deshecha",
+      detail: data.restoredToVirtualDJ
+        ? `${songLabel} volvió a VirtualDJ${
+            data.queuePosition ? ` en el turno ${data.queuePosition}` : ""
+          }.`
+        : `${songLabel} dejó de estar marcada como cantada o saltada y permanece fuera de la cola.`
+    })
+  );
+}
+
 async function queueSuggestion(item, singerMode) {
   const scope = `suggestion:${item.song}:${item.artist}`;
   await runAction(
@@ -499,11 +557,15 @@ async function youtube(id, panel) {
 
 async function copyYoutubeOption(id, url) {
   try {
-    await api(`/api/requests/${encodeURIComponent(id)}/youtube/copy`, {
+    const data = await api(`/api/requests/${encodeURIComponent(id)}/youtube/copy`, {
       method: "POST",
       body: JSON.stringify({ url })
     });
-    showNotice("Enlace elegido copiado al portapapeles.");
+    const detail = data.sheetUpdated
+      ? "El enlace elegido fue copiado y quedó como el único enlace de esa solicitud en Google Sheets."
+      : "El enlace elegido fue copiado al portapapeles.";
+    showNotice(detail);
+    showSuccess("Enlace karaoke seleccionado", detail);
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -595,6 +657,84 @@ function appendMissingActions(item, match, youtubePanel, message) {
   renderYoutubeForItem(item, youtubePanel);
 }
 
+function renderVdjQueue() {
+  const entries = Array.isArray(state?.virtualDJ?.entries)
+    ? state.virtualDJ.entries
+    : [];
+  const summary = $("#vdjQueueSummary");
+  const list = $("#vdjQueueList");
+  list.innerHTML = "";
+  if (!entries.length) {
+    summary.textContent = state?.virtualDJ?.queueVerified
+      ? "0 pistas · cola vacía"
+      : "esperando confirmación";
+    list.innerHTML =
+      '<p class="empty-match">La cola Karaoke está vacía o todavía no se ha podido verificar.</p>';
+    return;
+  }
+  const next = entries[0];
+  summary.textContent =
+    `${entries.length} pista${entries.length === 1 ? "" : "s"} · ` +
+    `siguiente: ${next.singer} — ${next.song}`;
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "vdj-live-row";
+    const position = document.createElement("b");
+    position.textContent = entry.position;
+    const info = document.createElement("span");
+    const song = document.createElement("strong");
+    song.textContent = entry.song;
+    const detail = document.createElement("small");
+    detail.textContent = [entry.artist, `Cantante: ${entry.singer}`]
+      .filter(Boolean)
+      .join(" · ");
+    info.append(song, detail);
+    const durationLabel = document.createElement("span");
+    durationLabel.textContent = entry.localAvailable
+      ? activityDuration(entry.durationSeconds)
+      : `⚠ ${activityDuration(entry.durationSeconds)} · archivo no accesible`;
+    if (!entry.localAvailable) durationLabel.className = "missing-file";
+    row.append(position, info, durationLabel);
+    list.append(row);
+  });
+}
+
+function requestTimelines(items) {
+  const arrival = new Map();
+  let requestedSeconds = 0;
+  items.forEach((item, index) => {
+    const planned =
+      Math.max(0, Number(item.durationSeconds) || 240) +
+      Math.max(0, Number(item.transitionSeconds) || 0);
+    if (item.outcome !== "skipped") requestedSeconds += planned;
+    arrival.set(item.id, {
+      number: index + 1,
+      cumulativeSeconds: requestedSeconds
+    });
+  });
+
+  const queue = new Map();
+  let queueSeconds = 0;
+  [...items]
+    .filter((item) => item.queued === true)
+    .sort(
+      (left, right) =>
+        (Number(left.queuePosition) || Number.MAX_SAFE_INTEGER) -
+        (Number(right.queuePosition) || Number.MAX_SAFE_INTEGER)
+    )
+    .forEach((item) => {
+      const planned =
+        Math.max(0, Number(item.durationSeconds) || 240) +
+        Math.max(0, Number(item.transitionSeconds) || 0);
+      queue.set(item.id, {
+        estimatedStartAt: Date.now() + queueSeconds * 1000,
+        cumulativeSeconds: queueSeconds + planned
+      });
+      queueSeconds += planned;
+    });
+  return { arrival, queue };
+}
+
 function renderRequests() {
   requestsEl.innerHTML = "";
   if (!state.requests.length) {
@@ -603,19 +743,64 @@ function renderRequests() {
     return;
   }
   const template = $("#requestTemplate");
+  const timelines = requestTimelines(state.requests);
+  const groups = new Map();
+  [
+    ["pending", "Pendientes de entrar a la cola", "En orden de llegada"],
+    ["queued", "En la cola de VirtualDJ", "Verificada en tiempo real"],
+    ["finished", "Ya cantaron / finalizadas", "Se pueden deshacer y restaurar"]
+  ].forEach(([key, title, detail]) => {
+    const section = document.createElement("section");
+    section.className = `request-group ${key}`;
+    const header = document.createElement("header");
+    header.className = "request-group-head";
+    const copy = document.createElement("div");
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const description = document.createElement("p");
+    description.textContent = detail;
+    copy.append(heading, description);
+    const count = document.createElement("span");
+    count.className = "request-group-count";
+    count.textContent = "0";
+    header.append(copy, count);
+    const list = document.createElement("div");
+    list.className = "request-list";
+    section.append(header, list);
+    requestsEl.append(section);
+    groups.set(key, { list, count, total: 0 });
+  });
   state.requests.forEach((item, index) => {
     const fragment = template.content.cloneNode(true);
     const card = $(".request-card", fragment);
     const requestPending = actionLocks.has(actionScope(item.id));
-    $(".request-number", card).textContent = index + 1;
+    const arrival = timelines.arrival.get(item.id) || {
+      number: index + 1,
+      cumulativeSeconds: 0
+    };
+    const requestNumber = $(".request-number", card);
+    requestNumber.textContent = `#${arrival.number}`;
+    requestNumber.title = item.sheetRow
+      ? `Solicitud ${arrival.number} · fila ${item.sheetRow} de Google Sheets`
+      : `Solicitud ${arrival.number} por orden de llegada`;
     $(".singer", card).textContent = item.singer;
     $(".song", card).textContent = item.song;
     $(".artist", card).textContent = item.artist || "Artista no indicado";
-    const plannedSeconds =
-      (Number(item.durationSeconds) || 240) +
-      Math.max(0, Number(item.transitionSeconds) || 0);
+    const songSeconds = Number(item.durationSeconds) || 240;
+    const transitionSeconds = Math.max(
+      0,
+      Number(item.transitionSeconds) || 0
+    );
+    const plannedSeconds = songSeconds + transitionSeconds;
+    const queueTimeline = timelines.queue.get(item.id);
+    const rowLabel = item.sheetRow ? ` · fila ${item.sheetRow}` : "";
+    $(".request-meta", card).textContent = queueTimeline
+      ? `Llegada #${arrival.number}${rowLabel} · cola acumulada ${activityDuration(queueTimeline.cumulativeSeconds)} · turno aprox. ${clockTime(queueTimeline.estimatedStartAt)}`
+      : `Llegada #${arrival.number}${rowLabel} · total solicitado al llegar ${activityDuration(arrival.cumulativeSeconds)}`;
     $(".request-language", card).textContent =
       `${item.language ? `Idioma: ${item.language}` : "Idioma no indicado"} · ` +
+      `Pista ${activityDuration(songSeconds)} + ` +
+      `transición ${activityDuration(transitionSeconds)} = ` +
       `${activityDuration(plannedSeconds)}`;
     const badge = $(".state-badge", card);
     badge.classList.add(item.localState);
@@ -650,6 +835,19 @@ function renderRequests() {
       item.localState === "removed-missing";
     const isTerminal =
       item.localState === "completed" || item.localState === "skipped";
+    const details = $(".request-details", card);
+    const detailsLabel = $("summary span", details);
+    details.open = expandedRequestIds.has(item.id);
+    detailsLabel.textContent = details.open
+      ? "Ocultar opciones y acciones"
+      : "Ver opciones y acciones";
+    details.addEventListener("toggle", () => {
+      if (details.open) expandedRequestIds.add(item.id);
+      else expandedRequestIds.delete(item.id);
+      detailsLabel.textContent = details.open
+        ? "Ocultar opciones y acciones"
+        : "Ver opciones y acciones";
+    });
     if (isTerminal) {
       match.innerHTML = item.localState === "completed"
         ? '<div class="outcome-summary completed"><strong>Esta persona ya cantó.</strong><p>Su duración permanece incluida en el total de la actividad.</p></div>'
@@ -797,6 +995,28 @@ function renderRequests() {
           markOutcome(item.id, "skipped")
         )
       );
+    } else {
+      if (item.canRestoreToQueue && item.undoOriginalPosition) {
+        outcomePanel.append(
+          button(
+            `Deshacer y volver al turno ${item.undoOriginalPosition}`,
+            "primary",
+            () => undoOutcome(item.id, "original")
+          )
+        );
+      }
+      if (item.canRestoreToQueue) {
+        outcomePanel.append(
+          button("Deshacer y enviar al final", "ghost", () =>
+            undoOutcome(item.id, "end")
+          )
+        );
+      }
+      outcomePanel.append(
+        button("Solo deshacer · dejar fuera", "danger", () =>
+          undoOutcome(item.id, "pending")
+        )
+      );
     }
     if (requestPending) {
       card.classList.add("processing");
@@ -805,7 +1025,18 @@ function renderRequests() {
         element.disabled = true;
       });
     }
-    requestsEl.append(fragment);
+    const groupKey = isTerminal ? "finished" : item.queued === true ? "queued" : "pending";
+    const group = groups.get(groupKey);
+    group.total += 1;
+    group.count.textContent = group.total;
+    group.list.append(fragment);
+  });
+  groups.forEach((group) => {
+    if (group.total) return;
+    const empty = document.createElement("p");
+    empty.className = "group-empty";
+    empty.textContent = "No hay canciones en esta sección.";
+    group.list.append(empty);
   });
 }
 
@@ -821,7 +1052,7 @@ function renderHitSuggestions() {
   const header = document.createElement("div");
   header.className = "hit-header";
   header.innerHTML =
-    "<div><p class=\"eyebrow\">PLAN B PARA LA ROTACIÓN</p><h2>Temas hit para mantener el karaoke activo</h2><p>Usa un tema disponible para el EMCEE o deja que el Bridge elija una persona registrada al azar.</p></div>";
+    "<div><p class=\"eyebrow\">PLAN B PARA LA ROTACIÓN</p><h2>Temas hit equilibrados en español e inglés</h2><p>Usa una pista local para el EMCEE o busca el mejor enlace Karaoke cuando aún no esté en el disco.</p></div>";
   const grid = document.createElement("div");
   grid.className = "hit-grid";
   items.forEach((item) => {
@@ -854,11 +1085,75 @@ function renderHitSuggestions() {
       actions.append(
         button("Buscar carpeta", "ghost", scan)
       );
+      const key = `${item.language}:${item.artist}:${item.song}`;
+      if (item.youtube?.[0]) {
+        const selected = item.youtube[0];
+        actions.append(
+          button("Copiar enlace Karaoke", "primary", () =>
+            copyLink(selected.url, `Enlace Karaoke de ${item.song} copiado.`)
+          ),
+          button("Abrir ↗", "youtube", () => openExternal(selected.url))
+        );
+        const link = document.createElement("a");
+        link.className = "hit-youtube-link";
+        link.href = selected.url;
+        link.textContent = selected.title || selected.url;
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          openExternal(selected.url);
+        });
+        info.append(link);
+      } else if (item.youtubeSearched) {
+        const unavailable = document.createElement("span");
+        unavailable.className = "hit-youtube-empty";
+        unavailable.textContent = "No se encontró una versión Karaoke confiable todavía.";
+        info.append(unavailable);
+        actions.append(
+          button("Reintentar enlace Karaoke", "youtube", () =>
+            searchHitYoutube(item, key)
+          )
+        );
+      } else {
+        const searchButton = button(
+          hitSearchLocks.has(key) ? "Buscando Karaoke…" : "Buscar enlace Karaoke",
+          "youtube",
+          () => searchHitYoutube(item, key)
+        );
+        searchButton.disabled = hitSearchLocks.has(key);
+        actions.append(searchButton);
+      }
     }
     card.append(info, actions);
     grid.append(card);
   });
   panel.append(header, grid);
+}
+
+async function searchHitYoutube(item, key) {
+  if (hitSearchLocks.has(key)) return;
+  hitSearchLocks.add(key);
+  renderHitSuggestions();
+  showNotice(`Buscando la mejor versión Karaoke de ${item.song}…`);
+  try {
+    const data = await api("/api/suggestions/youtube", {
+      method: "POST",
+      body: JSON.stringify({
+        song: item.song,
+        artist: item.artist,
+        language: item.language,
+        force: true
+      })
+    });
+    await refresh();
+    showNotice(data.items?.length
+      ? "Enlace Karaoke encontrado; ya puedes copiarlo."
+      : "No se encontró todavía una versión Karaoke confiable.");
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    hitSearchLocks.delete(key);
+    renderHitSuggestions();
+  }
 }
 
 function renderFolders() {
@@ -1023,6 +1318,7 @@ async function controlActivity(action) {
       await api(`/api/activity/${action}`, { method: "POST", body: "{}" })
     );
     showNotice({
+      start: "Actividad iniciada. El reloj y la hora final ya están corriendo.",
       open: "Solicitudes abiertas en la web y en el Bridge.",
       close: "Solicitudes cerradas en la web y en el Bridge.",
       reset: "Actividad reiniciada y cola local sincronizada."
@@ -1036,6 +1332,7 @@ async function controlActivity(action) {
 }
 
 $("#scanButton").addEventListener("click", scan);
+$("#startRequests").addEventListener("click", () => controlActivity("start"));
 $("#openRequests").addEventListener("click", () => controlActivity("open"));
 $("#closeRequests").addEventListener("click", () => controlActivity("close"));
 $("#resetRequests").addEventListener("click", () => controlActivity("reset"));
@@ -1147,6 +1444,7 @@ $("#testVdj").addEventListener("click", async () => {
 function applyState(nextState) {
   state = nextState;
   updateStatus();
+  renderVdjQueue();
   renderRequests();
   renderHitSuggestions();
 }
