@@ -1,5 +1,8 @@
 GUEST STAR BRIDGE 3.0.7 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
+Si la Mac sera operada por un DJ o tecnico que utilizara solamente el Bridge,
+consulta tambien el archivo descargable “GUIA-MAC-SOLO-BRIDGE.txt”.
+
 COMPATIBILIDAD
 
 - Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
