@@ -8,7 +8,7 @@ const HEADERS = [
   "Fuente", "Estado", "ID", "Archivo local", "Actualizado"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "3.0.5";
+const BRIDGE_API_VERSION = "3.0.6";
 const YOUTUBE_CHANNEL_PRIORITIES = {
   english: [
     "Sing King",

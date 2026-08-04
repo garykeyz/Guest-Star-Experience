@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 3.0.5 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR BRIDGE 3.0.6 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
 COMPATIBILIDAD
 
@@ -14,12 +14,12 @@ LO QUE DEBES TENER
 4. La carpeta con tus videos de karaoke en esa Mac o en un disco conectado.
 5. El enlace /exec de Google Apps Script.
 6. El PIN privado del host.
-7. Code.gs 3.0.5 publicado como una versión nueva de la implementación.
+7. Code.gs 3.0.6 publicado como una versión nueva de la implementación.
 
 INSTALACIÓN
 
 1. Cierra cualquier versión anterior de Guest Star Bridge.
-2. Descarga “Guest-Star-Bridge-Universal-v3.0.5-app.zip”.
+2. Descarga “Guest-Star-Bridge-Universal-v3.0.6-app.zip”.
 3. Haz doble clic al ZIP para descomprimirlo.
 4. Mueve “Guest Star Bridge.app” a la carpeta Aplicaciones.
 5. En Aplicaciones, haz clic derecho sobre Guest Star Bridge y elige Abrir.
@@ -51,7 +51,7 @@ CONFIGURAR EL BRIDGE
 
 ACTUALIZAR CODE.GS SIN CAMBIAR EL ENLACE /EXEC
 
-1. En Apps Script, reemplaza todo el contenido por Code.gs 3.0.5.
+1. En Apps Script, reemplaza todo el contenido por Code.gs 3.0.6.
 2. Guarda y ejecuta setup una vez.
 3. Ve a Implementar → Administrar implementaciones.
 4. Edita la implementación actual.

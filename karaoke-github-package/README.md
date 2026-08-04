@@ -26,7 +26,7 @@ los contadores que Google haya convertido en fechas de 1899 y mantiene un estado
 compartido para **iniciar, abrir, cerrar y reiniciar** desde la web, Google Sheets o el
 Bridge local.
 
-## Guest Star Bridge 3.0.5 Universal para Mac
+## Guest Star Bridge 3.0.6 Universal para Mac
 
 La carpeta `guest-star-bridge` conecta las solicitudes de esta misma hoja con:
 
@@ -45,12 +45,15 @@ actualiza al momento. Si una pista desaparece, el Bridge vuelve a buscar hasta
 seis opciones de YouTube para que el host elija cuál copiar. El escaneo cada
 10 segundos permanece como respaldo.
 
-La versión 3.0.5 exige que el huésped elija el idioma de la canción antes de
+La versión 3.0.6 exige que el huésped elija el idioma de la canción antes de
 mostrar el formulario. El idioma se guarda en Sheets, aparece en la tarjeta del
 Bridge y determina el orden de canales usado para las seis opciones de YouTube.
 **Español** usa la lista ampliada de Latinoamérica.
+La pantalla de selección usa inglés como idioma universal y, al pulsar
+**Submit another song**, vuelve a pedir obligatoriamente el idioma de la nueva
+canción en lugar de reutilizar la selección anterior.
 
-La versión 3.0.5 verifica la cola Karaoke real de VirtualDJ en cada
+La versión 3.0.6 verifica la cola Karaoke real de VirtualDJ en cada
 sincronización. Si una canción enviada ya no está en la cola, pregunta si debe
 volver a colocarla al final o dejarla fuera. La interfaz conserva el número por
 orden de llegada y separa pendientes, en cola y finalizadas; un panel desplegable

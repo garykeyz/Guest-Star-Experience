@@ -1,4 +1,4 @@
-# Guest Star Bridge 3.0.5
+# Guest Star Bridge 3.0.6
 
 Puente local para Mac entre:
 
@@ -13,7 +13,7 @@ Google Sheets. Un cambio hecho en cualquiera de los tres lugares aparece en el
 Bridge normalmente en unos dos segundos. Al volver a enfocar la aplicación,
 también se solicita una sincronización inmediata.
 
-La versión 3.0.5 también:
+La versión 3.0.6 también:
 
 - tolera pequeñas diferencias de artista entre la biblioteca y VirtualDJ;
 - mantiene el reloj en cero hasta pulsar **Iniciar actividad** y no confunde
@@ -45,7 +45,7 @@ La versión 3.0.5 también:
 ### Instalador universal
 
 En un Mac Intel o Apple Silicon M1, M2, M3, M4 o M5, descomprime
-`Guest-Star-Bridge-Universal-v3.0.5-app.zip`, mueve **Guest Star Bridge.app** a
+`Guest-Star-Bridge-Universal-v3.0.6-app.zip`, mueve **Guest Star Bridge.app** a
 **Aplicaciones** y ábrela. El Bridge incluye sus motores nativos, se ejecuta en
 segundo plano y muestra el panel dentro de una ventana propia de macOS, sin abrir
 Safari, Chrome, pestañas del navegador ni Terminal.
@@ -81,10 +81,10 @@ Documents.
 1. Cierra la ventana anterior del Bridge.
 2. Conserva tu archivo `data/config.json` si quieres mantener las carpetas, el
    PIN y el puerto ya configurados.
-3. Sustituye los archivos por los de Bridge 3.0.5 y vuelve a abrir
+3. Sustituye los archivos por los de Bridge 3.0.6 y vuelve a abrir
    `INICIAR-GUEST-STAR.command`.
 
-Al abrir la versión 3.0.5, la configuración anterior se conserva. Las carpetas y
+Al abrir la versión 3.0.6, la configuración anterior se conserva. Las carpetas y
 el PIN se recuerdan por defecto, pero cada opción puede desactivarse por separado
 desde **Configuración**.
 

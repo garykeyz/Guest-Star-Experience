@@ -35,10 +35,27 @@ test("la ventana interna no instala el delegado que causaba el cierre", () => {
 
 test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {
   assert.match(formSource, /useState<Lang\|null>\(null\)/);
-  assert.match(formSource, /¿En qué idioma vas a cantar\?/);
+  assert.match(formSource, /What language will you sing in\?/);
   assert.match(formSource, /!lang\?<motion\.section/);
   assert.match(bridgeHtml, /class="request-language"/);
   assert.match(appSource, /Idioma: \$\{item\.language\}/);
+});
+
+test("el selector universal está en inglés sin cambiar el idioma guardado", () => {
+  assert.match(formSource, /SONG LANGUAGE/);
+  assert.match(formSource, /\["es","🇪🇸","Spanish","Español"\]/);
+  assert.match(formSource, /\["fr","🇫🇷","French","Français"\]/);
+  assert.match(formSource, /language:active\[3\]/);
+});
+
+test("pedir otra canción obliga a elegir nuevamente el idioma", () => {
+  const resetSource = formSource.slice(
+    formSource.indexOf("const reset="),
+    formSource.indexOf("return <main")
+  );
+  assert.match(resetSource, /setMenu\(false\)/);
+  assert.match(resetSource, /setLang\(null\)/);
+  assert.match(resetSource, /setDone\(false\)/);
 });
 
 test("las acciones usan confirmación interna y notifican su resultado", () => {
