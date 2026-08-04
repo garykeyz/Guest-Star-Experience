@@ -43,11 +43,12 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.2"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.3"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
-  assert.match(source, /touchState_\("start",\s*source,\s*true\)/);
+  assert.match(source, /touchState_\("start",\s*source,\s*false\)/);
+  assert.match(source, /cfg\.getRange\("B7"\)\.clearContent\(\)/);
   assert.match(source, /\["start", "open", "close", "reset"\]/);
   assert.match(source, /sourceUrl:\s*String\(row\[10\]/);
   assert.match(source, /fileName:\s*String\(row\[13\]/);
@@ -105,7 +106,11 @@ test("setup y el recálculo funcionan sin una interfaz de Google Sheets", () => 
   assert.doesNotMatch(recalculateBody, /SpreadsheetApp\.getUi/);
   assert.match(setupBody, /return state;/);
   assert.match(source, /ensureBaseConfig_\(sheet\);/);
-  assert.match(source, /\["Último reinicio", new Date\(\)\]/);
+  assert.match(source, /\["Inicio de la actividad", ""\]/);
+  assert.match(source, /const legacyStartLabel = String\(values\[6\]\[0\]/);
+  assert.match(source, /legacyStartLabel !== defaults\[6\]\[0\]/);
+  assert.match(source, /values\[6\]\[1\] = ""/);
+  assert.match(source, /activityRunning:\s*cfg\.activityRunning/);
 });
 
 test("YouTube devuelve hasta seis opciones confiables y exige letras visibles", () => {

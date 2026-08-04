@@ -159,12 +159,17 @@ function liveActivitySummary() {
   const summary = { ...(state?.activitySummary || {}) };
   const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
   const started = Date.parse(String(state?.activity?.activityStartedAt || ""));
-  const elapsedSeconds = Number.isFinite(started)
+  const activityRunning = Number.isFinite(started);
+  const elapsedSeconds = activityRunning
     ? Math.max(0, Math.floor((Date.now() - started) / 1000))
-    : Math.max(0, Number(summary.elapsedSeconds) || 0);
+    : 0;
+  summary.activityRunning = activityRunning;
   summary.elapsedSeconds = elapsedSeconds;
   summary.clockRemainingSeconds = Math.max(0, targetSeconds - elapsedSeconds);
   summary.clockOverrunSeconds = Math.max(0, elapsedSeconds - targetSeconds);
+  summary.eventEndsAt = activityRunning && targetSeconds > 0
+    ? new Date(started + targetSeconds * 1000).toISOString()
+    : "";
   return summary;
 }
 
@@ -175,12 +180,15 @@ function updateTimeDashboard() {
   $("#elapsedTime").textContent = activityDuration(summary.elapsedSeconds);
   const activityDetail = $("#activityStatus p");
   if (activityDetail) {
-    activityDetail.textContent =
-      `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`;
+    activityDetail.textContent = summary.activityRunning
+      ? `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
+      : "El reloj está en 0:00:00";
   }
-  $("#elapsedDetail").textContent = summary.clockOverrunSeconds
-    ? `La actividad superó su duración por ${activityDuration(summary.clockOverrunSeconds)}`
-    : `Quedan ${activityDuration(summary.clockRemainingSeconds)} de reloj`;
+  $("#elapsedDetail").textContent = !summary.activityRunning
+    ? "Pulsa Iniciar actividad para activar el reloj"
+    : summary.clockOverrunSeconds
+      ? `La actividad superó su duración por ${activityDuration(summary.clockOverrunSeconds)}`
+      : `Quedan ${activityDuration(summary.clockRemainingSeconds)} de reloj`;
   $("#confirmedTime").textContent = activityDuration(summary.confirmedSeconds);
   $("#confirmedDetail").textContent =
     `${summary.queueSongCount || 0} en cola · ` +
@@ -190,12 +198,10 @@ function updateTimeDashboard() {
     ? `${activityDuration(summary.skippedSeconds)} restado como saltado`
     : "Las canciones saltadas no se incluyen";
 
-  const started = Date.parse(String(state?.activity?.activityStartedAt || ""));
-  if (Number.isFinite(started) && target > 0) {
-    const eventEnd = new Date(started + target * 1000);
-    $("#eventEndTime").textContent = clockTime(eventEnd);
+  if (summary.activityRunning && summary.eventEndsAt) {
+    $("#eventEndTime").textContent = clockTime(summary.eventEndsAt);
     $("#eventEndDetail").textContent =
-      `EMCEE: organiza los turnos para terminar a las ${clockTime(eventEnd)} y no sobrepasar el evento.`;
+      `EMCEE: organiza los turnos para terminar a las ${clockTime(summary.eventEndsAt)} y no sobrepasar el evento.`;
   } else {
     $("#eventEndTime").textContent = "Pulsa Iniciar actividad";
     $("#eventEndDetail").textContent =
@@ -313,15 +319,23 @@ function updateStatus() {
   const activity = state.activity || {};
   const accepting = activity.accepting !== false;
   const summary = liveActivitySummary();
+  const running = summary.activityRunning;
   setStatus(
     "#activityStatus",
-    accepting ? "ok" : "error",
-    accepting ? "Solicitudes abiertas" : "Solicitudes cerradas",
-    `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
+    running ? "ok" : accepting ? "" : "error",
+    running
+      ? `En curso · solicitudes ${accepting ? "abiertas" : "cerradas"}`
+      : "Lista para iniciar",
+    running
+      ? `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
+      : "El reloj está en 0:00:00"
   );
   $("#openRequests").disabled = activityBusy || accepting;
   $("#closeRequests").disabled = activityBusy || !accepting;
-  $("#startRequests").disabled = activityBusy;
+  $("#startRequests").disabled = activityBusy || running;
+  $("#startRequests").textContent = running
+    ? "✓ Actividad iniciada"
+    : "▶ Iniciar actividad";
   $("#resetRequests").disabled = activityBusy;
   const revision = Number(activity.stateRevision) || 0;
   if (

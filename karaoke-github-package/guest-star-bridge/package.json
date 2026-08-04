@@ -1,6 +1,6 @@
 {
   "name": "guest-star-bridge",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "private": true,
   "type": "module",
   "description": "Puente local entre Guest Star Experience, la biblioteca de karaoke y VirtualDJ.",
