@@ -58,6 +58,7 @@ test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", (
 
 test("la publicación y el instructivo entregan el paquete Universal 3.0.2", () => {
   assert.match(workflowSource, /Guest-Star-Bridge-Universal-v3\.0\.2-app\.zip/);
+  assert.match(workflowSource, /karaoke-github-package\/\*\*/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);
   assert.match(guideSource, /Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5/);

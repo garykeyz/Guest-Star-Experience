@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/workflows/publish-guest-star-bridge.yml
+      - "karaoke-github-package/**"
   workflow_dispatch:
 
 permissions:
