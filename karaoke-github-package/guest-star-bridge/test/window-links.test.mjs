@@ -16,6 +16,7 @@ const formSource = await readFile(
   "utf8"
 );
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
+const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
 const faviconSource = await readFile(resolve(root, "../app/icon.svg"), "utf8");
 
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
@@ -56,6 +57,15 @@ test("pedir otra canción obliga a elegir nuevamente el idioma", () => {
   assert.match(resetSource, /setMenu\(false\)/);
   assert.match(resetSource, /setLang\(null\)/);
   assert.match(resetSource, /setDone\(false\)/);
+});
+
+test("muestra el comentario o la dedicatoria a simple vista en cada tarjeta", () => {
+  assert.match(bridgeHtml, /class="request-comment hidden"/);
+  assert.match(appSource, /const requestComment = String\(item\.comment \|\| ""\)\.trim\(\)/);
+  assert.match(appSource, /requestCommentEl\.textContent = `💬 \$\{requestComment\}`/);
+  assert.match(appSource, /requestCommentEl\.classList\.remove\("hidden"\)/);
+  assert.match(bridgeStyles, /\.request-comment \{/);
+  assert.match(bridgeStyles, /-webkit-line-clamp: 2/);
 });
 
 test("las acciones usan confirmación interna y notifican su resultado", () => {

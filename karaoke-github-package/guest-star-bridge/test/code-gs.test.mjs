@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.6"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.7"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);

@@ -51,7 +51,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.6.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.7.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -59,7 +59,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.6-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.7-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -74,10 +74,10 @@ jobs:
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-Universal-v3.0.6-app.zip \
-              Guest-Star-Bridge-Universal-v3.0.6.dmg \
-              guest-star-experience-sync-v3.0.6.zip \
-              guest-star-bridge-v3.0.6-source.zip \
+              Guest-Star-Bridge-Universal-v3.0.7-app.zip \
+              Guest-Star-Bridge-Universal-v3.0.7.dmg \
+              guest-star-experience-sync-v3.0.7.zip \
+              guest-star-bridge-v3.0.7-source.zip \
               Code.gs \
               INSTALACION-OTRA-MAC.txt \
               > SHA256SUMS.txt
@@ -87,12 +87,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v3.0.6"
+          tag="v3.0.7"
           assets=(
-            "release-output/Guest-Star-Bridge-Universal-v3.0.6-app.zip"
-            "release-output/Guest-Star-Bridge-Universal-v3.0.6.dmg"
-            "release-output/guest-star-experience-sync-v3.0.6.zip"
-            "release-output/guest-star-bridge-v3.0.6-source.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.7-app.zip"
+            "release-output/Guest-Star-Bridge-Universal-v3.0.7.dmg"
+            "release-output/guest-star-experience-sync-v3.0.7.zip"
+            "release-output/guest-star-bridge-v3.0.7-source.zip"
             "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/SHA256SUMS.txt"
@@ -103,6 +103,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Bridge 3.0.6 Universal" \
-              --notes "Hace que cada nueva solicitud, incluso después de pulsar Submit another song, obligue a elegir nuevamente el idioma de la canción. El selector inicial y los nombres visibles de los siete idiomas ahora se presentan en inglés universal, mientras los valores internos conservan la búsqueda Karaoke/Lyrics y las prioridades de Sheets. Mantiene todas las mejoras de tiempos, cola real, panel público y favicon. Descarga Universal para Mac Intel y Apple Silicon M1–M5; incluye APP ZIP, DMG, Code.gs e instructivo."
+              --title "Guest Star Bridge 3.0.7 Universal" \
+              --notes "Mantiene el selector inicial en inglés universal y obliga a elegir nuevamente el idioma después de Submit another song. Añade en cada tarjeta del Bridge una línea visible y resaltada con el comentario o la dedicatoria del solicitante; los mensajes largos ocupan como máximo dos líneas para conservar la vista compacta. Mantiene las prioridades Karaoke/Lyrics, tiempos, cola real, panel público y favicon. Descarga Universal para Mac Intel y Apple Silicon M1–M5; incluye APP ZIP, DMG, Code.gs e instructivo."
           fi
