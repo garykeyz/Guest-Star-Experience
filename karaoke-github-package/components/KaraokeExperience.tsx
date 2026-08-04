@@ -3,8 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowRight, Check, ChevronDown, Headphones, LockKeyhole, MessageCircleMore,
-  Mic2, Music2, Radio, RotateCcw, Send, Sparkles, UserRound, XCircle
+  ArrowRight, Check, ChevronDown, Clock3, Eye, EyeOff, Headphones, Hourglass,
+  LockKeyhole, MessageCircleMore, Mic2, Music2, Radio, RotateCcw, Send,
+  Sparkles, UserRound, UsersRound, XCircle
 } from "lucide-react";
 
 type Lang = "es" | "en" | "fr" | "it" | "de" | "ru" | "pt";
@@ -17,6 +18,11 @@ type Copy = {
 
 type ApiState = {
   accepting?: boolean;
+  activityHours?: number;
+  activityStartedAt?: string;
+  activityRunning?: boolean;
+  showPublicStatus?: boolean;
+  queuePeopleCount?: number;
   stateRevision?: number;
   activityId?: string;
 };
@@ -41,6 +47,15 @@ type DuplicateCopy = {
   continue: string;
   cancel: string;
 };
+type ActivityCopy = {
+  label: string;
+  notStarted: string;
+  running: string;
+  finished: string;
+  elapsed: string;
+  remaining: string;
+  queue: string;
+};
 
 const ENDPOINT = "/api/karaoke";
 const languages: [Lang, string, string][] = [
@@ -55,6 +70,15 @@ const duplicateCopy: Record<Lang, DuplicateCopy> = {
   de: {title:"Bitte bestätigen",singer:"Du hast bereits einen weiteren Wunsch für diese Veranstaltung.",active:"Dieser Song wurde bereits gewünscht und ist noch aktiv.",completed:"Dieser Song wurde während dieser Veranstaltung bereits gesungen.",question:"Möchtest du ihn trotzdem senden?",continue:"Ja, fortfahren",cancel:"Zurück"},
   ru: {title:"Подтвердите отправку",singer:"У вас уже есть другая заявка в этом мероприятии.",active:"Эта песня уже заказана и ещё активна.",completed:"Эту песню уже исполняли во время этого мероприятия.",question:"Всё равно отправить заявку?",continue:"Да, продолжить",cancel:"Назад"},
   pt: {title:"Confirme antes de continuar",singer:"Já tem outro pedido nesta atividade.",active:"Esta música já foi pedida e continua ativa.",completed:"Esta música já foi cantada durante esta atividade.",question:"Deseja enviá-la mesmo assim?",continue:"Sim, continuar",cancel:"Voltar"}
+};
+const activityCopy: Record<Lang, ActivityCopy> = {
+  en: {label:"ACTIVITY STATUS",notStarted:"The activity has not started",running:"Activity in progress",finished:"Scheduled time completed",elapsed:"Elapsed",remaining:"Remaining",queue:"People in queue"},
+  es: {label:"ESTADO DE LA ACTIVIDAD",notStarted:"La actividad aún no ha iniciado",running:"Actividad en curso",finished:"Tiempo programado finalizado",elapsed:"Transcurrido",remaining:"Faltante",queue:"Personas en cola"},
+  fr: {label:"ÉTAT DE L’ACTIVITÉ",notStarted:"L’activité n’a pas encore commencé",running:"Activité en cours",finished:"Temps prévu terminé",elapsed:"Écoulé",remaining:"Restant",queue:"Personnes en attente"},
+  it: {label:"STATO DELL’ATTIVITÀ",notStarted:"L’attività non è ancora iniziata",running:"Attività in corso",finished:"Tempo previsto terminato",elapsed:"Trascorso",remaining:"Rimanente",queue:"Persone in coda"},
+  de: {label:"AKTIVITÄTSSTATUS",notStarted:"Die Aktivität hat noch nicht begonnen",running:"Aktivität läuft",finished:"Geplante Zeit beendet",elapsed:"Vergangen",remaining:"Verbleibend",queue:"Personen in der Warteschlange"},
+  ru: {label:"СТАТУС МЕРОПРИЯТИЯ",notStarted:"Мероприятие ещё не началось",running:"Мероприятие идёт",finished:"Запланированное время завершено",elapsed:"Прошло",remaining:"Осталось",queue:"Людей в очереди"},
+  pt: {label:"ESTADO DA ATIVIDADE",notStarted:"A atividade ainda não começou",running:"Atividade em curso",finished:"Tempo programado concluído",elapsed:"Decorrido",remaining:"Restante",queue:"Pessoas na fila"}
 };
 const common = (x: Partial<Copy>): Copy => ({
   live:"LIVE EXPERIENCE",title:"KARAOKE NIGHT",sub:"Ready to sing?",desc:"Request your favorite song and get ready to shine on stage.",
@@ -156,6 +180,18 @@ function acceptingFrom(data: ApiResponse) {
   return (data.state?.accepting ?? data.accepting) !== false;
 }
 
+function stateFrom(data: ApiResponse): ApiState {
+  return data.state || data;
+}
+
+function activityDuration(seconds: number) {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const remainder = safe % 60;
+  return `${hours}:${String(minutes).padStart(2,"0")}:${String(remainder).padStart(2,"0")}`;
+}
+
 export default function KaraokeExperience() {
   const [lang,setLang]=useState<Lang|null>(null);
   const [menu,setMenu]=useState(false);
@@ -164,6 +200,8 @@ export default function KaraokeExperience() {
   const [loading,setLoading]=useState(false);
   const [done,setDone]=useState(false);
   const [accepting,setAccepting]=useState(true);
+  const [activity,setActivity]=useState<ApiState>({});
+  const [clockNow,setClockNow]=useState(()=>Date.now());
   const [host,setHost]=useState(false);
   const [pin,setPin]=useState("");
   const [hostAuthenticated,setHostAuthenticated]=useState(false);
@@ -174,15 +212,23 @@ export default function KaraokeExperience() {
   const [duplicateWarning,setDuplicateWarning]=useState<DuplicateWarning|null>(null);
   const text=copy[lang||"en"];
   const warningText=duplicateCopy[lang||"en"];
+  const statusText=activityCopy[lang||"en"];
   const active=languages.find(x=>x[0]===lang)||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
+  const targetSeconds=Math.max(0,Math.round((Number(activity.activityHours)||0)*3600));
+  const startedAt=Date.parse(String(activity.activityStartedAt||""));
+  const activityRunning=Number.isFinite(startedAt)&&activity.activityRunning!==false;
+  const elapsedSeconds=activityRunning?Math.max(0,Math.floor((clockNow-startedAt)/1000)):0;
+  const remainingSeconds=Math.max(0,targetSeconds-elapsedSeconds);
+  const activityFinished=activityRunning&&targetSeconds>0&&remainingSeconds===0;
+  const queuePeopleCount=Math.max(0,Math.floor(Number(activity.queuePeopleCount)||0));
 
   useEffect(()=>{
     let mounted=true;
     const refreshStatus=async()=>{
       try{
         const data=await api(`${ENDPOINT}?action=status&t=${Date.now()}`);
-        if(mounted)setAccepting(acceptingFrom(data));
+        if(mounted){setAccepting(acceptingFrom(data));setActivity(stateFrom(data));}
       }catch{
         // Conserva el último estado conocido mientras se recupera la conexión.
       }
@@ -192,12 +238,18 @@ export default function KaraokeExperience() {
     return()=>{mounted=false;clearInterval(id);};
   },[]);
 
+  useEffect(()=>{
+    const id=window.setInterval(()=>setClockNow(Date.now()),1000);
+    return()=>clearInterval(id);
+  },[]);
+
   const sendRequest=async(confirmDuplicate=false)=>{
     if(!complete||!accepting)return;
     setLoading(true);setSubmitError("");
     try{
       const data=await post({...values,language:active[2],confirmDuplicate});
       setAccepting(acceptingFrom(data));
+      setActivity(stateFrom(data));
       setDuplicateWarning(null);
       setDone(true);
     }catch(error){
@@ -222,11 +274,27 @@ export default function KaraokeExperience() {
     try{
       const data=await post({action,pin:pin.trim(),source:"web"});
       setAccepting(acceptingFrom(data));
+      setActivity(stateFrom(data));
       setMessage(action==="start"?"Actividad iniciada; el reloj ya está corriendo.":action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");
     }catch(error){
       const code=(error as Error & {code?:string}).code;
       if(code==="INVALID_PIN")setHostAuthenticated(false);
       setMessage(code==="INVALID_PIN"?"El PIN ya no es válido.":"No se pudo completar la acción.");
+    }finally{setHostBusy(false);}
+  };
+  const togglePublicStatus=async()=>{
+    if(!hostAuthenticated){setMessage("Primero valida el PIN.");return;}
+    const show=!activity.showPublicStatus;
+    setHostBusy(true);setMessage(show?"Mostrando estado público...":"Ocultando estado público...");
+    try{
+      const data=await post({action:"publicStatusVisibility",pin:pin.trim(),show,source:"web"});
+      setAccepting(acceptingFrom(data));
+      setActivity(stateFrom(data));
+      setMessage(show?"El estado de la actividad ya es visible para los huéspedes.":"El estado de la actividad quedó oculto.");
+    }catch(error){
+      const code=(error as Error & {code?:string}).code;
+      if(code==="INVALID_PIN")setHostAuthenticated(false);
+      setMessage(code==="INVALID_PIN"?"El PIN ya no es válido.":"No se pudo cambiar la visualización.");
     }finally{setHostBusy(false);}
   };
   const loginHost=async()=>{
@@ -282,11 +350,16 @@ export default function KaraokeExperience() {
       {!hostAuthenticated?<><input type="password" inputMode="numeric" placeholder="PIN privado" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
       <div><button disabled={hostBusy} onClick={loginHost}>Entrar</button></div></>:<>
       <div><button disabled={hostBusy} onClick={()=>hostAction("start")}>Iniciar</button><button disabled={hostBusy} onClick={()=>hostAction("open")}>Abrir</button><button disabled={hostBusy} onClick={()=>hostAction("close")}>Cerrar</button><button disabled={hostBusy} onClick={()=>hostAction("reset")}>Reiniciar</button></div>
+      <div className="hostStatusControl"><button disabled={hostBusy} onClick={togglePublicStatus}>{activity.showPublicStatus?<><EyeOff size={16}/> Ocultar estado al público</>:<><Eye size={16}/> Mostrar estado al público</>}</button></div>
       <input type="password" inputMode="numeric" placeholder="PIN nuevo (6–12 números)" value={newPin} onChange={e=>setNewPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
       <div><button disabled={hostBusy||!newPin} onClick={changeHostPin}>Actualizar PIN</button><button onClick={()=>{setHostAuthenticated(false);setPin("");setNewPin("");setMessage("");}}>Salir</button></div>
       </>}
       <p>{message||(accepting?"● Solicitudes abiertas":"● Solicitudes cerradas")}</p>
     </motion.aside>}</AnimatePresence>
+    <AnimatePresence>{activity.showPublicStatus&&<motion.section className="publicActivityStatus" role="status" initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-10}}>
+      <div className="publicActivityHead"><span className={`activityPulse ${activityFinished?"finished":activityRunning?"running":"waiting"}`}/><div><small>{statusText.label}</small><strong>{activityFinished?statusText.finished:activityRunning?statusText.running:statusText.notStarted}</strong></div></div>
+      <div className="publicActivityMetrics"><div><Clock3 size={17}/><span><small>{statusText.elapsed}</small><strong>{activityDuration(elapsedSeconds)}</strong></span></div><div><Hourglass size={17}/><span><small>{statusText.remaining}</small><strong>{activityDuration(remainingSeconds)}</strong></span></div><div><UsersRound size={18}/><span><small>{statusText.queue}</small><strong>{queuePeopleCount}</strong></span></div></div>
+    </motion.section>}</AnimatePresence>
     <motion.div className="card" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
       {!done?<><header><div className="badge"><Mic2 size={31}/></div><p className="eyebrow"><Sparkles size={14}/> {text.live}</p><h1>{text.title}</h1><h2>{text.sub}</h2><p className="desc">{text.desc}</p></header>
       {accepting?<form onSubmit={submit}>{(["name","song","artist","comment"] as FieldKey[]).map(k=>{const Icon=icons[k],required=k!=="comment",bad=required&&touched[k]&&!values[k].trim();return <div className="field" key={k}><label htmlFor={k}>{text.fields[k][0]} {required&&<b>*</b>}</label><div className={`input ${bad?"bad":""}`}><Icon size={20}/>{k==="comment"?<textarea id={k} value={values[k]} placeholder={text.fields[k][1]} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>:<input id={k} required value={values[k]} placeholder={text.fields[k][1]} onBlur={()=>setTouched(t=>({...t,[k]:true}))} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>}</div>{bad&&<p>{text.error}</p>}</div>})}

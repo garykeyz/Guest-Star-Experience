@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 3.0.4 UNIVERSAL PARA MAC
+GUEST STAR BRIDGE 3.0.5 UNIVERSAL PARA MAC
 
 Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
 
@@ -22,6 +22,7 @@ La aplicación:
 - mide el tiempo transcurrido y recalcula las sumas cada segundo;
 - usa la duración exacta que VirtualDJ reporta para cada pista;
 - corrige la transición de 30 segundos y suma toda la cola real de VirtualDJ;
+- permite mostrar u ocultar al público el estado, los tiempos y personas en cola;
 - conserva la carpeta de karaoke y el PIN por separado si así lo eliges.
 
 VirtualDJ debe estar abierto y Network Control debe permanecer activado.
