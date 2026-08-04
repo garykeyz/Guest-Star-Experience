@@ -1,0 +1,128 @@
+GUEST STAR BRIDGE 3.0.7 — GUIA PARA LA MAC DEL DJ
+
+Este instructivo es para la persona que operará Guest Star Bridge y VirtualDJ
+en otra Mac. Esa persona no necesita entrar a la cuenta de Google del propietario,
+ni abrir Google Sheets ni modificar Apps Script.
+
+COMPATIBILIDAD
+
+- Mac Intel o Apple Silicon M1, M2, M3, M4 y M5.
+- macOS 11 Big Sur o posterior.
+- No necesitas instalar Node, npm ni usar Terminal.
+
+LO QUE EL PROPIETARIO DEBE ENTREGARTE
+
+1. El archivo Guest-Star-Bridge-Universal-v3.0.7-app.zip o el DMG oficial.
+2. El enlace de Google Apps Script que termina en /exec.
+3. El PIN privado del HOST.
+4. El puerto y la contrasena de Network Control, si usa una.
+5. El enlace publico para solicitar canciones, para realizar la prueba final.
+
+LO QUE DEBE TENER LA MAC DEL DJ
+
+1. Conexion estable a internet.
+2. VirtualDJ instalado y abierto.
+3. La extension Network Control instalada y activa en VirtualDJ.
+4. Los archivos de karaoke en la Mac o en un disco externo conectado.
+5. Guest Star Bridge instalado en Aplicaciones.
+
+PASO 1 — INSTALAR GUEST STAR BRIDGE
+
+1. Cierra cualquier version anterior del Bridge.
+2. Descomprime el APP ZIP. Si recibiste el DMG, abre el DMG.
+3. Mueve Guest Star Bridge.app a la carpeta Aplicaciones.
+4. En Aplicaciones, haz clic derecho sobre Guest Star Bridge y elige Abrir.
+5. Confirma Abrir. Este paso normalmente se hace una sola vez.
+6. Si macOS lo bloquea, abre Ajustes del Sistema → Privacidad y seguridad,
+   pulsa Abrir de todos modos y confirma.
+
+PASO 2 — PREPARAR VIRTUALDJ
+
+1. Abre VirtualDJ.
+2. Ve a Configuracion → Extensiones.
+3. Busca e instala Network Control si todavia no esta instalado.
+4. Activa Network Control.
+5. Anota el puerto configurado. El valor habitual del Bridge es 80.
+6. Si Network Control tiene contrasena, anotala exactamente.
+7. Deja VirtualDJ abierto durante toda la actividad.
+
+PASO 3 — CONECTAR LA BIBLIOTECA DE KARAOKE
+
+1. Conecta el disco externo antes de abrir el Bridge, si corresponde.
+2. Abre Guest Star Bridge.
+3. Entra en Configuracion.
+4. Pulsa Elegir carpeta en Mac.
+5. Selecciona la carpeta principal donde estan los videos de karaoke.
+6. Activa Recordar las carpetas elegidas si esa biblioteca se usara siempre.
+7. Espera a que termine el primer escaneo.
+
+No cambies el nombre del disco ni muevas la carpeta despues de configurarla.
+Si desconectas el disco, vuelve a conectarlo antes de sincronizar.
+
+PASO 4 — CONECTAR GOOGLE Y EL HOST
+
+1. Pega en Enlace de Google Apps Script el enlace /exec recibido.
+2. Escribe el PIN privado del HOST.
+3. Activa Recordar el PIN en este Mac solamente si es una computadora segura.
+4. En Puerto Network Control, escribe el mismo puerto de VirtualDJ.
+5. Escribe la misma contrasena de Network Control; dejala vacia si no usa una.
+6. Guarda la configuracion.
+
+No hace falta iniciar sesion en Google. El enlace /exec ya publicado conecta el
+Bridge con la hoja en la nube.
+
+PASO 5 — HACER LAS PRUEBAS
+
+1. Pulsa Probar hoja. Debe aparecer una confirmacion verde.
+2. Pulsa Probar VirtualDJ. Debe aparecer una confirmacion verde.
+3. Pulsa Escanear carpeta ahora y confirma que detecte los archivos locales.
+4. Pulsa Sincronizar.
+5. Desde otro celular, abre el enlace publico y envia una solicitud de prueba.
+6. Confirma que la solicitud aparezca en el Bridge.
+7. Agregala a VirtualDJ y confirma que aparezca en la cola Karaoke real.
+8. Retira o marca como Saltado el registro de prueba antes del evento.
+
+PASO 6 — INICIAR Y OPERAR LA ACTIVIDAD
+
+1. Abre primero VirtualDJ y conecta el disco de karaoke.
+2. Abre Guest Star Bridge.
+3. Confirma que HOJA, VIRTUALDJ y BIBLIOTECA indiquen que estan conectados.
+4. Pulsa Sincronizar.
+5. Pulsa Iniciar actividad solamente cuando el evento comience realmente.
+6. Respeta el numero de llegada, el tiempo acumulado y la hora final mostrada.
+7. Usa Ya canto o Saltado despues de confirmar la accion.
+8. Si te equivocas, usa Deshacer y elige restaurar en su turno anterior, colocar
+   al final o dejar pendiente.
+
+ANTES DE CADA EVENTO — LISTA RAPIDA
+
+[ ] Internet estable.
+[ ] Disco o carpeta de karaoke conectado.
+[ ] VirtualDJ abierto.
+[ ] Network Control activo.
+[ ] Probar hoja en verde.
+[ ] Probar VirtualDJ en verde.
+[ ] Biblioteca detectada.
+[ ] Solicitud de prueba recibida.
+[ ] Hora final del evento confirmada.
+
+SI ALGO NO FUNCIONA
+
+- No abre la app: clic derecho → Abrir; luego revisa Privacidad y seguridad.
+- Falla Probar hoja: revisa el enlace /exec, el PIN y la conexion a internet.
+- Falla Probar VirtualDJ: confirma que VirtualDJ y Network Control esten abiertos,
+  y que puerto y contrasena sean iguales en ambos.
+- No detecta canciones: conecta el disco, verifica la carpeta y pulsa Escanear
+  carpeta ahora.
+- No llegan solicitudes: pulsa Sincronizar y prueba el enlace publico desde otro
+  dispositivo.
+- Una pista no aparece en la cola: verifica que estas usando la lista Karaoke de
+  VirtualDJ y vuelve a pulsar Probar VirtualDJ.
+
+IMPORTANTE
+
+- Bridge, VirtualDJ y la biblioteca de karaoke deben estar en la misma Mac.
+- Google Sheets y Apps Script trabajan en la nube y no deben quedar abiertos.
+- Usa un solo Bridge activo para la misma actividad.
+- No compartas publicamente el PIN ni el enlace /exec.
+- No desconectes el disco de karaoke mientras el evento esta funcionando.
