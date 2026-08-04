@@ -93,7 +93,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     if (body.action === "bridgeQueue") {
       payload = {
         ok: true,
-        codeVersion: "3.0.5",
+        codeVersion: "3.0.6",
         state: { ...activity },
         requests
       };
@@ -110,7 +110,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       }
       payload = {
         ok: true,
-        codeVersion: "3.0.5",
+        codeVersion: "3.0.6",
         control: body.control,
         state: { ...activity },
         requests
