@@ -111,6 +111,7 @@ h1 span { background: linear-gradient(90deg, var(--pink), #db75ff); -webkit-back
 .singer { margin-bottom: 3px; color: #ff90c4; font-size: .68rem; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
 .song { margin-bottom: 2px; font-size: .98rem; }
 .artist { color: var(--muted); margin-bottom: 0; font-size: .78rem; }
+.request-comment { display: -webkit-box; max-width: 660px; margin: 7px 0 0; overflow: hidden; border-left: 3px solid rgba(255,45,149,.7); border-radius: 7px; padding: 6px 9px; color: #ffe0ef; background: rgba(255,45,149,.075); font-size: .72rem; line-height: 1.38; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .request-meta { margin: 5px 0 0; color: #c9bbcc; font-size: .68rem; }
 .request-language { display: inline-flex; margin: 8px 0 0; border: 1px solid rgba(246,200,102,.2); border-radius: 99px; padding: 4px 8px; color: var(--gold); background: rgba(246,200,102,.07); font-size: .68rem; font-weight: 800; }
 .state-badge { align-self: start; border-radius: 99px; padding: 7px 10px; font-size: .7rem; font-weight: 850; white-space: nowrap; }
