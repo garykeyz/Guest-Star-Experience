@@ -58,9 +58,9 @@ type ActivityCopy = {
 };
 
 const ENDPOINT = "/api/karaoke";
-const languages: [Lang, string, string][] = [
-  ["es","🇪🇸","Español"],["en","🇺🇸","English"],["fr","🇫🇷","Français"],
-  ["it","🇮🇹","Italiano"],["de","🇩🇪","Deutsch"],["ru","🇷🇺","Русский"],["pt","🇵🇹","Português"]
+const languages: [Lang, string, string, string][] = [
+  ["es","🇪🇸","Spanish","Español"],["en","🇺🇸","English","English"],["fr","🇫🇷","French","Français"],
+  ["it","🇮🇹","Italian","Italiano"],["de","🇩🇪","German","Deutsch"],["ru","🇷🇺","Russian","Русский"],["pt","🇵🇹","Portuguese","Português"]
 ];
 const duplicateCopy: Record<Lang, DuplicateCopy> = {
   en: {title:"Please confirm",singer:"You already have another request in this activity.",active:"This song has already been requested and is still active.",completed:"This song has already been sung during this activity.",question:"Do you still want to submit it?",continue:"Yes, continue",cancel:"Go back"},
@@ -247,7 +247,7 @@ export default function KaraokeExperience() {
     if(!complete||!accepting)return;
     setLoading(true);setSubmitError("");
     try{
-      const data=await post({...values,language:active[2],confirmDuplicate});
+      const data=await post({...values,language:active[3],confirmDuplicate});
       setAccepting(acceptingFrom(data));
       setActivity(stateFrom(data));
       setDuplicateWarning(null);
@@ -320,7 +320,7 @@ export default function KaraokeExperience() {
       setMessage("No se pudo actualizar el PIN.");
     }finally{setHostBusy(false);}
   };
-  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setDone(false);};
+  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setMenu(false);setLang(null);setDone(false);};
 
   return <main className="page">
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
@@ -336,9 +336,9 @@ export default function KaraokeExperience() {
     </motion.div>}</AnimatePresence>
     {!lang?<motion.section className="card languageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
       <div className="badge"><Mic2 size={31}/></div>
-      <p className="eyebrow"><Sparkles size={14}/> IDIOMA DE LA CANCIÓN</p>
-      <h1>¿En qué idioma vas a cantar?</h1>
-      <p>Debes elegir un idioma antes de llenar la solicitud. Así buscaremos la mejor versión de karaoke y el anfitrión sabrá cuál elegiste.</p>
+      <p className="eyebrow"><Sparkles size={14}/> SONG LANGUAGE</p>
+      <h1>What language will you sing in?</h1>
+      <p>Choose a language before completing your request. This helps us find the best karaoke version and lets the host know your selection.</p>
       <div className="languageGrid">{languages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[2]}</strong><Check size={18}/></button>)}</div>
     </motion.section>:<>
     <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[2]}</span><ChevronDown size={16}/></button>
