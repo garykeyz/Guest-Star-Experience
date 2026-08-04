@@ -225,12 +225,12 @@ def compile_universal_launcher(source: Path, destination: Path) -> None:
         ]
     )
     destination.chmod(0o755)
-    run(["lipo", "-verify_arch", "arm64", "x86_64", str(destination)])
+    run(["lipo", str(destination), "-verify_arch", "arm64", "x86_64"])
 
 
 def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> None:
-    run(["lipo", "-verify_arch", "arm64", str(node_arm64)])
-    run(["lipo", "-verify_arch", "x86_64", str(node_x64)])
+    run(["lipo", str(node_arm64), "-verify_arch", "arm64"])
+    run(["lipo", str(node_x64), "-verify_arch", "x86_64"])
     for executable in (node_arm64, node_x64):
         run(
             [
@@ -336,10 +336,10 @@ def create_zip(distribution: Path, output_path: Path) -> None:
         run(
             [
                 "lipo",
+                str(extracted_app / "Contents" / "MacOS" / "GuestStarBridge"),
                 "-verify_arch",
                 "arm64",
                 "x86_64",
-                str(extracted_app / "Contents" / "MacOS" / "GuestStarBridge"),
             ]
         )
         for relative in (

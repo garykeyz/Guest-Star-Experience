@@ -31,6 +31,19 @@ test("construye una app Universal con iniciador Mach-O y dos motores nativos", (
 test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
   assert.match(buildSource, /codesign/);
   assert.match(buildSource, /--verify/);
+  assert.match(
+    buildSource,
+    /\["lipo", str\(destination\), "-verify_arch", "arm64", "x86_64"\]/
+  );
+  assert.match(
+    buildSource,
+    /\["lipo", str\(node_arm64\), "-verify_arch", "arm64"\]/
+  );
+  assert.match(
+    buildSource,
+    /\["lipo", str\(node_x64\), "-verify_arch", "x86_64"\]/
+  );
+  assert.doesNotMatch(buildSource, /\["lipo", "-verify_arch"/);
   assert.match(buildSource, /hdiutil/);
   assert.match(buildSource, /hdiutil",\s*"verify/);
   assert.match(buildSource, /unzip",\s*"-tq/);
