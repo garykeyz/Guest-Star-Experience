@@ -70,6 +70,8 @@ jobs:
             "$GITHUB_WORKSPACE/release-output/Code.gs"
           cp karaoke-github-package/guest-star-bridge/macos/INSTALACION-OTRA-MAC.txt \
             "$GITHUB_WORKSPACE/release-output/INSTALACION-OTRA-MAC.txt"
+          cp karaoke-github-package/guest-star-bridge/macos/GUIA-MAC-SOLO-BRIDGE.txt \
+            "$GITHUB_WORKSPACE/release-output/GUIA-MAC-SOLO-BRIDGE.txt"
 
           (
             cd "$GITHUB_WORKSPACE/release-output"
@@ -80,6 +82,7 @@ jobs:
               guest-star-bridge-v3.0.7-source.zip \
               Code.gs \
               INSTALACION-OTRA-MAC.txt \
+              GUIA-MAC-SOLO-BRIDGE.txt \
               > SHA256SUMS.txt
           )
 
@@ -95,6 +98,7 @@ jobs:
             "release-output/guest-star-bridge-v3.0.7-source.zip"
             "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
+            "release-output/GUIA-MAC-SOLO-BRIDGE.txt"
             "release-output/SHA256SUMS.txt"
           )
 
