@@ -801,6 +801,13 @@ function renderRequests() {
     $(".singer", card).textContent = item.singer;
     $(".song", card).textContent = item.song;
     $(".artist", card).textContent = item.artist || "Artista no indicado";
+    const requestComment = String(item.comment || "").trim();
+    const requestCommentEl = $(".request-comment", card);
+    if (requestComment) {
+      requestCommentEl.textContent = `💬 ${requestComment}`;
+      requestCommentEl.title = requestComment;
+      requestCommentEl.classList.remove("hidden");
+    }
     const songSeconds = Number(item.durationSeconds) || 240;
     const transitionSeconds = Math.max(
       0,
