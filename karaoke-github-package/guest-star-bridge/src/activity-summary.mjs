@@ -1,5 +1,22 @@
 import { normalizeText } from "./matcher.mjs";
 
+export const MAX_TRANSITION_SECONDS = 900;
+
+export function safeTransitionSeconds(value, fallback = 30) {
+  const transition = Number(value);
+  if (
+    Number.isFinite(transition) &&
+    transition >= 0 &&
+    transition <= MAX_TRANSITION_SECONDS
+  ) {
+    return transition;
+  }
+  const safeFallback = Number(fallback);
+  return Number.isFinite(safeFallback) && safeFallback >= 0
+    ? Math.min(MAX_TRANSITION_SECONDS, safeFallback)
+    : 0;
+}
+
 export function requestOutcome(status) {
   const normalized = normalizeText(status);
   if (normalized === "ya canto" || normalized === "completada") return "completed";
@@ -9,29 +26,35 @@ export function requestOutcome(status) {
 
 export function requestPlannedSeconds(item, fallbackTransition = 30) {
   const duration = Number(item?.durationSeconds);
-  const transition = Number(item?.transitionSeconds);
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 240;
-  const safeTransition =
-    Number.isFinite(transition) && transition >= 0
-      ? transition
-      : Math.max(0, Number(fallbackTransition) || 0);
+  const safeTransition = safeTransitionSeconds(
+    item?.transitionSeconds,
+    fallbackTransition
+  );
   return Math.round(safeDuration + safeTransition);
 }
 
-export function buildActivitySummary(activity = {}, requests = [], now = Date.now()) {
+export function buildActivitySummary(
+  activity = {},
+  requests = [],
+  now = Date.now(),
+  verifiedQueue = null
+) {
   const targetSeconds = Math.max(
     0,
     Math.round((Number(activity.activityHours) || 0) * 3600)
   );
-  const fallbackTransition = Math.max(
-    0,
-    Number(activity.transitionSeconds) || 0
+  const fallbackTransition = safeTransitionSeconds(
+    activity.transitionSeconds,
+    30
   );
   let plannedSeconds = 0;
   let completedSeconds = 0;
   let skippedSeconds = 0;
   let queuedSeconds = 0;
   let queueSongCount = 0;
+  let requestQueuedSeconds = 0;
+  let requestQueueSongCount = 0;
 
   for (const item of requests) {
     const seconds = requestPlannedSeconds(item, fallbackTransition);
@@ -46,15 +69,25 @@ export function buildActivitySummary(activity = {}, requests = [], now = Date.no
       continue;
     }
     if (item?.queued === true) {
-      queuedSeconds += seconds;
+      requestQueuedSeconds += seconds;
+      requestQueueSongCount += 1;
+    }
+  }
+
+  if (Array.isArray(verifiedQueue)) {
+    for (const entry of verifiedQueue) {
+      queuedSeconds += requestPlannedSeconds(entry, fallbackTransition);
       queueSongCount += 1;
     }
+  } else {
+    queuedSeconds = requestQueuedSeconds;
+    queueSongCount = requestQueueSongCount;
   }
 
   const confirmedSeconds = completedSeconds + queuedSeconds;
   const pendingSeconds = Math.max(
     0,
-    plannedSeconds - completedSeconds - queuedSeconds
+    plannedSeconds - completedSeconds - requestQueuedSeconds
   );
   const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
   const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);

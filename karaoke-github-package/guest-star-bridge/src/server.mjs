@@ -15,7 +15,8 @@ import {
 } from "./apps-script.mjs";
 import {
   buildActivitySummary,
-  requestOutcome
+  requestOutcome,
+  safeTransitionSeconds
 } from "./activity-summary.mjs";
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
@@ -45,7 +46,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "3.0.3";
+const BRIDGE_VERSION = "3.0.4";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -269,9 +270,9 @@ function normalizedActivity(data = {}) {
         ? activityState.accepting
         : source.accepting !== false,
     activityHours: numberOr(source.activityHours, activityState.activityHours),
-    transitionSeconds: Math.max(
-      0,
-      numberOr(source.transitionSeconds, activityState.transitionSeconds)
+    transitionSeconds: safeTransitionSeconds(
+      source.transitionSeconds,
+      activityState.transitionSeconds
     ),
     accumulatedSeconds: Math.max(
       0,
@@ -343,9 +344,9 @@ function bridgeRequests(data = {}) {
       status: String(item.status || "Pendiente"),
       fileName: String(item.fileName || "").trim(),
       durationSeconds: Math.max(0, numberOr(item.durationSeconds, 240)),
-      transitionSeconds: Math.max(
-        0,
-        numberOr(item.transitionSeconds, activityState.transitionSeconds)
+      transitionSeconds: safeTransitionSeconds(
+        item.transitionSeconds,
+        activityState.transitionSeconds
       ),
       updatedAt: String(item.updatedAt || "")
     }))
@@ -775,9 +776,31 @@ async function reconcileVirtualDjQueue(force = false) {
 
 function stateView() {
   const requestViews = orderRequestViews(requests.map(requestView));
+  const requestsByQueuePosition = new Map(
+    requestViews
+      .filter((item) => Number.isInteger(item.queuePosition))
+      .map((item) => [item.queuePosition, item])
+  );
+  const verifiedQueue = vdjQueueHasSnapshot
+    ? vdjQueueEntries.map((entry) => {
+        const request = requestsByQueuePosition.get(entry.index + 1);
+        return {
+          durationSeconds:
+            Number(entry.durationSeconds) > 0
+              ? Number(entry.durationSeconds)
+              : Number(request?.durationSeconds) || 240,
+          transitionSeconds: safeTransitionSeconds(
+            request?.transitionSeconds,
+            activityState.transitionSeconds
+          )
+        };
+      })
+    : null;
   const activitySummary = buildActivitySummary(
     activityState,
-    requestViews
+    requestViews,
+    Date.now(),
+    verifiedQueue
   );
   if (vdjQueueCount > 0) activitySummary.suggestHits = false;
   const hitSuggestions = activitySummary.suggestHits

@@ -35,6 +35,21 @@ test("acepta el valor numérico de Sheets cuando todavía no tiene formato", () 
   assert.equal(context.readDurationSeconds_(range("", 0.5)), 43200);
 });
 
+test("lee 30 segundos sin sumar el desfase histórico de Santo Domingo", () => {
+  const historicalDate = vm.runInContext(
+    'new Date("1899-12-30T04:40:30.000Z")',
+    context
+  );
+  assert.equal(
+    context.durationCellSeconds_(historicalDate, "0:00:30"),
+    30
+  );
+  assert.notEqual(
+    context.durationCellSeconds_(historicalDate, "0:00:30"),
+    4 * 3600 + 40 * 60 + 30
+  );
+});
+
 test("solo el estado Saltado se resta del cálculo de la actividad", () => {
   assert.equal(context.skippedStatus_("Saltado"), true);
   assert.equal(context.skippedStatus_("Ya cantó"), false);
@@ -43,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.3"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.4"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -52,8 +67,9 @@ test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /\["start", "open", "close", "reset"\]/);
   assert.match(source, /sourceUrl:\s*String\(row\[10\]/);
   assert.match(source, /fileName:\s*String\(row\[13\]/);
-  assert.match(source, /durationSeconds:\s*durationCellSeconds_\(row\[6\]\)/);
-  assert.match(source, /transitionSeconds:\s*durationCellSeconds_\(row\[7\]\)/);
+  assert.match(source, /durationSeconds:\s*durationCellSeconds_\(row\[6\],\s*displayRow\[6\]\)/);
+  assert.match(source, /transitionSeconds:\s*durationCellSeconds_\(row\[7\],\s*displayRow\[7\]\)/);
+  assert.match(source, /const displayRows = range\.getDisplayValues\(\)/);
   assert.match(source, /body\.action === "bridgeConfigUpdate"/);
   assert.match(source, /activityStartedAt:\s*cfg\.activityStartedAt/);
   assert.match(source, /sheetRow:\s*index \+ 2/);

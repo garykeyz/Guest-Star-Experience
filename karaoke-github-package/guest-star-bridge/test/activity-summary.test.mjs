@@ -88,3 +88,48 @@ test("mantiene el reloj en cero hasta iniciar y calcula la hora final exacta", (
   assert.equal(running.elapsedSeconds, 2707);
   assert.equal(running.eventEndsAt, "2026-08-04T12:30:00.000Z");
 });
+
+test("corrige la transición corrupta de 4:40:30 usando los 30 segundos configurados", () => {
+  const summary = buildActivitySummary(
+    { activityHours: 2, transitionSeconds: 30, accepting: true },
+    [
+      {
+        status: "Agregada a VirtualDJ",
+        durationSeconds: 300,
+        transitionSeconds: 16830,
+        queued: true
+      }
+    ]
+  );
+
+  assert.equal(summary.queuedSeconds, 330);
+  assert.equal(summary.confirmedSeconds, 330);
+  assert.equal(summary.coveragePercent, 5);
+  assert.equal(summary.gapSeconds, 6870);
+});
+
+test("el tiempo confirmado suma toda la cola real de VirtualDJ", () => {
+  const summary = buildActivitySummary(
+    { activityHours: 2, transitionSeconds: 30, accepting: true },
+    [
+      {
+        status: "Agregada a VirtualDJ",
+        durationSeconds: 300,
+        transitionSeconds: 30,
+        queued: true
+      }
+    ],
+    Date.now(),
+    [
+      { durationSeconds: 300, transitionSeconds: 30 },
+      { durationSeconds: 210, transitionSeconds: 30 }
+    ]
+  );
+
+  assert.equal(summary.queueSongCount, 2);
+  assert.equal(summary.queuedSeconds, 570);
+  assert.equal(summary.confirmedSeconds, 570);
+  assert.equal(summary.pendingSeconds, 0);
+  assert.equal(summary.gapSeconds, 6630);
+  assert.equal(summary.coveragePercent, 8);
+});

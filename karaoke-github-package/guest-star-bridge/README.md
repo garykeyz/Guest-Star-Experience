@@ -1,4 +1,4 @@
-# Guest Star Bridge 3.0.3
+# Guest Star Bridge 3.0.4
 
 Puente local para Mac entre:
 
@@ -13,13 +13,15 @@ Google Sheets. Un cambio hecho en cualquiera de los tres lugares aparece en el
 Bridge normalmente en unos dos segundos. Al volver a enfocar la aplicación,
 también se solicita una sincronización inmediata.
 
-La versión 3.0.3 también:
+La versión 3.0.4 también:
 
 - tolera pequeñas diferencias de artista entre la biblioteca y VirtualDJ;
 - mantiene el reloj en cero hasta pulsar **Iniciar actividad** y no confunde
   **Reiniciar actividad** con el comienzo del evento;
 - actualiza cada segundo el tiempo transcurrido y todas las sumas;
 - usa la duración exacta reportada por VirtualDJ más la transición configurada;
+- evita que una transición de 30 segundos se convierta en 4:40:30 por la zona
+  horaria histórica de Google Sheets y suma toda la cola real de VirtualDJ;
 - permite marcar cada canción como **Ya cantó** o **Saltado**, deshacer la
   acción y restaurar la pista en su turno anterior, al final o fuera de la cola;
 - guarda en Sheets un solo enlace Karaoke/Lyrics, usando el idioma y la misma
@@ -40,7 +42,7 @@ La versión 3.0.3 también:
 ### Instalador universal
 
 En un Mac Intel o Apple Silicon M1, M2, M3, M4 o M5, descomprime
-`Guest-Star-Bridge-Universal-v3.0.3-app.zip`, mueve **Guest Star Bridge.app** a
+`Guest-Star-Bridge-Universal-v3.0.4-app.zip`, mueve **Guest Star Bridge.app** a
 **Aplicaciones** y ábrela. El Bridge incluye sus motores nativos, se ejecuta en
 segundo plano y muestra el panel dentro de una ventana propia de macOS, sin abrir
 Safari, Chrome, pestañas del navegador ni Terminal.
@@ -76,10 +78,10 @@ Documents.
 1. Cierra la ventana anterior del Bridge.
 2. Conserva tu archivo `data/config.json` si quieres mantener las carpetas, el
    PIN y el puerto ya configurados.
-3. Sustituye los archivos por los de Bridge 3.0.3 y vuelve a abrir
+3. Sustituye los archivos por los de Bridge 3.0.4 y vuelve a abrir
    `INICIAR-GUEST-STAR.command`.
 
-Al abrir la versión 3.0.3, la configuración anterior se conserva. Las carpetas y
+Al abrir la versión 3.0.4, la configuración anterior se conserva. Las carpetas y
 el PIN se recuerdan por defecto, pero cada opción puede desactivarse por separado
 desde **Configuración**.
 
