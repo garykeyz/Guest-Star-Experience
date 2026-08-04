@@ -112,6 +112,8 @@ test("muestra la cola real de VirtualDJ y la hora final sin saturar la lista", (
   assert.match(appSource, /function renderVdjQueue/);
   assert.match(appSource, /EMCEE: organiza los turnos/);
   assert.match(serverSource, /entries: vdjQueueEntries\.map/);
+  assert.match(serverSource, /verifiedQueue = vdjQueueHasSnapshot/);
+  assert.match(appSource, /pistas reales/);
 });
 
 test("el formulario confirma repeticiones en el idioma elegido", () => {

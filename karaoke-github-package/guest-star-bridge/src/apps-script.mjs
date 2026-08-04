@@ -8,7 +8,7 @@ async function parseResponse(response) {
   }
 }
 
-const REQUIRED_CODE_VERSION = "3.0.3";
+const REQUIRED_CODE_VERSION = "3.0.4";
 
 export async function appsScriptAction(config, action, extra = {}) {
   if (!config.appsScriptUrl) throw new Error("Configura el enlace de Google Apps Script.");

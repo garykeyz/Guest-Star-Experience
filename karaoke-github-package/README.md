@@ -26,7 +26,7 @@ los contadores que Google haya convertido en fechas de 1899 y mantiene un estado
 compartido para **iniciar, abrir, cerrar y reiniciar** desde la web, Google Sheets o el
 Bridge local.
 
-## Guest Star Bridge 3.0.3 Universal para Mac
+## Guest Star Bridge 3.0.4 Universal para Mac
 
 La carpeta `guest-star-bridge` conecta las solicitudes de esta misma hoja con:
 
@@ -45,12 +45,12 @@ actualiza al momento. Si una pista desaparece, el Bridge vuelve a buscar hasta
 seis opciones de YouTube para que el host elija cuál copiar. El escaneo cada
 10 segundos permanece como respaldo.
 
-La versión 3.0.3 exige que el huésped elija el idioma de la canción antes de
+La versión 3.0.4 exige que el huésped elija el idioma de la canción antes de
 mostrar el formulario. El idioma se guarda en Sheets, aparece en la tarjeta del
 Bridge y determina el orden de canales usado para las seis opciones de YouTube.
 **Español** usa la lista ampliada de Latinoamérica.
 
-La versión 3.0.3 verifica la cola Karaoke real de VirtualDJ en cada
+La versión 3.0.4 verifica la cola Karaoke real de VirtualDJ en cada
 sincronización. Si una canción enviada ya no está en la cola, pregunta si debe
 volver a colocarla al final o dejarla fuera. La interfaz conserva el número por
 orden de llegada y separa pendientes, en cola y finalizadas; un panel desplegable
@@ -63,6 +63,9 @@ exacta de VirtualDJ y permite deshacer **Ya cantó** o **Saltado**, restaurando 
 pista en su turno anterior, al final o fuera de la cola. La duración, transición
 y apertura de solicitudes se pueden editar desde el Bridge. Si la cola queda
 vacía, muestra temas hit para el EMCEE o para elegir un cantante al azar.
+También evita que Sheets convierta una transición de 30 segundos en 4:40:30 por
+la zona horaria histórica de Santo Domingo y calcula el tiempo confirmado con
+todas las pistas verificadas en la cola real de VirtualDJ.
 Esas sugerencias alternan español e inglés; si falta una pista, permiten buscar
 y copiar su mejor enlace Karaoke. El formulario advierte en el idioma elegido
 cuando el cantante repite o cuando la canción ya fue pedida o cantada.

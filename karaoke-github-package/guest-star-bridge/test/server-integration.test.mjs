@@ -93,7 +93,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     if (body.action === "bridgeQueue") {
       payload = {
         ok: true,
-        codeVersion: "3.0.3",
+        codeVersion: "3.0.4",
         state: { ...activity },
         requests
       };
@@ -110,7 +110,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       }
       payload = {
         ok: true,
-        codeVersion: "3.0.3",
+        codeVersion: "3.0.4",
         control: body.control,
         state: { ...activity },
         requests
@@ -261,6 +261,9 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     state.requests.find((item) => item.id === "request-1").durationSeconds,
     243
   );
+  assert.equal(state.virtualDJ.queueCount, 2);
+  assert.equal(state.activitySummary.queueSongCount, 2);
+  assert.equal(state.activitySummary.queuedSeconds, 483);
 
   vdjQueue.splice(0, 1);
   state = await waitForState(

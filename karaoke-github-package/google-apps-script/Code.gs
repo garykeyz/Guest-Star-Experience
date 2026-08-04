@@ -8,7 +8,7 @@ const HEADERS = [
   "Fuente", "Estado", "ID", "Archivo local", "Actualizado"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "3.0.3";
+const BRIDGE_API_VERSION = "3.0.4";
 const YOUTUBE_CHANNEL_PRIORITIES = {
   english: [
     "Sing King",
@@ -310,8 +310,11 @@ function bridgeQueue_() {
   const sheet = spreadsheet_().getSheetByName(REQUESTS);
   const last = sheet.getLastRow();
   if (last < 2) return [];
-  return sheet.getRange(2, 1, last - 1, HEADERS.length).getValues()
+  const range = sheet.getRange(2, 1, last - 1, HEADERS.length);
+  const displayRows = range.getDisplayValues();
+  return range.getValues()
     .map(function(row, index) {
+      const displayRow = displayRows[index] || [];
       const stamp = row[0] instanceof Date ? row[0].toISOString() : String(row[0] || "");
       return {
         sheetRow: index + 2,
@@ -325,8 +328,8 @@ function bridgeQueue_() {
         status: String(row[11] || "Pendiente"),
         id: String(row[12] || ""),
         fileName: String(row[13] || ""),
-        durationSeconds: durationCellSeconds_(row[6]),
-        transitionSeconds: durationCellSeconds_(row[7]),
+        durationSeconds: durationCellSeconds_(row[6], displayRow[6]),
+        transitionSeconds: durationCellSeconds_(row[7], displayRow[7]),
         updatedAt:
           row[14] instanceof Date ? row[14].toISOString() : String(row[14] || "")
       };
@@ -367,7 +370,10 @@ function bridgeUpdate_(body) {
       durationSeconds <= 12 * 60 * 60
     ) {
       const durationRange = sheet.getRange(row, 7);
-      const previousDuration = durationCellSeconds_(durationRange.getValue());
+      const previousDuration = durationCellSeconds_(
+        durationRange.getValue(),
+        durationRange.getDisplayValue()
+      );
       if (Math.abs(previousDuration - durationSeconds) >= 1) {
         durationRange
           .setValue(durationSeconds / 86400)
@@ -592,7 +598,9 @@ function parseDurationText_(value) {
   return null;
 }
 
-function durationCellSeconds_(value) {
+function durationCellSeconds_(value, displayValue) {
+  const displayed = parseDurationText_(displayValue);
+  if (displayed !== null) return displayed;
   if (
     typeof value === "number" &&
     isFinite(value) &&
@@ -602,11 +610,16 @@ function durationCellSeconds_(value) {
     return Math.round(value * 86400);
   }
   if (value instanceof Date) {
-    return (
-      value.getUTCHours() * 3600 +
-      value.getUTCMinutes() * 60 +
-      value.getUTCSeconds()
-    );
+    try {
+      const timeZone = spreadsheet_().getSpreadsheetTimeZone();
+      const formatted = Utilities.formatDate(value, timeZone, "HH:mm:ss");
+      const parsed = parseDurationText_(formatted);
+      if (parsed !== null) return parsed;
+    } catch (error) {
+      // Las llamadas principales entregan displayValue; este respaldo evita
+      // convertir una fecha de 1899 usando el desfase histórico de la zona.
+    }
+    return 0;
   }
   return parseDurationText_(value) || 0;
 }
@@ -623,15 +636,18 @@ function recalculateActivity_() {
   let accumulatedSeconds = 0;
   if (last > 1) {
     const rowCount = last - 1;
-    const rows = requests.getRange(2, 7, rowCount, 6).getValues();
+    const requestRange = requests.getRange(2, 7, rowCount, 6);
+    const rows = requestRange.getValues();
+    const displayRows = requestRange.getDisplayValues();
     const totals = [];
     const totalSeconds = Math.round(
       boundedNumber_(cfg.getRange("B2").getValue(), 2, 0.25, 168) * 3600
     );
-    rows.forEach(function(row) {
+    rows.forEach(function(row, index) {
+      const displayRow = displayRows[index] || [];
       if (!skippedStatus_(row[5])) {
-        accumulatedSeconds += durationCellSeconds_(row[0]);
-        accumulatedSeconds += durationCellSeconds_(row[1]);
+        accumulatedSeconds += durationCellSeconds_(row[0], displayRow[0]);
+        accumulatedSeconds += durationCellSeconds_(row[1], displayRow[1]);
       }
       totals.push([
         accumulatedSeconds / 86400,

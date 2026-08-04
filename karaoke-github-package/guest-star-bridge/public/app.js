@@ -190,8 +190,9 @@ function updateTimeDashboard() {
       ? `La actividad superó su duración por ${activityDuration(summary.clockOverrunSeconds)}`
       : `Quedan ${activityDuration(summary.clockRemainingSeconds)} de reloj`;
   $("#confirmedTime").textContent = activityDuration(summary.confirmedSeconds);
+  const queueCount = Number(summary.queueSongCount) || 0;
   $("#confirmedDetail").textContent =
-    `${summary.queueSongCount || 0} en cola · ` +
+    `${queueCount} ${queueCount === 1 ? "pista real" : "pistas reales"} de VDJ · ` +
     `${activityDuration(summary.completedSeconds)} ya cantado`;
   $("#plannedTime").textContent = activityDuration(summary.plannedSeconds);
   $("#plannedDetail").textContent = summary.skippedSeconds
