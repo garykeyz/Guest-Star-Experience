@@ -607,15 +607,33 @@ test("la instalación exige todos los permisos de Google y ofrece una autorizaci
   assert.match(setupBody, /requireGuestStarScopesV4_\(\)/);
 });
 
+test("la autorización termina sin esperar una ventana bloqueante", () => {
+  const body = source.slice(
+    source.indexOf("function authorizeGuestStarV4()"),
+    source.indexOf("function setupMultiUserV4()")
+  );
+  assert.match(body, /master\.toast\(/);
+  assert.doesNotMatch(body, /getUi\(\)\.alert\(/);
+});
+
+test("el web app comprueba Drive con acceso real y no con un estado ambiguo", () => {
+  const body = source.slice(
+    source.indexOf("function guestStarScopesAuthorizedV4_"),
+    source.indexOf("function authorizeGuestStarV4()")
+  );
+  assert.match(body, /DriveApp\.getFileById\(spreadsheet\.getId\(\)\)\.getName\(\)/);
+  assert.doesNotMatch(body, /getAuthorizationInfo/);
+});
+
 test("crear un hotel se detiene antes de crear archivos si falta permiso de Drive", () => {
   const body = source.slice(
     source.indexOf("function createHotelForSuperhostV4_"),
     source.indexOf("function updateHotelForSuperhostV4_")
   );
-  assert.match(body, /if \(!guestStarScopesAuthorizedV4_\(\)\)/);
+  assert.match(body, /if \(!guestStarScopesAuthorizedV4_\(auth\.master\)\)/);
   assert.match(body, /code: "GOOGLE_AUTHORIZATION_REQUIRED"/);
   assert.ok(
-    body.indexOf("guestStarScopesAuthorizedV4_()") < body.indexOf("createHotelSpreadsheetV4_(hotel, null)"),
+    body.indexOf("guestStarScopesAuthorizedV4_(auth.master)") < body.indexOf("createHotelSpreadsheetV4_(hotel, null)"),
     "authorization must be checked before creating the independent spreadsheet"
   );
 });

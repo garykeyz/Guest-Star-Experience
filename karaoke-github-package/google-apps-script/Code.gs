@@ -2035,13 +2035,11 @@ function requireGuestStarScopesV4_() {
   ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, V4_REQUIRED_OAUTH_SCOPES);
 }
 
-function guestStarScopesAuthorizedV4_() {
+function guestStarScopesAuthorizedV4_(master) {
   try {
-    const authorization = ScriptApp.getAuthorizationInfo(
-      ScriptApp.AuthMode.FULL,
-      V4_REQUIRED_OAUTH_SCOPES
-    );
-    return authorization.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.NOT_REQUIRED;
+    const spreadsheet = master || masterSpreadsheetV4_();
+    DriveApp.getFileById(spreadsheet.getId()).getName();
+    return true;
   } catch (error) {
     return false;
   }
@@ -2059,13 +2057,13 @@ function authorizeGuestStarV4() {
   };
   console.log(JSON.stringify(result));
   try {
-    SpreadsheetApp.getUi().alert(
-      "Guest Star 4.0",
+    master.toast(
       "Google Sheets and Drive access are authorized. Update the existing web app deployment, then return to the Host Panel.",
-      SpreadsheetApp.getUi().ButtonSet.OK
+      "Guest Star 4.0",
+      10
     );
   } catch (error) {
-    // Standalone Apps Script projects cannot show a Sheets dialog; the run log still confirms success.
+    // A toast is optional; the returned result and run log still confirm success.
   }
   return result;
 }
@@ -2673,7 +2671,7 @@ function createHotelForSuperhostV4_(auth, body) {
   if (!name) return { ok: false, code: "HOTEL_NAME_REQUIRED" };
   const timezone = clean_(body.timezone || "America/Santo_Domingo");
   if (!validTimezoneV4_(timezone)) return { ok: false, code: "INVALID_TIMEZONE" };
-  if (!guestStarScopesAuthorizedV4_()) {
+  if (!guestStarScopesAuthorizedV4_(auth.master)) {
     return {
       ok: false,
       code: "GOOGLE_AUTHORIZATION_REQUIRED",
