@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -206,6 +207,20 @@ def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
         shutil.copy2(bridge_root / filename, destination / filename)
 
 
+def write_bundle_build_id(bridge_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(bridge_dir.rglob("*")):
+        if not path.is_file() or path.name == ".bundle-build":
+            continue
+        digest.update(path.relative_to(bridge_dir).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    build_id = digest.hexdigest()
+    (bridge_dir / ".bundle-build").write_text(f"{build_id}\n", encoding="utf-8")
+    return build_id
+
+
 def compile_universal_launcher(source: Path, destination: Path) -> None:
     run(
         [
@@ -371,6 +386,9 @@ def main() -> None:
     args = arguments()
     bridge_root = Path(__file__).resolve().parent.parent
     version = json.loads((bridge_root / "package.json").read_text())["version"]
+    launcher_source = bridge_root / "macos" / "GuestStarBridge"
+    if f'APP_VERSION="{version}"' not in launcher_source.read_text():
+        raise RuntimeError("La versión del iniciador no coincide con package.json.")
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     staging = output_dir / "macos-installer-staging"
@@ -388,10 +406,7 @@ def main() -> None:
         bridge_root / "macos" / "GuestStarLauncher.c",
         macos_dir / "GuestStarBridge",
     )
-    shutil.copy2(
-        bridge_root / "macos" / "GuestStarBridge",
-        macos_dir / "GuestStarBridge.sh",
-    )
+    shutil.copy2(launcher_source, macos_dir / "GuestStarBridge.sh")
     (macos_dir / "GuestStarBridge.sh").chmod(0o755)
     shutil.copy2(
         bridge_root / "macos" / "GuestStarWindow.js",
@@ -408,6 +423,7 @@ def main() -> None:
         resources / "runtime" / "node-x64",
     )
     copy_bridge_source(bridge_root, resources / "bridge")
+    bundle_build_id = write_bundle_build_id(resources / "bridge")
     sign_and_verify_app(app_bundle, node_arm64, node_x64)
 
     distribution = staging / "distribution"
@@ -429,6 +445,7 @@ def main() -> None:
                 "dmg": str(dmg_path),
                 "zip": str(zip_path),
                 "version": version,
+                "bundleBuildId": bundle_build_id,
                 "architectures": ["arm64", "x86_64"],
             },
             ensure_ascii=False,

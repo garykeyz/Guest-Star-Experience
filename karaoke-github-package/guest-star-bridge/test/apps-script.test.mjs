@@ -79,7 +79,7 @@ test("envía los controles compartidos con origen bridge", async (t) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({
       ok: true,
-      codeVersion: "4.0.0",
+      codeVersion: "4.0.1",
       state: { accepting: false, stateRevision: 8, activityId: "activity-2" },
       requests: []
     }));

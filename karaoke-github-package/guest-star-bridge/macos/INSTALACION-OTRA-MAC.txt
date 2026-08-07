@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 4.0.0 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR BRIDGE 4.0.1 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
 Compatible con Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
 No necesitas instalar Node, npm ni usar Terminal.
@@ -13,19 +13,20 @@ REQUISITOS
 
 INSTALAR
 
-1. Descarga Guest-Star-Bridge-Universal-v4.0.0-app.zip o el DMG.
+1. Descarga Guest-Star-Bridge-Universal-v4.0.1-app.zip o el DMG.
 2. Descomprime y mueve Guest Star Bridge.app a Aplicaciones.
 3. La primera vez, usa clic derecho sobre Guest Star Bridge y elige Abrir.
 4. Si macOS bloquea la app, usa Privacidad y seguridad → Abrir de todos modos.
 
 CONFIGURAR
 
-1. Abre Bridge e inicia sesión con el usuario Host.
-2. Cambia la contraseña temporal.
-3. Selecciona hotel, sede y actividad asignados.
-4. En Settings, elige la carpeta de karaoke.
-5. Configura el mismo puerto/contraseña de Network Control.
-6. Prueba VirtualDJ, guarda y sincroniza.
+1. Abre Bridge y confirma que la pantalla de acceso muestre v4.0.1.
+2. Inicia sesión con el usuario Host.
+3. Cambia la contraseña temporal.
+4. Selecciona hotel, sede y actividad asignados.
+5. En Settings, elige la carpeta de karaoke.
+6. Configura el mismo puerto/contraseña de Network Control.
+7. Prueba VirtualDJ, guarda y sincroniza.
 
 El operador no inicia sesión en Google. Apps Script y las hojas pertenecen al
 Superhost y funcionan en la nube. Crear una cuenta Host no crea otra hoja.

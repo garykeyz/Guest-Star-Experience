@@ -1,4 +1,4 @@
-# Guest Star Experience 4.0.0
+# Guest Star Experience 4.0.1
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.

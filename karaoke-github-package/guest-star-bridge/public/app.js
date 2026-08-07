@@ -1803,6 +1803,8 @@ $("#testVdj").addEventListener("click", async () => {
 
 function applyState(nextState) {
   state = nextState;
+  const versionLabel = $("#bridgeVersion");
+  if (versionLabel) versionLabel.textContent = `v${state.version || "unknown"}`;
   updateStatus();
   renderVdjQueue();
   renderRequests();

@@ -27,9 +27,15 @@ type HostResponse = Record<string, unknown> & {
 
 const EMPTY_SELECTION: Selection = { hotels: [], venues: [], activities: [] };
 
-function friendlyHostError(value: unknown) {
+function friendlyHostError(value: unknown, code = "") {
   const message = String(value || "The action could not be completed.");
-  if (/DriveApp\.|googleapis\.com\/auth\/drive|GOOGLE_AUTHORIZATION_REQUIRED/i.test(message)) {
+  if (code === "HOTEL_CREATION_IN_PROGRESS") {
+    return "Another hotel is already being created. Wait a moment and refresh before trying again.";
+  }
+  if (code === "HOTEL_ALREADY_EXISTS") {
+    return message;
+  }
+  if (code === "GOOGLE_AUTHORIZATION_REQUIRED" || /googleapis\.com\/auth\/drive/i.test(message)) {
     return "Google Drive access is missing. Open Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment before trying again.";
   }
   return message;
@@ -44,7 +50,7 @@ async function hostApi(payload: Record<string, unknown>): Promise<HostResponse> 
   });
   const data = await response.json().catch(() => ({})) as HostResponse;
   if (!response.ok || data.ok === false) {
-    const error = new Error(friendlyHostError(data.error || data.code));
+    const error = new Error(friendlyHostError(data.error || data.code, String(data.code || "")));
     Object.assign(error, data);
     throw error;
   }
@@ -70,6 +76,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const [error,setError]=useState("");
   const [temporaryPassword,setTemporaryPassword]=useState("");
   const [reviews,setReviews]=useState<Entity[]>([]);
+  const [codeVersion,setCodeVersion]=useState("");
 
   const refreshAdmin=useCallback(async(currentUser:User|null=user)=>{
     if(currentUser?.role!=="superhost")return;
@@ -78,6 +85,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   const acceptIdentity=useCallback(async(data:HostResponse)=>{
     const nextUser=data.user||null;
+    setCodeVersion(String(data.codeVersion||""));
     setUser(nextUser);
     setSelection(data.selection||EMPTY_SELECTION);
     if(nextUser?.role==="superhost")setAdmin(await hostApi({action:"adminState"}));
@@ -281,7 +289,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const accepting=selectedState?.accepting!==false;
   const publicStatusVisible=selectedState?.showPublicStatus===true;
   const adminHotels=(admin?.hotels as Entity[]|undefined)||[];
-  const activeAdminHotels=adminHotels.filter(item=>value(item,"status")!=="inactive");
+  const activeAdminHotels=adminHotels.filter(item=>value(item,"status")==="active");
   const adminVenues=(admin?.venues as Entity[]|undefined)||[];
   const adminUsers=((admin?.users as User[]|undefined)||[]).filter(item=>item.role!=="superhost");
   const adminAssignments=(admin?.assignments as Entity[]|undefined)||[];
@@ -293,7 +301,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const activityVenues=adminVenues.filter(item=>value(item,"hotelId")===activityHotelId);
 
   return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}</span></div><button onClick={logout}><LogOut/>Log Out</button></header>
+    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.0.1</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{codeVersion?` · Code.gs v${codeVersion}`:""}</span></div><button onClick={logout}><LogOut/>Log Out</button></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
       <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>

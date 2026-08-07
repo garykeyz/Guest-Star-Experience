@@ -30,6 +30,10 @@ const publicApiSource = await readFile(
   resolve(root, "../app/api/karaoke/route.ts"),
   "utf8"
 );
+const bridgeApiSource = await readFile(
+  resolve(root, "../app/api/bridge/route.ts"),
+  "utf8"
+);
 
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.doesNotMatch(appSource, /window\.open/);
@@ -204,11 +208,24 @@ test("muestra opcionalmente el estado público y el Host seguro lo controla", ()
   assert.match(publicApiSource, /Public action is not allowed/);
 });
 
-test("el panel convierte el error crudo de Drive en una instrucción recuperable", () => {
+test("el panel conserva el diagnóstico real de Drive y evita hoteles duplicados", () => {
   assert.match(hostPanelSource, /function friendlyHostError/);
-  assert.match(hostPanelSource, /DriveApp\\\.|googleapis\\\.com\\\/auth\\\/drive/);
+  assert.match(hostPanelSource, /HOTEL_CREATION_IN_PROGRESS/);
+  assert.match(hostPanelSource, /HOTEL_ALREADY_EXISTS/);
   assert.match(hostPanelSource, /run authorizeGuestStarV4/);
   assert.match(hostPanelSource, /update the existing web app deployment/);
+  assert.match(hostApiSource, /HOTEL_PROVISIONING_TIMEOUT_MS = 120_000/);
+  assert.match(hostApiSource, /payload\.action === "createHotel"/);
+});
+
+test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () => {
+  assert.match(bridgeApiSource, /APPS_SCRIPT_TIMEOUT_MS = 60_000/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy/);
+  assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
+  assert.match(bridgeHtml, /id="bridgeVersion"/);
+  assert.match(appSource, /state\.version \|\| "unknown"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.0\.1/);
+  assert.match(hostPanelSource, /Code\.gs v/);
 });
 
 test("la página incluye un favicon propio de Guest Star", () => {

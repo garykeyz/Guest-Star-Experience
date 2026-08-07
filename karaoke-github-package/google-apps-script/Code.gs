@@ -11,7 +11,7 @@ const HEADERS = [
   "Last seen in VirtualDJ", "Status revision"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "4.0.0";
+const BRIDGE_API_VERSION = "4.0.1";
 const V4_SCHEMA_VERSION = "4.0.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_REQUIRED_OAUTH_SCOPES = [
@@ -1643,27 +1643,42 @@ function copyLegacyHotelDataV4_(source, target) {
   });
 }
 
-function createHotelSpreadsheetV4_(hotel, legacySource) {
-  const spreadsheet = SpreadsheetApp.create("Guest Star - " + hotel.name);
-  const first = spreadsheet.getSheets()[0];
-  if (legacySource) copyLegacyHotelDataV4_(legacySource, spreadsheet);
-  initializeHotelDataV4_(spreadsheet, hotel);
-  if (
-    first &&
-    spreadsheet.getSheets().length > 1 &&
-    !first.getLastRow() &&
-    first.getName() !== REQUESTS &&
-    first.getName() !== HISTORY &&
-    first.getName() !== CONFIG
-  ) {
-    spreadsheet.deleteSheet(first);
+function createHotelSpreadsheetV4_(hotel, legacySource, destinationFolder) {
+  let spreadsheet = null;
+  try {
+    spreadsheet = SpreadsheetApp.create("Guest Star - " + hotel.name);
+    const first = spreadsheet.getSheets()[0];
+    if (legacySource) copyLegacyHotelDataV4_(legacySource, spreadsheet);
+    initializeHotelDataV4_(spreadsheet, hotel);
+    if (
+      first &&
+      spreadsheet.getSheets().length > 1 &&
+      !first.getLastRow() &&
+      first.getName() !== REQUESTS &&
+      first.getName() !== HISTORY &&
+      first.getName() !== CONFIG
+    ) {
+      spreadsheet.deleteSheet(first);
+    }
+    if (!legacySource) {
+      spreadsheet.getSheetByName(CONFIG).getRange("B4").setValue(false);
+    }
+    const file = DriveApp.getFileById(spreadsheet.getId());
+    file.moveTo(destinationFolder || hotelDataFolderV4_());
+    return spreadsheet.getId();
+  } catch (error) {
+    if (spreadsheet) {
+      try {
+        DriveApp.getFileById(spreadsheet.getId()).setTrashed(true);
+      } catch (cleanupError) {
+        console.error(JSON.stringify({
+          event: "hotel.sheet.cleanup.failed",
+          detail: String(cleanupError && cleanupError.message ? cleanupError.message : cleanupError).slice(0, 500)
+        }));
+      }
+    }
+    throw error;
   }
-  if (!legacySource) {
-    spreadsheet.getSheetByName(CONFIG).getRange("B4").setValue(false);
-  }
-  const file = DriveApp.getFileById(spreadsheet.getId());
-  file.moveTo(hotelDataFolderV4_());
-  return spreadsheet.getId();
 }
 
 function publicBaseUrlV4_() {
@@ -2035,13 +2050,20 @@ function requireGuestStarScopesV4_() {
   ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, V4_REQUIRED_OAUTH_SCOPES);
 }
 
-function guestStarScopesAuthorizedV4_(master) {
+function guestStarDriveReadinessV4_(master) {
   try {
     const spreadsheet = master || masterSpreadsheetV4_();
     DriveApp.getFileById(spreadsheet.getId()).getName();
-    return true;
+    const folder = hotelDataFolderV4_();
+    folder.getName();
+    return { ok: true, folder: folder };
   } catch (error) {
-    return false;
+    const detail = String(error && error.message ? error.message : error).slice(0, 500);
+    console.error(JSON.stringify({
+      event: "hotel.drive.readiness.failed",
+      detail: detail
+    }));
+    return { ok: false, detail: detail };
   }
 }
 
@@ -2667,15 +2689,45 @@ function createHostUserV4_(auth, body) {
 
 function createHotelForSuperhostV4_(auth, body) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    return {
+      ok: false,
+      code: "HOTEL_CREATION_IN_PROGRESS",
+      error: "Another hotel is already being created. Wait a moment and refresh the Host Panel before trying again."
+    };
+  }
+  try {
+    return createHotelForSuperhostUnlockedV4_(auth, body);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function createHotelForSuperhostUnlockedV4_(auth, body) {
   const name = clean_(body.name);
   if (!name) return { ok: false, code: "HOTEL_NAME_REQUIRED" };
   const timezone = clean_(body.timezone || "America/Santo_Domingo");
   if (!validTimezoneV4_(timezone)) return { ok: false, code: "INVALID_TIMEZONE" };
-  if (!guestStarScopesAuthorizedV4_(auth.master)) {
+  const nameKey = normalizeIdentifierV4_(name);
+  const existingHotel = tableRowsV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels)
+    .filter(function(hotel) {
+      return normalizeIdentifierV4_(hotel.name) === nameKey || hotel.slug === nameKey;
+    })[0];
+  if (existingHotel) {
     return {
       ok: false,
-      code: "GOOGLE_AUTHORIZATION_REQUIRED",
-      error: "Google Drive access is not authorized. In Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment."
+      code: "HOTEL_ALREADY_EXISTS",
+      error: "A hotel named " + existingHotel.name + " already exists. Refresh the Host Panel instead of creating it again.",
+      hotel: existingHotel
+    };
+  }
+  const driveReadiness = guestStarDriveReadinessV4_(auth.master);
+  if (!driveReadiness.ok) {
+    return {
+      ok: false,
+      code: "GOOGLE_DRIVE_UNAVAILABLE",
+      error: "The deployed Apps Script cannot access Google Drive while creating a hotel. In Manage deployments, edit the existing web app and set Execute as to Me (the script owner). Google reported: " + driveReadiness.detail
     };
   }
   const now = isoNowV4_();
@@ -2698,8 +2750,21 @@ function createHotelForSuperhostV4_(auth, body) {
     createdAt: now,
     updatedAt: now
   };
-  hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null);
-  hotel.qrFileId = createHotelQrV4_(hotel, hotelDataFolderV4_());
+  try {
+    hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null, driveReadiness.folder);
+    hotel.qrFileId = createHotelQrV4_(hotel, driveReadiness.folder);
+  } catch (error) {
+    const detail = String(error && error.message ? error.message : error).slice(0, 500);
+    console.error(JSON.stringify({
+      event: "hotel.drive.provisioning.failed",
+      detail: detail
+    }));
+    return {
+      ok: false,
+      code: "HOTEL_DRIVE_PROVISIONING_FAILED",
+      error: "Google Drive could not finish the hotel spreadsheet. Confirm that the existing web app deployment executes as Me (the script owner). Google reported: " + detail
+    };
+  }
   const saved = appendRecordV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels, hotel);
   const venue = appendRecordV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues, {
     venueId: Utilities.getUuid(),
@@ -3018,6 +3083,7 @@ function adminStateV4_(auth) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
   return {
     ok: true,
+    codeVersion: BRIDGE_API_VERSION,
     users: tableRowsV4_(auth.master, "Users", V4_MASTER_TABLES.Users).map(publicUserV4_),
     hotels: tableRowsV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels),
     venues: tableRowsV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues),
@@ -3053,7 +3119,12 @@ function dispatchV4Action_(body) {
     logout: function() { return logoutV4_(body); },
     me: function() {
       const auth = requireAuthV4_(body);
-      return { ok: true, user: publicUserV4_(auth.user), selection: accessibleSelectionV4_(auth.user) };
+      return {
+        ok: true,
+        codeVersion: BRIDGE_API_VERSION,
+        user: publicUserV4_(auth.user),
+        selection: accessibleSelectionV4_(auth.user)
+      };
     },
     changePassword: function() { return changePasswordV4_(body); },
     createOneTimeLoginCode: function() { return createOneTimeLoginCodeV4_(body); },

@@ -211,6 +211,28 @@ try {
   assert.equal("authToken" in logoutBody, false);
   assert.equal("deviceToken" in logoutBody, false);
 
+  const bridgeLogin = await request("/api/bridge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "login",
+      username: "superhost",
+      password: "not-a-real-password",
+      clientType: "bridge",
+      deviceName: "Production Test Bridge"
+    })
+  });
+  assert.equal(bridgeLogin.status, 200);
+  assert.equal(bridgeLogin.headers.get("x-guest-star-bridge-proxy"), "4.0.1");
+  const bridgeLoginBody = await bridgeLogin.json();
+  assert.equal(bridgeLoginBody.authToken, sessionToken);
+  assert.equal(bridgeLoginBody.deviceToken, deviceToken);
+  const bridgeLoginPayload = received
+    .filter((entry) => entry.payload.action === "login")
+    .at(-1)?.payload;
+  assert.equal(bridgeLoginPayload.clientType, "bridge");
+  assert.equal(bridgeLoginPayload.deviceName, "Production Test Bridge");
+
   console.log("Production HTTP routes and security boundaries passed.");
 } finally {
   nextServer.kill("SIGTERM");
