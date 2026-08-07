@@ -9,13 +9,14 @@ async function parseResponse(response) {
 }
 
 const REQUIRED_CODE_VERSION = "4.0.0";
+const APPS_SCRIPT_TIMEOUT_MS = 30000;
 
 function endpoint(config) {
   if (!config.appsScriptUrl) throw new Error("Guest Star connection is not configured.");
   return config.appsScriptUrl;
 }
 
-async function postPayload(config, payload, timeoutMs = 10000) {
+async function postPayload(config, payload, timeoutMs = APPS_SCRIPT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
