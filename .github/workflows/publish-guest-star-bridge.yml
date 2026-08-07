@@ -7,13 +7,64 @@ on:
     paths:
       - .github/workflows/publish-guest-star-bridge.yml
       - "karaoke-github-package/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-guest-star-bridge.yml
+      - "karaoke-github-package/**"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: karaoke-github-package/package-lock.json
+
+      - name: Install exact dependencies without third-party lifecycle scripts
+        working-directory: karaoke-github-package
+        run: npm ci --ignore-scripts
+
+      - name: Reject vulnerable dependencies
+        working-directory: karaoke-github-package
+        run: npm audit --audit-level=low
+
+      - name: Test Bridge and Apps Script regression suite
+        working-directory: karaoke-github-package/guest-star-bridge
+        run: npm test
+
+      - name: Check TypeScript
+        working-directory: karaoke-github-package
+        run: npx tsc --noEmit
+
+      - name: Build production web application
+        working-directory: karaoke-github-package
+        run: npm run build
+
+      - name: Exercise production HTTP routes and security boundaries
+        working-directory: karaoke-github-package
+        run: npm run test:http
+
+      - name: Build Cloudflare production bundle
+        working-directory: karaoke-github-package
+        run: npx opennextjs-cloudflare build
+
   release:
+    if: github.event_name != 'pull_request'
+    needs: validate
     runs-on: macos-14
     timeout-minutes: 25
 
