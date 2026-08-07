@@ -39,6 +39,9 @@ Crear o asignar un usuario nunca crea otra hoja de cálculo.
 
 - Desactiva un usuario cuando termine su relación laboral; se revocan sesiones y
   dispositivos.
+- Si pierdes la contraseña principal, usa en la hoja maestra **🎤 Karaoke →
+  Reset Superhost Temporary Password**. Copia el aviso una sola vez; el sistema
+  revoca las sesiones y dispositivos anteriores.
 - Revoca una Mac perdida desde **Bridge Devices**.
 - No envíes la URL `/exec`, tokens ni contraseñas por canales públicos.
 - Mantén al menos un Superhost activo; el sistema impide desactivar el último.

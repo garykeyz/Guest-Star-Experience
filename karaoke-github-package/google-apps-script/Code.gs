@@ -1367,6 +1367,9 @@ function recalcularTiempos() {
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu("🎤 Karaoke")
+    .addItem("Initialize Guest Star 4.0", "setupMultiUserV4")
+    .addItem("Reset Superhost Temporary Password", "resetSuperhostPasswordV4")
+    .addSeparator()
     .addItem("Configurar PIN y YouTube", "configurarCredenciales")
     .addItem("Preparar / reparar Guest Star Bridge", "setup")
     .addItem("Recalcular tiempos", "recalcularTiempos")
@@ -1883,6 +1886,89 @@ function backupLegacySpreadsheetV4_(master) {
   return backup.getId();
 }
 
+function revealTemporaryPasswordV4_(title, username, temporaryPassword) {
+  if (!temporaryPassword) return false;
+  try {
+    const ui = SpreadsheetApp.getUi();
+    ui.alert(
+      title,
+      "Username: " + username + "\n\n" +
+        "Temporary password: " + temporaryPassword + "\n\n" +
+        "Copy it now. Only its secure hash is stored and this password will not be shown again.",
+      ui.ButtonSet.OK
+    );
+    return true;
+  } catch (error) {
+    // Headless callers still receive the one-time password in the return value.
+    return false;
+  }
+}
+
+function revokeUserAccessV4_(master, userId) {
+  const revokedAt = isoNowV4_();
+  tableRowsV4_(master, "AuthSessions", V4_MASTER_TABLES.AuthSessions)
+    .filter(function(session) { return session.userId === userId && !session.revokedAt; })
+    .forEach(function(session) {
+      updateRecordV4_(master, "AuthSessions", V4_MASTER_TABLES.AuthSessions, session._row, {
+        revokedAt: revokedAt
+      });
+    });
+  tableRowsV4_(master, "Devices", V4_MASTER_TABLES.Devices)
+    .filter(function(device) { return device.userId === userId && device.status === "active"; })
+    .forEach(function(device) {
+      updateRecordV4_(master, "Devices", V4_MASTER_TABLES.Devices, device._row, {
+        status: "revoked",
+        updatedAt: revokedAt
+      });
+    });
+}
+
+function resetSuperhostPasswordV4() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const master = masterSpreadsheetV4_();
+    ensureMasterTablesV4_(master);
+    const configuredUsername = String(
+      PropertiesService.getScriptProperties().getProperty("SUPERHOST_USERNAME") || "superhost"
+    ).trim().toLowerCase();
+    const superhosts = tableRowsV4_(master, "Users", V4_MASTER_TABLES.Users)
+      .filter(function(user) { return user.role === "superhost" && user.status === "active"; });
+    const user = superhosts.find(function(candidate) {
+      return String(candidate.username || "").toLowerCase() === configuredUsername;
+    }) || superhosts[0];
+    if (!user) throw new Error("ACTIVE_SUPERHOST_NOT_FOUND");
+
+    const temporaryPassword = randomTokenV4_(18);
+    const salt = randomTokenV4_(32);
+    updateRecordV4_(master, "Users", V4_MASTER_TABLES.Users, user._row, {
+      passwordHash: hashSecretV4_(temporaryPassword, salt),
+      passwordSalt: salt,
+      mustChangePassword: true,
+      updatedAt: isoNowV4_()
+    });
+    revokeUserAccessV4_(master, user.userId);
+    auditV4_({
+      userId: user.userId,
+      action: "superhost.password.reset",
+      targetId: user.userId
+    });
+    revealTemporaryPasswordV4_(
+      "Guest Star 4.0 — Superhost Password Reset",
+      user.username,
+      temporaryPassword
+    );
+    return {
+      ok: true,
+      username: user.username,
+      temporaryPassword: temporaryPassword,
+      note: "Copy the temporary password now. It is returned only once and all previous sessions were revoked."
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function setupMultiUserV4() {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -1912,7 +1998,7 @@ function setupMultiUserV4() {
         superhostCreated: superhostResult.created
       }
     });
-    return {
+    const result = {
       ok: true,
       schemaVersion: V4_SCHEMA_VERSION,
       masterSheetId: master.getId(),
@@ -1935,6 +2021,14 @@ function setupMultiUserV4() {
         ? "Copy the temporary password now. It is returned only once and is not stored in plain text."
         : "Migration already exists; no records were duplicated."
     };
+    if (superhostResult.created) {
+      revealTemporaryPasswordV4_(
+        "Guest Star 4.0 — Setup Complete",
+        superhostResult.user.username,
+        superhostResult.temporaryPassword
+      );
+    }
+    return result;
   } finally {
     lock.releaseLock();
   }

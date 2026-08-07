@@ -508,6 +508,15 @@ test("la migración 4.0 crea registro central, respaldo y un Sheet independiente
   );
 });
 
+test("la instalación muestra la clave temporal y permite recuperarla de forma segura", () => {
+  assert.match(source, /function revealTemporaryPasswordV4_/);
+  assert.match(source, /Guest Star 4\.0 — Setup Complete/);
+  assert.match(source, /function resetSuperhostPasswordV4/);
+  assert.match(source, /Reset Superhost Temporary Password/);
+  assert.match(source, /revokeUserAccessV4_\(master, user\.userId\)/);
+  assert.match(source, /mustChangePassword: true/);
+});
+
 test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
   const body = source.slice(
     source.indexOf("function createHostUserV4_"),
