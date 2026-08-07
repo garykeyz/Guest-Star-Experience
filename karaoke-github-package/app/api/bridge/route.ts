@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const APPS_SCRIPT_ENDPOINT =
   process.env.KARAOKE_APPS_SCRIPT_URL ||
-  "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
+  "https://script.google.com/macros/s/AKfycbxpUugPQJ1N3yb8uezB6fpd84CELAKtbuB2maE3HberOBGo5ObABGtN3ZfCI3UvKbLkzg/exec";
 const MAX_BODY_BYTES = 512 * 1024;
 const APPS_SCRIPT_TIMEOUT_MS = 60_000;
 
