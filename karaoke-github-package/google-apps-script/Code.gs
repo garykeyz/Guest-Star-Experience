@@ -12,6 +12,7 @@ const HEADERS = [
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.0.1";
+const GUEST_STAR_CODE_BUILD = "4.0.1-drive-fallback-1";
 const V4_SCHEMA_VERSION = "4.0.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_REQUIRED_OAUTH_SCOPES = [
@@ -1663,9 +1664,6 @@ function createHotelSpreadsheetV4_(hotel, legacySource, destinationFolder) {
     if (!legacySource) {
       spreadsheet.getSheetByName(CONFIG).getRange("B4").setValue(false);
     }
-    const file = DriveApp.getFileById(spreadsheet.getId());
-    file.moveTo(destinationFolder || hotelDataFolderV4_());
-    return spreadsheet.getId();
   } catch (error) {
     if (spreadsheet) {
       try {
@@ -1679,6 +1677,18 @@ function createHotelSpreadsheetV4_(hotel, legacySource, destinationFolder) {
     }
     throw error;
   }
+  if (destinationFolder) {
+    try {
+      DriveApp.getFileById(spreadsheet.getId()).moveTo(destinationFolder);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "hotel.sheet.folderMove.skipped",
+        spreadsheetId: spreadsheet.getId(),
+        detail: String(error && error.message ? error.message : error).slice(0, 500)
+      }));
+    }
+  }
+  return spreadsheet.getId();
 }
 
 function publicBaseUrlV4_() {
@@ -1798,12 +1808,20 @@ function createInitialHotelV4_(master, superhost, legacySource) {
     createdAt: now,
     updatedAt: now
   };
-  const dataSheetId = createHotelSpreadsheetV4_(provisionalHotel, legacySource);
+  const driveReadiness = guestStarDriveReadinessV4_(master);
+  const destinationFolder = driveReadiness.ok ? driveReadiness.folder : null;
+  const dataSheetId = createHotelSpreadsheetV4_(
+    provisionalHotel,
+    legacySource,
+    destinationFolder
+  );
   const venueId = Utilities.getUuid();
   const activityId = Utilities.getUuid();
   provisionalHotel.dataSheetId = dataSheetId;
   provisionalHotel.activePublicActivityId = activityId;
-  provisionalHotel.qrFileId = createHotelQrV4_(provisionalHotel, hotelDataFolderV4_());
+  provisionalHotel.qrFileId = destinationFolder
+    ? createHotelQrV4_(provisionalHotel, destinationFolder)
+    : "";
   const hotel = appendRecordV4_(master, "Hotels", V4_MASTER_TABLES.Hotels, provisionalHotel);
   appendRecordV4_(master, "Venues", V4_MASTER_TABLES.Venues, {
     venueId: venueId,
@@ -2071,11 +2089,16 @@ function authorizeGuestStarV4() {
   requireGuestStarScopesV4_();
   const master = masterSpreadsheetV4_();
   const file = DriveApp.getFileById(master.getId());
+  const driveReadiness = guestStarDriveReadinessV4_(master);
   const result = {
     ok: true,
+    codeBuild: GUEST_STAR_CODE_BUILD,
     masterSheetId: master.getId(),
     masterFileName: file.getName(),
-    note: "Google Sheets and Drive access are authorized. Update the existing web app deployment before returning to the Host Panel."
+    driveFolderReady: driveReadiness.ok,
+    note: driveReadiness.ok
+      ? "Google Sheets and Drive folder access are authorized. Update the existing web app deployment before returning to the Host Panel."
+      : "Google Sheets is authorized. Hotel creation will still work in My Drive even if Drive folder organization is unavailable."
   };
   console.log(JSON.stringify(result));
   try {
@@ -2340,6 +2363,7 @@ function loginV4_(body) {
   return {
     ok: true,
     codeVersion: BRIDGE_API_VERSION,
+    codeBuild: GUEST_STAR_CODE_BUILD,
     authToken: sessionResult.token,
     expiresAt: sessionResult.expiresAt,
     deviceId: deviceResult ? deviceResult.deviceId : "",
@@ -2723,13 +2747,7 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
     };
   }
   const driveReadiness = guestStarDriveReadinessV4_(auth.master);
-  if (!driveReadiness.ok) {
-    return {
-      ok: false,
-      code: "GOOGLE_DRIVE_UNAVAILABLE",
-      error: "The deployed Apps Script cannot access Google Drive while creating a hotel. In Manage deployments, edit the existing web app and set Execute as to Me (the script owner). Google reported: " + driveReadiness.detail
-    };
-  }
+  const destinationFolder = driveReadiness.ok ? driveReadiness.folder : null;
   const now = isoNowV4_();
   const hotelId = Utilities.getUuid();
   const slug = uniqueSlugV4_(auth.master, body.slug || name, "");
@@ -2751,18 +2769,20 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
     updatedAt: now
   };
   try {
-    hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null, driveReadiness.folder);
-    hotel.qrFileId = createHotelQrV4_(hotel, driveReadiness.folder);
+    hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null, destinationFolder);
+    hotel.qrFileId = destinationFolder
+      ? createHotelQrV4_(hotel, destinationFolder)
+      : "";
   } catch (error) {
     const detail = String(error && error.message ? error.message : error).slice(0, 500);
     console.error(JSON.stringify({
-      event: "hotel.drive.provisioning.failed",
+      event: "hotel.sheet.provisioning.failed",
       detail: detail
     }));
     return {
       ok: false,
-      code: "HOTEL_DRIVE_PROVISIONING_FAILED",
-      error: "Google Drive could not finish the hotel spreadsheet. Confirm that the existing web app deployment executes as Me (the script owner). Google reported: " + detail
+      code: "HOTEL_SHEET_PROVISIONING_FAILED",
+      error: "Google Sheets could not finish the independent hotel spreadsheet. Google reported: " + detail
     };
   }
   const saved = appendRecordV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels, hotel);
@@ -2847,7 +2867,15 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
       activityId: activity.activityId
     }
   });
-  return { ok: true, hotel: saved, venue: venue, activity: activity };
+  return {
+    ok: true,
+    hotel: saved,
+    venue: venue,
+    activity: activity,
+    warning: driveReadiness.ok
+      ? ""
+      : "The hotel Sheet was created in My Drive. Folder organization and Drive-stored QR were skipped, but the direct QR remains available."
+  };
 }
 
 function updateHotelForSuperhostV4_(auth, body) {
@@ -3084,6 +3112,7 @@ function adminStateV4_(auth) {
   return {
     ok: true,
     codeVersion: BRIDGE_API_VERSION,
+    codeBuild: GUEST_STAR_CODE_BUILD,
     users: tableRowsV4_(auth.master, "Users", V4_MASTER_TABLES.Users).map(publicUserV4_),
     hotels: tableRowsV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels),
     venues: tableRowsV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues),
@@ -3122,6 +3151,7 @@ function dispatchV4Action_(body) {
       return {
         ok: true,
         codeVersion: BRIDGE_API_VERSION,
+        codeBuild: GUEST_STAR_CODE_BUILD,
         user: publicUserV4_(auth.user),
         selection: accessibleSelectionV4_(auth.user)
       };
@@ -3601,15 +3631,17 @@ function selectedActivityStateV4_(auth, context) {
 }
 
 function shareInfoV4_(hotel) {
+  const directQrUrl = "https://quickchart.io/qr?size=900&margin=2&format=png&text=" +
+    encodeURIComponent(hotel.publicUrl);
   return {
     publicUrl: hotel.publicUrl,
     qrVersion: Number(hotel.qrVersion) || 1,
     qrViewUrl: hotel.qrFileId
       ? "https://drive.google.com/uc?export=view&id=" + encodeURIComponent(hotel.qrFileId)
-      : "",
+      : directQrUrl,
     qrDownloadUrl: hotel.qrFileId
       ? "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(hotel.qrFileId)
-      : ""
+      : directQrUrl
   };
 }
 
@@ -3622,7 +3654,10 @@ function hotelShareV4_(auth, body) {
 function regenerateHotelQrV4_(auth, body) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
   const context = resolveTenantContextV4_(auth, { hotelId: body.hotelId });
-  const qrFileId = createHotelQrV4_(context.hotel, hotelDataFolderV4_());
+  const driveReadiness = guestStarDriveReadinessV4_(auth.master);
+  const qrFileId = driveReadiness.ok
+    ? createHotelQrV4_(context.hotel, driveReadiness.folder)
+    : "";
   const hotel = updateCentralRecordV4_("Hotels", "hotelId", context.hotel.hotelId, {
     qrFileId: qrFileId,
     qrVersion: Math.max(1, Number(context.hotel.qrVersion) || 1) + 1,
