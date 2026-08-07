@@ -242,6 +242,8 @@ select { width: 100%; border: 1px solid var(--line); border-radius: 11px; paddin
 select:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,45,149,.09); }
 .auth-dialog { width: min(480px, calc(100% - 28px)); }
 .auth-dialog form > p:not(.eyebrow) { color: var(--muted); line-height: 1.5; }
+.auth-dialog .first-login-help { margin: 2px 0; border: 1px solid #7b5cff45; border-radius: 12px; padding: 10px 12px; color: #d7ccff; background: #5d3bca18; font-size: .73rem; }
+.auth-dialog .first-login-help strong { display: block; margin-top: 4px; color: #fff; }
 .auth-dialog form > .button { width: 100%; margin-top: 20px; }
 .form-error { margin: 12px 0 0; color: #ff9dac !important; font-size: .78rem; }
 .share-content, .more-menu { padding: 24px; }

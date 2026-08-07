@@ -27,6 +27,14 @@ type HostResponse = Record<string, unknown> & {
 
 const EMPTY_SELECTION: Selection = { hotels: [], venues: [], activities: [] };
 
+function friendlyHostError(value: unknown) {
+  const message = String(value || "The action could not be completed.");
+  if (/DriveApp\.|googleapis\.com\/auth\/drive|GOOGLE_AUTHORIZATION_REQUIRED/i.test(message)) {
+    return "Google Drive access is missing. Open Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment before trying again.";
+  }
+  return message;
+}
+
 async function hostApi(payload: Record<string, unknown>): Promise<HostResponse> {
   const response = await fetch("/api/host", {
     method: "POST",
@@ -36,7 +44,7 @@ async function hostApi(payload: Record<string, unknown>): Promise<HostResponse> 
   });
   const data = await response.json().catch(() => ({})) as HostResponse;
   if (!response.ok || data.ok === false) {
-    const error = new Error(String(data.error || data.code || "The action could not be completed."));
+    const error = new Error(friendlyHostError(data.error || data.code));
     Object.assign(error, data);
     throw error;
   }
@@ -260,6 +268,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.0</p><h1>Host Panel</h1>
     <p>Sign in with the account created by your Superhost. Google credentials are never required here.</p>
     <form onSubmit={login}><label>Username or email<input name="username" autoComplete="username" required/></label><label>Password<input name="password" type="password" autoComplete="current-password" required/></label><button disabled={busy}><KeyRound/>Sign In</button></form>
+    <p className="hostSetupHelp">First installation or no temporary password? Open the master Google Sheet and choose <strong>🎤 Karaoke → Set Up or Recover Superhost Access</strong>.</p>
     {error&&<p className="hostError" role="alert">{error}</p>}
   </section></main>;
   if(user.mustChangePassword)return <main className="hostPage"><section className="hostLogin hostCard">

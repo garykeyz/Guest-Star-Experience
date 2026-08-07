@@ -46,6 +46,25 @@ test("la ventana interna no instala el delegado que causaba el cierre", () => {
   );
 });
 
+test("la sincronización en vivo no borra el usuario mientras se escribe", () => {
+  const authUiSource = appSource.slice(
+    appSource.indexOf("function updateAuthUi()"),
+    appSource.indexOf('$("#loginForm").addEventListener')
+  );
+  const dialogStart = authUiSource.indexOf("if (!loginDialog.open)");
+  const openDialogBlock = authUiSource.slice(
+    dialogStart,
+    authUiSource.indexOf("return;", dialogStart)
+  );
+  assert.match(openDialogBlock, /loginUsername/);
+  assert.match(openDialogBlock, /loginDialog\.showModal\(\)/);
+  assert.equal(
+    (authUiSource.match(/loginUsername"\)\.value =/g) || []).length,
+    1
+  );
+  assert.match(bridgeHtml, /Set Up or Recover Superhost Access/);
+});
+
 test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {
   assert.match(formSource, /useState<Lang\|null>\(null\)/);
   assert.match(formSource, /What language will you sing in\?/);
@@ -183,6 +202,13 @@ test("muestra opcionalmente el estado público y el Host seguro lo controla", ()
   assert.match(hostApiSource, /delete payload\.authToken/);
   assert.match(publicApiSource, /submitReview.*createGuestReminder.*unsubscribeGuest/);
   assert.match(publicApiSource, /Public action is not allowed/);
+});
+
+test("el panel convierte el error crudo de Drive en una instrucción recuperable", () => {
+  assert.match(hostPanelSource, /function friendlyHostError/);
+  assert.match(hostPanelSource, /DriveApp\\\.|googleapis\\\.com\\\/auth\\\/drive/);
+  assert.match(hostPanelSource, /run authorizeGuestStarV4/);
+  assert.match(hostPanelSource, /update the existing web app deployment/);
 });
 
 test("la página incluye un favicon propio de Guest Star", () => {
