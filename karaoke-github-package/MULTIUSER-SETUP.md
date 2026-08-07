@@ -31,13 +31,18 @@ Superhost. Los hosts y DJs no necesitan acceso a esa cuenta.
    - `HOST_BASE_URL`: dominio del panel seguro, si es diferente.
 5. Ejecuta `setupMultiUserV4` y autoriza acceso a Sheets, Drive, correo y
    activadores. Esta autorización la realiza únicamente el Superhost.
-6. Copia inmediatamente la contraseña temporal mostrada por el resultado de la
-   ejecución. Se muestra una sola vez.
+6. Copia inmediatamente la contraseña temporal del aviso que aparecerá en la
+   hoja. Se muestra una sola vez y solamente se guarda su hash seguro.
 7. Ve a **Implementar → Nueva implementación → Aplicación web**.
 8. Configura **Ejecutar como: Yo** y acceso para **Cualquier persona**.
 9. Implementa y copia la URL terminada en `/exec`.
 10. Configura esa URL como `KARAOKE_APPS_SCRIPT_URL` en el despliegue web.
 11. Abre `/host`, inicia sesión y cambia la contraseña temporal.
+
+Si cerraste el aviso sin copiar la contraseña, vuelve a la hoja maestra y usa
+**🎤 Karaoke → Reset Superhost Temporary Password**. Se creará otra contraseña
+temporal y se revocarán todas las sesiones y Macs previamente autorizadas para
+esa cuenta.
 
 ## Crear hoteles y usuarios
 
