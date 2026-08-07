@@ -70,6 +70,7 @@ test("la publicación y el instructivo entregan el paquete Universal 4.0.0", () 
 });
 
 test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare", () => {
+  assert.match(workflowSource, /pull_request:\s*\n\s*branches:\s*\n\s*- main/);
   assert.match(workflowSource, /validate:\s*\n\s*runs-on: ubuntu-latest/);
   assert.match(workflowSource, /npm ci --ignore-scripts/);
   assert.match(workflowSource, /npm audit --audit-level=low/);
@@ -78,5 +79,6 @@ test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudfl
   assert.match(workflowSource, /npm run build/);
   assert.match(workflowSource, /npm run test:http/);
   assert.match(workflowSource, /npx opennextjs-cloudflare build/);
-  assert.match(workflowSource, /release:\s*\n\s*needs: validate/);
+  assert.match(workflowSource, /if: github\.event_name != 'pull_request'/);
+  assert.match(workflowSource, /release:\s*\n\s*if:.*\n\s*needs: validate/);
 });

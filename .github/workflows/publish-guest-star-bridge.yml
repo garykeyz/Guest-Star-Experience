@@ -7,6 +7,12 @@ on:
     paths:
       - .github/workflows/publish-guest-star-bridge.yml
       - "karaoke-github-package/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-guest-star-bridge.yml
+      - "karaoke-github-package/**"
   workflow_dispatch:
 
 permissions:
@@ -57,6 +63,7 @@ jobs:
         run: npx opennextjs-cloudflare build
 
   release:
+    if: github.event_name != 'pull_request'
     needs: validate
     runs-on: macos-14
     timeout-minutes: 25
