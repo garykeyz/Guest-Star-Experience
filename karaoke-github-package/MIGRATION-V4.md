@@ -12,13 +12,14 @@ la información por hotel.
 
 ## Ejecutar la migración
 
-1. Ejecuta `setupMultiUserV4` desde la cuenta del Superhost.
+1. Regresa a la hoja, recarga la página y elige **🎤 Karaoke → Set Up or Recover
+   Superhost Access** desde la cuenta del Superhost.
 2. Autoriza los permisos solicitados.
 3. El sistema crea una copia de respaldo de la hoja heredada.
 4. Crea las tablas centrales en la hoja maestra.
 5. Crea la hoja independiente del primer hotel y copia allí la operación
    heredada sin borrar `Solicitudes` ni `Historial`.
-6. Guarda la contraseña temporal del Superhost.
+6. Copia el usuario y la contraseña temporal desde la ventana de credenciales.
 7. Publica una nueva versión de la implementación existente para conservar `/exec`.
 
 ## Verificación

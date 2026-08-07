@@ -14,6 +14,13 @@ const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.0.0";
 const V4_SCHEMA_VERSION = "4.0.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
+const V4_REQUIRED_OAUTH_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/script.external_request",
+  "https://www.googleapis.com/auth/script.scriptapp",
+  "https://www.googleapis.com/auth/userinfo.email"
+];
 let REQUEST_DATA_SHEET_ID_ = "";
 const V4_MASTER_TABLES = {
   Users: [
@@ -1367,7 +1374,8 @@ function recalcularTiempos() {
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu("🎤 Karaoke")
-    .addItem("Initialize Guest Star 4.0", "setupMultiUserV4")
+    .addItem("Authorize Required Google Access", "authorizeGuestStarV4")
+    .addItem("Set Up or Recover Superhost Access", "setupOrRecoverSuperhostV4")
     .addItem("Reset Superhost Temporary Password", "resetSuperhostPasswordV4")
     .addSeparator()
     .addItem("Configurar PIN y YouTube", "configurarCredenciales")
@@ -1886,21 +1894,60 @@ function backupLegacySpreadsheetV4_(master) {
   return backup.getId();
 }
 
+function escapeHtmlV4_(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function revealTemporaryPasswordV4_(title, username, temporaryPassword) {
   if (!temporaryPassword) return false;
   try {
     const ui = SpreadsheetApp.getUi();
-    ui.alert(
-      title,
-      "Username: " + username + "\n\n" +
-        "Temporary password: " + temporaryPassword + "\n\n" +
-        "Copy it now. Only its secure hash is stored and this password will not be shown again.",
-      ui.ButtonSet.OK
-    );
+    const safeUsername = escapeHtmlV4_(username);
+    const safePassword = escapeHtmlV4_(temporaryPassword);
+    const html = HtmlService.createHtmlOutput(
+      '<!doctype html><html><head><base target="_top"><style>' +
+      'body{margin:0;padding:24px;color:#f7f4ff;background:#090615;font:14px Arial,sans-serif}' +
+      'h2{margin:0 0 8px;font-size:22px}p{color:#c9c1d8;line-height:1.5}' +
+      'label{display:block;margin-top:16px;color:#ddd5ed;font-size:12px;font-weight:700}' +
+      '.row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:6px}' +
+      'input{min-width:0;border:1px solid #ffffff2c;border-radius:10px;padding:11px;color:#fff;background:#020108;font:14px monospace}' +
+      'button{border:1px solid #ffffff2c;border-radius:10px;padding:0 14px;color:#fff;background:#6c3ee8;cursor:pointer}' +
+      '.close{width:100%;min-height:42px;margin-top:20px;background:linear-gradient(110deg,#ff2d95,#8b3dff)}' +
+      '.warning{color:#ffd493;font-size:12px}' +
+      '</style></head><body><h2>Superhost access is ready</h2>' +
+      '<p>Copy both values now. This temporary password is shown only once.</p>' +
+      '<label>Username or email</label><div class="row"><input id="username" readonly value="' + safeUsername + '">' +
+      '<button type="button" onclick="copyField(\'username\')">Copy</button></div>' +
+      '<label>Temporary password</label><div class="row"><input id="password" readonly value="' + safePassword + '">' +
+      '<button type="button" onclick="copyField(\'password\')">Copy</button></div>' +
+      '<p class="warning">Only a secure hash is stored. You will set a permanent password after signing in.</p>' +
+      '<button class="close" type="button" onclick="google.script.host.close()">I copied both values</button>' +
+      '<script>function copyField(id){var field=document.getElementById(id);field.focus();field.select();' +
+      'if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(field.value);}' +
+      'else{document.execCommand("copy");}}</script></body></html>'
+    ).setWidth(520).setHeight(455);
+    ui.showModalDialog(html, title);
     return true;
   } catch (error) {
-    // Headless callers still receive the one-time password in the return value.
-    return false;
+    try {
+      const fallbackUi = SpreadsheetApp.getUi();
+      fallbackUi.alert(
+        title,
+        "Username: " + username + "\n\n" +
+          "Temporary password: " + temporaryPassword + "\n\n" +
+          "Copy it now. Only its secure hash is stored and this password will not be shown again.",
+        fallbackUi.ButtonSet.OK
+      );
+      return true;
+    } catch (fallbackError) {
+      // Editor/headless callers still receive the one-time password in the return value.
+      return false;
+    }
   }
 }
 
@@ -1969,7 +2016,62 @@ function resetSuperhostPasswordV4() {
   }
 }
 
+function setupOrRecoverSuperhostV4() {
+  const setupResult = setupMultiUserV4();
+  if (
+    setupResult && setupResult.superhost && setupResult.superhost.created &&
+    setupResult.superhost.temporaryPassword
+  ) {
+    return setupResult;
+  }
+  return {
+    ok: true,
+    setup: setupResult,
+    recovery: resetSuperhostPasswordV4()
+  };
+}
+
+function requireGuestStarScopesV4_() {
+  ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, V4_REQUIRED_OAUTH_SCOPES);
+}
+
+function guestStarScopesAuthorizedV4_() {
+  try {
+    const authorization = ScriptApp.getAuthorizationInfo(
+      ScriptApp.AuthMode.FULL,
+      V4_REQUIRED_OAUTH_SCOPES
+    );
+    return authorization.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.NOT_REQUIRED;
+  } catch (error) {
+    return false;
+  }
+}
+
+function authorizeGuestStarV4() {
+  requireGuestStarScopesV4_();
+  const master = masterSpreadsheetV4_();
+  const file = DriveApp.getFileById(master.getId());
+  const result = {
+    ok: true,
+    masterSheetId: master.getId(),
+    masterFileName: file.getName(),
+    note: "Google Sheets and Drive access are authorized. Update the existing web app deployment before returning to the Host Panel."
+  };
+  console.log(JSON.stringify(result));
+  try {
+    SpreadsheetApp.getUi().alert(
+      "Guest Star 4.0",
+      "Google Sheets and Drive access are authorized. Update the existing web app deployment, then return to the Host Panel.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  } catch (error) {
+    // Standalone Apps Script projects cannot show a Sheets dialog; the run log still confirms success.
+  }
+  return result;
+}
+
 function setupMultiUserV4() {
+  requireGuestStarScopesV4_();
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -2571,6 +2673,13 @@ function createHotelForSuperhostV4_(auth, body) {
   if (!name) return { ok: false, code: "HOTEL_NAME_REQUIRED" };
   const timezone = clean_(body.timezone || "America/Santo_Domingo");
   if (!validTimezoneV4_(timezone)) return { ok: false, code: "INVALID_TIMEZONE" };
+  if (!guestStarScopesAuthorizedV4_()) {
+    return {
+      ok: false,
+      code: "GOOGLE_AUTHORIZATION_REQUIRED",
+      error: "Google Drive access is not authorized. In Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment."
+    };
+  }
   const now = isoNowV4_();
   const hotelId = Utilities.getUuid();
   const slug = uniqueSlugV4_(auth.master, body.slug || name, "");

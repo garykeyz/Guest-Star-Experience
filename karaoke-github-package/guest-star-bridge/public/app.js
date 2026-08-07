@@ -1522,8 +1522,12 @@ function updateAuthUi() {
   if (!state) return;
   const authenticated = state.account?.authenticated === true;
   if (!authenticated) {
-    $("#loginUsername").value = state.config.lastUsername || "";
-    if (!loginDialog.open) loginDialog.showModal();
+    if (!loginDialog.open) {
+      // Seed the remembered account only when the dialog first opens. Realtime
+      // state updates must never replace text while somebody is signing in.
+      $("#loginUsername").value = state.config.lastUsername || "";
+      loginDialog.showModal();
+    }
     return;
   }
   if (loginDialog.open) loginDialog.close();

@@ -2,5 +2,6 @@
 .open-next/
 .wrangler/
 node_modules/
+*.tsbuildinfo
 .DS_Store
 guest-star-bridge/data/

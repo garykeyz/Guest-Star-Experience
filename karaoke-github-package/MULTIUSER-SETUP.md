@@ -29,20 +29,27 @@ Superhost. Los hosts y DJs no necesitan acceso a esa cuenta.
    - `INITIAL_HOTEL_TIMEZONE`: por ejemplo `America/Santo_Domingo`.
    - `PUBLIC_BASE_URL`: por ejemplo `https://request.gstarxp.com`.
    - `HOST_BASE_URL`: dominio del panel seguro, si es diferente.
-5. Ejecuta `setupMultiUserV4` y autoriza acceso a Sheets, Drive, correo y
-   activadores. Esta autorización la realiza únicamente el Superhost.
-6. Copia inmediatamente la contraseña temporal del aviso que aparecerá en la
-   hoja. Se muestra una sola vez y solamente se guarda su hash seguro.
-7. Ve a **Implementar → Nueva implementación → Aplicación web**.
-8. Configura **Ejecutar como: Yo** y acceso para **Cualquier persona**.
-9. Implementa y copia la URL terminada en `/exec`.
-10. Configura esa URL como `KARAOKE_APPS_SCRIPT_URL` en el despliegue web.
-11. Abre `/host`, inicia sesión y cambia la contraseña temporal.
+5. Guarda el proyecto, regresa a la hoja y recarga la página para que aparezca
+   el menú **🎤 Karaoke**.
+6. Elige **Authorize Required Google Access** y aprueba **todos** los permisos,
+   incluido Google Drive. Google permite aprobar permisos por separado; si
+   Drive queda sin marcar, Guest Star no podrá crear la hoja independiente de
+   cada hotel.
+7. Elige **Set Up or Recover Superhost Access**. Esta autorización y la
+   configuración inicial las realiza únicamente el Superhost.
+8. El sistema crea la cuenta inicial y abre una ventana con botones para copiar
+   el usuario y la contraseña temporal. Copia ambos antes de cerrarla; la clave
+   se muestra una sola vez y solamente se guarda su hash seguro.
+9. Ve a **Implementar → Nueva implementación → Aplicación web**.
+10. Configura **Ejecutar como: Yo** y acceso para **Cualquier persona**.
+11. Implementa y copia la URL terminada en `/exec`.
+12. Configura esa URL como `KARAOKE_APPS_SCRIPT_URL` en el despliegue web.
+13. Abre `/host`, inicia sesión y cambia la contraseña temporal.
 
-Si cerraste el aviso sin copiar la contraseña, vuelve a la hoja maestra y usa
-**🎤 Karaoke → Reset Superhost Temporary Password**. Se creará otra contraseña
-temporal y se revocarán todas las sesiones y Macs previamente autorizadas para
-esa cuenta.
+Si nunca viste la cuenta temporal o cerraste la ventana sin copiarla, vuelve a
+la hoja maestra y usa **🎤 Karaoke → Set Up or Recover Superhost Access**. Si la
+instalación ya existía, se creará otra contraseña temporal y se revocarán las
+sesiones y Macs previamente autorizadas para esa cuenta.
 
 ## Crear hoteles y usuarios
 
@@ -57,3 +64,8 @@ esa cuenta.
 
 No compartas la hoja maestra, las hojas de hotel ni la cuenta Google con el
 operador. El operador utiliza `/host` y el Bridge con sus propias credenciales.
+
+Si aparece `DriveApp.getFileById` al crear un hotel, vuelve a Apps Script,
+ejecuta `authorizeGuestStarV4`, aprueba todos los permisos y actualiza la
+implementación web existente a una versión nueva. Conserva la misma
+implementación para no cambiar la URL `/exec`.

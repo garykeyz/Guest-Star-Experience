@@ -510,11 +510,114 @@ test("la migración 4.0 crea registro central, respaldo y un Sheet independiente
 
 test("la instalación muestra la clave temporal y permite recuperarla de forma segura", () => {
   assert.match(source, /function revealTemporaryPasswordV4_/);
+  assert.match(source, /showModalDialog\(html, title\)/);
+  assert.match(source, /I copied both values/);
   assert.match(source, /Guest Star 4\.0 — Setup Complete/);
   assert.match(source, /function resetSuperhostPasswordV4/);
+  assert.match(source, /function setupOrRecoverSuperhostV4/);
+  assert.match(source, /Set Up or Recover Superhost Access/);
   assert.match(source, /Reset Superhost Temporary Password/);
   assert.match(source, /revokeUserAccessV4_\(master, user\.userId\)/);
   assert.match(source, /mustChangePassword: true/);
+});
+
+test("la ventana de credenciales permite copiar valores escapados sin guardarlos en la hoja", () => {
+  const originalSpreadsheetApp = context.SpreadsheetApp;
+  const originalHtmlService = context.HtmlService;
+  let dialog = null;
+  context.SpreadsheetApp = {
+    getUi: () => ({
+      showModalDialog: (html, title) => {
+        dialog = { html, title };
+      }
+    })
+  };
+  context.HtmlService = {
+    createHtmlOutput: (htmlSource) => ({
+      htmlSource,
+      width: 0,
+      height: 0,
+      setWidth(width) { this.width = width; return this; },
+      setHeight(height) { this.height = height; return this; }
+    })
+  };
+
+  try {
+    assert.equal(
+      context.revealTemporaryPasswordV4_("Setup", 'owner<admin>', 'p&ss"word'),
+      true
+    );
+    assert.equal(dialog.title, "Setup");
+    assert.match(dialog.html.htmlSource, /owner&lt;admin&gt;/);
+    assert.match(dialog.html.htmlSource, /p&amp;ss&quot;word/);
+    assert.match(dialog.html.htmlSource, /copyField/);
+    assert.equal(dialog.html.width, 520);
+    assert.equal(dialog.html.height, 455);
+  } finally {
+    context.SpreadsheetApp = originalSpreadsheetApp;
+    context.HtmlService = originalHtmlService;
+  }
+});
+
+test("la acción inicial crea la cuenta o recupera una existente sin dejar al Superhost bloqueado", () => {
+  const originalSetup = context.setupMultiUserV4;
+  const originalReset = context.resetSuperhostPasswordV4;
+  let resets = 0;
+
+  try {
+    context.setupMultiUserV4 = () => ({
+      ok: true,
+      superhost: { created: true, temporaryPassword: "created-once" }
+    });
+    context.resetSuperhostPasswordV4 = () => {
+      resets += 1;
+      return { ok: true, temporaryPassword: "recovered" };
+    };
+    assert.equal(context.setupOrRecoverSuperhostV4().superhost.temporaryPassword, "created-once");
+    assert.equal(resets, 0);
+
+    context.setupMultiUserV4 = () => ({
+      ok: true,
+      superhost: { created: false }
+    });
+    assert.equal(
+      context.setupOrRecoverSuperhostV4().recovery.temporaryPassword,
+      "recovered"
+    );
+    assert.equal(resets, 1);
+  } finally {
+    context.setupMultiUserV4 = originalSetup;
+    context.resetSuperhostPasswordV4 = originalReset;
+  }
+});
+
+test("la instalación exige todos los permisos de Google y ofrece una autorización explícita", () => {
+  assert.match(source, /const V4_REQUIRED_OAUTH_SCOPES = \[/);
+  assert.match(source, /"https:\/\/www\.googleapis\.com\/auth\/spreadsheets"/);
+  assert.match(source, /"https:\/\/www\.googleapis\.com\/auth\/drive"/);
+  assert.match(source, /function authorizeGuestStarV4\(\)/);
+  assert.match(
+    source,
+    /ScriptApp\.requireScopes\(ScriptApp\.AuthMode\.FULL, V4_REQUIRED_OAUTH_SCOPES\)/
+  );
+  const setupBody = source.slice(
+    source.indexOf("function setupMultiUserV4()"),
+    source.indexOf("function auditV4_")
+  );
+  assert.match(setupBody, /requireGuestStarScopesV4_\(\)/);
+});
+
+test("crear un hotel se detiene antes de crear archivos si falta permiso de Drive", () => {
+  const body = source.slice(
+    source.indexOf("function createHotelForSuperhostV4_"),
+    source.indexOf("function updateHotelForSuperhostV4_")
+  );
+  assert.match(body, /if \(!guestStarScopesAuthorizedV4_\(\)\)/);
+  assert.match(body, /code: "GOOGLE_AUTHORIZATION_REQUIRED"/);
+  assert.ok(
+    body.indexOf("guestStarScopesAuthorizedV4_()") < body.indexOf("createHotelSpreadsheetV4_(hotel, null)"),
+    "authorization must be checked before creating the independent spreadsheet"
+  );
 });
 
 test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
