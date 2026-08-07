@@ -4,12 +4,12 @@ import { createServer } from "node:http";
 import { basename, dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
   completeBridgeCommand,
   controlActivity,
-  createHostPanelLogin,
   fetchBridgeQueue,
   fetchBridgeIdentity,
   hasV4Session,
@@ -32,6 +32,13 @@ import {
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
 import { clearBridgeSecrets } from "./keychain.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
+import {
+  drawInfiniteRotation,
+  isKnownRotationSong,
+  normalizeFavoriteSongs,
+  ROTATION_CATALOGS,
+  rotationSongKey
+} from "./random-rotation.mjs";
 import { reconcileLocalAvailability } from "./local-availability.mjs";
 import { findMatches, normalizeText, scanLibrary } from "./matcher.mjs";
 import {
@@ -60,7 +67,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.0.1";
+const BRIDGE_VERSION = "4.1.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -132,6 +139,7 @@ const youtubeSearchAt = new Map();
 const youtubeSearches = new Map();
 const hitYoutubeCache = new Map();
 const clipboardHandledIds = new Set();
+const rotationStates = new Map();
 const reportedStatuses = new Map();
 const eventClients = new Set();
 let localAvailability = new Map();
@@ -154,6 +162,124 @@ let clipboardState = {
   copiedAt: "",
   error: ""
 };
+
+function requireSignedInBridge() {
+  if (!identityState.authenticated || !hasV4Session(config)) {
+    throw new Error("Sign in to Guest Star first.");
+  }
+}
+
+function requireLocalSuperhost() {
+  requireSignedInBridge();
+  if (identityState.user?.role !== "superhost") {
+    throw new Error("Only the Superhost can use this option.");
+  }
+}
+
+function currentHotelId() {
+  const hotelId = String(config.lastHotelId || "");
+  if (!hotelId) throw new Error("Select a hotel first.");
+  return hotelId;
+}
+
+function favoritesForHotel(hotelId = currentHotelId()) {
+  return normalizeFavoriteSongs(config.favoriteSongsByHotel?.[hotelId] || []);
+}
+
+function rotationCatalog(list) {
+  if (list === "spanish") return ROTATION_CATALOGS.spanish;
+  if (list === "english") return ROTATION_CATALOGS.english;
+  if (list === "favorites") return favoritesForHotel();
+  throw new Error("Choose Spanish, English, Favorites, or Both.");
+}
+
+function rotationItemView(item, list) {
+  const match = findMatches(
+    libraryFiles,
+    item.song,
+    item.artist,
+    item.language,
+    1
+  )[0];
+  const key = hitSuggestionKey(item);
+  return {
+    ...item,
+    list,
+    localAvailable: Boolean(match?.exact),
+    filePath: match?.exact ? match.filePath : "",
+    fileName: match?.exact ? match.fileName : "",
+    youtube: hitYoutubeCache.get(key) || [],
+    youtubeSearched: hitYoutubeCache.has(key)
+  };
+}
+
+function drawRotationList(list, count) {
+  const catalog = rotationCatalog(list);
+  if (!catalog.length || Number(count) <= 0) return [];
+  const stateKey = `${currentHotelId()}:${list}`;
+  const result = drawInfiniteRotation(
+    catalog,
+    rotationStates.get(stateKey) || {},
+    Math.min(Math.floor(Number(count) || 1), catalog.length)
+  );
+  rotationStates.set(stateKey, result.state);
+  return result.items.map((item) => rotationItemView(item, list));
+}
+
+function drawRotation(list, count) {
+  const target = Math.max(1, Math.min(12, Math.floor(Number(count) || 6)));
+  if (list !== "both") return drawRotationList(list, target);
+  const spanishCount = Math.ceil(target / 2);
+  const englishCount = target - spanishCount;
+  const spanish = drawRotationList("spanish", spanishCount);
+  const english = drawRotationList("english", englishCount);
+  const result = [];
+  for (let index = 0; result.length < target; index++) {
+    if (spanish[index]) result.push(spanish[index]);
+    if (english[index]) result.push(english[index]);
+  }
+  return result;
+}
+
+async function updateFavorite(body = {}) {
+  requireLocalSuperhost();
+  const hotelId = String(body.hotelId || currentHotelId()).trim();
+  if (!hotelId) throw new Error("Select a hotel first.");
+  const favorites = favoritesForHotel(hotelId);
+  const operation = String(body.operation || "add");
+  const favoriteId = String(body.favoriteId || "");
+  let next = favorites;
+  if (operation === "delete") {
+    next = favorites.filter((item) => item.favoriteId !== favoriteId);
+  } else {
+    const candidate = normalizeFavoriteSongs([{
+      favoriteId: favoriteId || randomUUID(),
+      song: body.song,
+      artist: body.artist,
+      language: body.language
+    }])[0];
+    if (!candidate) throw new Error("Enter the song and artist.");
+    if (operation === "update") {
+      if (!favoriteId || !favorites.some((item) => item.favoriteId === favoriteId)) {
+        throw new Error("That favorite is no longer available.");
+      }
+      next = favorites.map((item) =>
+        item.favoriteId === favoriteId ? candidate : item
+      );
+    } else if (!favorites.some((item) => rotationSongKey(item) === rotationSongKey(candidate))) {
+      next = [...favorites, candidate];
+    }
+  }
+  config = await saveConfig(sanitizeConfig({
+    ...config,
+    favoriteSongsByHotel: {
+      ...config.favoriteSongsByHotel,
+      [hotelId]: next
+    }
+  }, config));
+  rotationStates.delete(`${hotelId}:favorites`);
+  return { ok: true, favorites: favoritesForHotel(hotelId) };
+}
 
 function guestStarConfigured() {
   return Boolean(config.appsScriptUrl && (hasV4Session(config) || config.hostPin));
@@ -1132,6 +1258,14 @@ function stateView() {
     },
     clipboard: clipboardState,
     hitSuggestions,
+    rotation: {
+      favorites: config.lastHotelId ? favoritesForHotel(config.lastHotelId) : [],
+      counts: {
+        spanish: ROTATION_CATALOGS.spanish.length,
+        english: ROTATION_CATALOGS.english.length,
+        favorites: config.lastHotelId ? favoritesForHotel(config.lastHotelId).length : 0
+      }
+    },
     singerCandidates: [
       ...new Set(
         requests
@@ -1527,7 +1661,7 @@ async function queueRequest(id, requestedPath, options = {}) {
         lastSeenAt: new Date().toISOString()
       });
     } catch (error) {
-      warning = `The song entered VirtualDJ, but the Sheet was not updated: ${errorMessage(error)}`;
+      warning = `The song entered VirtualDJ, but Guest Star did not confirm the update: ${errorMessage(error)}`;
     }
     return {
       ok: true,
@@ -1587,7 +1721,7 @@ async function removeQueuedRequest(id) {
     } catch (error) {
       warning =
         warning ||
-        `The song was removed from VirtualDJ, but the Sheet was not updated: ${errorMessage(error)}`;
+        `The song was removed from VirtualDJ, but Guest Star did not confirm the update: ${errorMessage(error)}`;
     }
     return {
       ok: true,
@@ -1624,7 +1758,7 @@ async function dismissRequeue(id) {
   try {
     await updateBridgeRequest(config, id, item.status, "");
   } catch (error) {
-    warning = `The decision was saved locally, but the Sheet was not updated: ${errorMessage(error)}`;
+    warning = `The decision was saved locally, but Guest Star did not confirm the update: ${errorMessage(error)}`;
   }
   return { ok: true, warning };
 }
@@ -1695,7 +1829,7 @@ async function setRequestOutcome(id, outcome) {
       if (data?.state) applyActivityState(data);
     } catch (error) {
       warning =
-        `The outcome is visible in Bridge, but the Sheet was not updated: ${errorMessage(error)}`;
+        `The outcome is visible in Bridge, but Guest Star did not confirm the update: ${errorMessage(error)}`;
     }
     return {
       ok: true,
@@ -1875,7 +2009,7 @@ async function prepareHitSuggestionYoutube() {
 }
 
 async function queueHitSuggestion(body = {}) {
-  const suggestions = selectHitSuggestions(
+  const automaticSuggestions = selectHitSuggestions(
     requests,
     libraryFiles,
     activityState.activityId,
@@ -1883,11 +2017,18 @@ async function queueHitSuggestion(body = {}) {
   );
   const song = String(body.song || "").trim();
   const artist = String(body.artist || "").trim();
-  const suggestion = suggestions.find(
+  const requested = {
+    song,
+    artist,
+    language: String(body.language || "Español")
+  };
+  const favorites = config.lastHotelId ? favoritesForHotel(config.lastHotelId) : [];
+  const known = isKnownRotationSong(requested, favorites);
+  const suggestion = automaticSuggestions.find(
     (item) =>
       normalizeText(item.song) === normalizeText(song) &&
       normalizeText(item.artist) === normalizeText(artist)
-  );
+  ) || (known ? rotationItemView(requested, String(body.list || "favorites")) : null);
   if (!suggestion) throw new Error("The suggestion is no longer available.");
   if (!suggestion.localAvailable || !suggestion.filePath) {
     throw new Error("That suggested song is not yet in the local library.");
@@ -2096,6 +2237,92 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
+  if (request.method === "POST" && pathname === "/api/rotation/draw") {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    const list = String(body.list || "both").toLowerCase();
+    const items = drawRotation(list, body.count);
+    json(response, 200, { ok: true, list, items });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/favorites") {
+    const body = await readJson(request);
+    json(response, 200, await updateFavorite(body));
+    broadcastState();
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/superhost/preferences") {
+    requireLocalSuperhost();
+    const body = await readJson(request);
+    config = await saveConfig(sanitizeConfig({
+      ...config,
+      superhostLanguage: body.language
+    }, config));
+    json(response, 200, {
+      ok: true,
+      language: config.superhostLanguage
+    });
+    broadcastState();
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/superhost/state") {
+    requireLocalSuperhost();
+    const data = await v4AppsScriptAction(config, "adminState");
+    json(response, 200, {
+      ...data,
+      localFavoritesByHotel: config.favoriteSongsByHotel || {}
+    });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/superhost/action") {
+    requireLocalSuperhost();
+    const body = await readJson(request);
+    const action = String(body.action || "");
+    const allowed = new Set([
+      "adminState", "createHotel", "updateHotel", "createVenue",
+      "createActivity", "createHost", "updateHost", "assignUser",
+      "revokeAssignment", "revokeDevice", "updateHotelBranding",
+      "scheduleActivity", "cancelSchedule", "listReviews", "updateReview",
+      "regenerateHotelQr", "hotelShare"
+    ]);
+    if (!allowed.has(action)) throw new Error("Superhost action not allowed.");
+    const data = await v4AppsScriptAction(config, action, body);
+    if ([
+      "createHotel", "updateHotel", "createVenue", "createActivity",
+      "assignUser", "revokeAssignment"
+    ].includes(action)) {
+      const identity = await fetchBridgeIdentity(config);
+      identityState = {
+        authenticated: true,
+        user: identity.user || identityState.user,
+        selection: identity.selection || { hotels: [], venues: [], activities: [] }
+      };
+    }
+    if (
+      action === "updateHotel" &&
+      body.status === "inactive" &&
+      String(body.hotelId || "") === String(config.lastHotelId || "")
+    ) {
+      config = await saveConfig(sanitizeConfig({
+        ...config,
+        lastHotelId: "",
+        lastVenueId: "",
+        lastActivityId: ""
+      }, config));
+      tenantState = {
+        hotel: null,
+        venue: null,
+        activity: null,
+        permissions: {},
+        share: null,
+        upcomingActivities: []
+      };
+      requests = [];
+    }
+    json(response, 200, data);
+    broadcastState();
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/auth/login") {
     const body = await readJson(request);
     const data = await signInBridge(config, {
@@ -2206,12 +2433,6 @@ async function api(request, response, url) {
     await persistQueuedEntries(activityState.activityId);
     await syncNow();
     json(response, 200, stateView());
-    return;
-  }
-  if (request.method === "POST" && pathname === "/api/host-panel/open") {
-    const data = await createHostPanelLogin(config);
-    const openedUrl = await openMacUrl(data.url);
-    json(response, 200, { ok: true, url: openedUrl, expiresAt: data.expiresAt });
     return;
   }
   if (request.method === "POST" && pathname === "/api/config") {
@@ -2478,7 +2699,7 @@ async function api(request, response, url) {
     const data = await fetchBridgeQueue(testConfig);
     if (data.codeVersion !== BRIDGE_VERSION) {
       throw new Error(
-        `The Sheet responds, but it uses Code.gs ${data.codeVersion || "older"}. Publish Code.gs ${BRIDGE_VERSION} as a new version.`
+        `Guest Star is connected, but its service version is ${data.codeVersion || "older"}. Contact the Superhost to install version ${BRIDGE_VERSION}.`
       );
     }
     json(response, 200, {

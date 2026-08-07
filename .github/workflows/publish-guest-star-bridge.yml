@@ -189,5 +189,5 @@ jobs:
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
               --title "Guest Star Experience ${VERSION} Universal" \
-              --notes "Guest Star ${VERSION} fixes same-version Bridge updates, routes Bridge traffic through the production proxy, and reports actionable Google Drive deployment errors. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
+              --notes "Guest Star ${VERSION} adds non-repeating Spanish, English and per-hotel favorite rotations; prevents duplicate VirtualDJ entries even when title and artist are reversed; generates every QR locally; and moves complete Superhost administration into Bridge with bilingual controls and recoverable hotel deletion. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, service code, source packages, checksums and guides."
           fi

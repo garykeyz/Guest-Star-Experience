@@ -27,7 +27,7 @@ async function callAppsScript(payload: JsonObject) {
       signal: controller.signal
     });
     const text = await response.text();
-    if (!response.ok) throw new Error(`Google Apps Script returned ${response.status}.`);
+    if (!response.ok) throw new Error(`Guest Star returned ${response.status}.`);
     return JSON.parse(text) as JsonObject;
   } finally {
     clearTimeout(timeout);
@@ -98,10 +98,10 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (error) {
     const message = error instanceof Error && error.name === "AbortError"
-      ? "Google Apps Script took too long to respond."
+      ? "Guest Star took too long to respond. Try again."
       : error instanceof Error
         ? error.message
-        : "The Host Panel could not connect to Google Apps Script.";
+        : "The Host Panel could not connect to Guest Star. Contact the Superhost if this continues.";
     return safeResponse({ ok: false, error: message }, 502);
   }
 }

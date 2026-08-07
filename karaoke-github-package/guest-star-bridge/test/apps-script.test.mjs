@@ -79,7 +79,7 @@ test("envía los controles compartidos con origen bridge", async (t) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({
       ok: true,
-      codeVersion: "4.0.1",
+      codeVersion: "4.1.0",
       state: { accepting: false, stateRevision: 8, activityId: "activity-2" },
       requests: []
     }));
@@ -230,7 +230,7 @@ test("actualiza duración, transición y apertura desde la app", async (t) => {
   });
 });
 
-test("avisa claramente cuando el Code.gs publicado todavía es anterior a 4.0", async (t) => {
+test("avisa al Host cuando el servicio publicado todavía es anterior a 4.1", async (t) => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ ok: false, code: "INVALID_ACTION" }));
@@ -246,6 +246,6 @@ test("avisa claramente cuando el Code.gs publicado todavía es anterior a 4.0", 
       },
       "reset"
     ),
-    /Code\.gs 4\.0/
+    /service version 4\.1\.0.*Contact the Superhost/i
   );
 });

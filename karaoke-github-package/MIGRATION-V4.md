@@ -7,7 +7,7 @@ la información por hotel.
 
 1. Descarga o conserva el release 3.0.7.
 2. Confirma que la hoja antigua tenga las solicitudes esperadas.
-3. Instala `Code.gs` 4.0.1 en el proyecto de Apps Script existente.
+3. Instala `Code.gs` 4.1.0 en el proyecto de Apps Script existente.
 4. Configura `INITIAL_HOTEL_NAME` y `INITIAL_HOTEL_TIMEZONE`.
 
 ## Ejecutar la migración

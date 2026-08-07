@@ -6,6 +6,7 @@ import {
   DEFAULT_CONFIG,
   LEGACY_DIRECT_APPS_SCRIPT_URL,
   migrateAppsScriptUrl,
+  publicConfig,
   sanitizeConfig
 } from "../src/config.mjs";
 
@@ -53,7 +54,7 @@ test("permite olvidar carpeta y PIN por separado al cerrar", () => {
   assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 8 recuerda sesión y selección sin guardar contraseñas", () => {
+test("la configuración 9 recuerda sesión y selección sin guardar contraseñas", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -69,11 +70,31 @@ test("la configuración 8 recuerda sesión y selección sin guardar contraseñas
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 8);
+  assert.equal(runtime.configVersion, 9);
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");
   assert.equal(Object.hasOwn(stored, "password"), false);
+});
+
+test("guarda favoritos independientes por hotel y elimina duplicados", () => {
+  const runtime = sanitizeConfig({
+    favoriteSongsByHotel: {
+      "hotel-1": [
+        { song: "Mi Vida", artist: "Divino", language: "Español" },
+        { song: "mi vida", artist: "divino", language: "Español" }
+      ],
+      "hotel-2": [
+        { song: "Dancing Queen", artist: "ABBA", language: "English" }
+      ]
+    },
+    superhostLanguage: "en"
+  }, DEFAULT_CONFIG);
+
+  assert.equal(runtime.favoriteSongsByHotel["hotel-1"].length, 1);
+  assert.equal(runtime.favoriteSongsByHotel["hotel-2"].length, 1);
+  assert.equal(runtime.superhostLanguage, "en");
+  assert.deepEqual(publicConfig(runtime).favoriteSongsByHotel, {});
 });
 
 test("la actualización migra cualquier endpoint directo de Apps Script al proxy estable", () => {

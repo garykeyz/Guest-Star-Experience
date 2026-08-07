@@ -1,7 +1,7 @@
-GUEST STAR BRIDGE 4.0.1 — GUÍA PARA LA MAC DEL DJ
+GUEST STAR BRIDGE 4.1.0 — GUÍA PARA LA MAC DEL DJ
 
 Esta guía es para una persona que operará Bridge + VirtualDJ en otra Mac.
-No necesita la cuenta Google del Superhost, Google Sheets ni Apps Script.
+Solo necesita su cuenta Host y la actividad asignada por el Superhost.
 
 COMPATIBILIDAD
 
@@ -11,11 +11,10 @@ COMPATIBILIDAD
 
 LO QUE EL SUPERHOST DEBE ENTREGAR
 
-1. APP ZIP o DMG oficial 4.0.1.
-2. Dirección del panel Host, por ejemplo https://host.gstarxp.com/host.
-3. Usuario Host y contraseña temporal.
-4. Nombre del hotel, sede y actividad asignados.
-5. Puerto y contraseña de Network Control, si existe.
+1. APP ZIP o DMG oficial 4.1.0.
+2. Usuario Host y contraseña temporal.
+3. Nombre del hotel, sede y actividad asignados.
+4. Puerto y contraseña de Network Control, si existe.
 
 PASO 1 — INSTALAR
 
@@ -36,7 +35,7 @@ PASO 2 — PREPARAR VIRTUALDJ
 PASO 3 — INICIAR SESIÓN Y ELEGIR ACTIVIDAD
 
 1. Abre Guest Star Bridge.
-2. Confirma que la pantalla de acceso muestre v4.0.1.
+2. Confirma que la pantalla de acceso muestre v4.1.0.
 3. Escribe el usuario y contraseña temporal entregados por el Superhost.
 4. Crea una contraseña nueva cuando se solicite.
 5. Selecciona únicamente el hotel, sede y actividad asignados.
@@ -71,13 +70,12 @@ PASO 6 — EVENTO
 IMPORTANTE
 
 - Bridge, VirtualDJ y biblioteca deben estar en la misma Mac.
-- La cuenta Google, Apps Script y las hojas permanecen en la nube del Superhost.
+- La administración del sistema pertenece al Superhost.
 - No compartas tu contraseña ni autorices una Mac ajena.
 - Usa un solo Bridge activo por actividad.
 - Si esta Mac deja de usarse, pide al Superhost que revoque el dispositivo.
 
 MIGRACIÓN 3.X
 
-La URL /exec y el PIN aparecen solo como opciones avanzadas para una migración.
-Una instalación 4.0 normal usa usuario Host y token de dispositivo; no debes
-pedir acceso a la cuenta Google.
+Las opciones técnicas de migración aparecen solo al Superhost. Una instalación
+4.1 normal usa usuario Host y token de dispositivo.

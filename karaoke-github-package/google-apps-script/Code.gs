@@ -11,8 +11,8 @@ const HEADERS = [
   "Last seen in VirtualDJ", "Status revision"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "4.0.1";
-const GUEST_STAR_CODE_BUILD = "4.0.1-sheets-only-hotel-2";
+const BRIDGE_API_VERSION = "4.1.0";
+const GUEST_STAR_CODE_BUILD = "4.1.0-superhost-bridge";
 const V4_SCHEMA_VERSION = "4.0.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_REQUIRED_OAUTH_SCOPES = [
@@ -2890,11 +2890,80 @@ function updateHotelForSuperhostV4_(auth, body) {
     changes.timezone = timezone;
   }
   if (body.status !== undefined) {
-    changes.status = body.status === "inactive" ? "inactive" : "active";
+    const deleting = body.status === "inactive";
+    if (deleting && clean_(body.confirmHotelName) !== String(hotel.name)) {
+      return {
+        ok: false,
+        code: "HOTEL_NAME_CONFIRMATION_REQUIRED",
+        error: "Type the hotel name exactly to confirm deletion."
+      };
+    }
+    changes.status = deleting ? "inactive" : "active";
   }
   updateRecordV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels, hotel._row, changes);
-  auditV4_({ userId: auth.user.userId, action: "hotel.updated", hotelId: hotel.hotelId, details: changes });
-  return { ok: true, hotel: Object.assign({}, hotel, changes) };
+  const suspended = { assignments: 0, schedules: 0, devices: 0 };
+  if (changes.status) {
+    const dependentStatus = changes.status === "inactive" ? "suspended_hotel" : "active";
+    tableRowsV4_(auth.master, "UserAssignments", V4_MASTER_TABLES.UserAssignments)
+      .filter(function(record) {
+        return record.hotelId === hotel.hotelId && (
+          changes.status === "inactive"
+            ? record.status === "active"
+            : record.status === "suspended_hotel"
+        );
+      }).forEach(function(record) {
+        updateRecordV4_(auth.master, "UserAssignments", V4_MASTER_TABLES.UserAssignments, record._row, {
+          status: dependentStatus,
+          updatedAt: isoNowV4_()
+        });
+        suspended.assignments += 1;
+      });
+    tableRowsV4_(auth.master, "ActivitySchedules", V4_MASTER_TABLES.ActivitySchedules)
+      .filter(function(record) {
+        return record.hotelId === hotel.hotelId && (
+          changes.status === "inactive"
+            ? record.status === "active"
+            : record.status === "suspended_hotel"
+        );
+      }).forEach(function(record) {
+        updateRecordV4_(auth.master, "ActivitySchedules", V4_MASTER_TABLES.ActivitySchedules, record._row, {
+          status: dependentStatus,
+          updatedAt: isoNowV4_()
+        });
+        suspended.schedules += 1;
+      });
+    if (changes.status === "inactive") {
+      tableRowsV4_(auth.master, "Devices", V4_MASTER_TABLES.Devices)
+        .filter(function(record) {
+          return record.hotelId === hotel.hotelId && record.status === "active";
+        }).forEach(function(record) {
+          updateRecordV4_(auth.master, "Devices", V4_MASTER_TABLES.Devices, record._row, {
+            hotelId: "",
+            venueId: "",
+            activityId: "",
+            updatedAt: isoNowV4_()
+          });
+          suspended.devices += 1;
+        });
+    }
+  }
+  const auditAction = changes.status === "inactive"
+    ? "hotel.deleted"
+    : changes.status === "active"
+      ? "hotel.restored"
+      : "hotel.updated";
+  auditV4_({
+    userId: auth.user.userId,
+    action: auditAction,
+    hotelId: hotel.hotelId,
+    details: Object.assign({}, changes, { dependents: suspended })
+  });
+  return {
+    ok: true,
+    hotel: Object.assign({}, hotel, changes),
+    suspended: suspended,
+    recoverable: true
+  };
 }
 
 function updateHostUserV4_(auth, body) {

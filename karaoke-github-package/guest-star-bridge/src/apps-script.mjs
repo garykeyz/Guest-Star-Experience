@@ -1,14 +1,14 @@
 async function parseResponse(response) {
   const text = await response.text();
-  if (!response.ok) throw new Error(`Google Apps Script returned ${response.status}.`);
+  if (!response.ok) throw new Error(`Guest Star returned ${response.status}.`);
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Google Apps Script did not return a valid JSON response.");
+    throw new Error("Guest Star did not return a valid response.");
   }
 }
 
-const REQUIRED_CODE_VERSION = "4.0.1";
+const REQUIRED_CODE_VERSION = "4.1.0";
 const APPS_SCRIPT_TIMEOUT_MS = 70000;
 
 function endpoint(config) {
@@ -120,7 +120,7 @@ export function syncExternalVirtualDjEntries(config, entries, confirmedMissingId
 }
 
 export async function appsScriptAction(config, action, extra = {}) {
-  if (!config.appsScriptUrl) throw new Error("Configure the Google Apps Script URL.");
+  if (!config.appsScriptUrl) throw new Error("Configure the Guest Star connection.");
   if (!config.hostPin) throw new Error("Configure the private legacy host PIN.");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
@@ -137,13 +137,13 @@ export async function appsScriptAction(config, action, extra = {}) {
       const message =
         data.code === "INVALID_PIN"
           ? "The legacy host PIN does not match."
-          : data.error || data.code || "Google Apps Script rejected the request.";
+          : data.error || data.code || "Guest Star rejected the request.";
       throw new Error(message);
     }
     return data;
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error("Google Apps Script did not respond in time.");
+      throw new Error("Guest Star did not respond in time.");
     }
     throw error;
   } finally {
@@ -162,7 +162,7 @@ export async function fetchBridgeQueue(config) {
   const data = await appsScriptAction(config, "bridgeQueue");
   if (!Array.isArray(data.requests)) {
     throw new Error(
-      "The published Apps Script deployment did not return the queue. Publish Code.gs as a new version."
+      "Guest Star did not return the request queue. Contact the Superhost."
     );
   }
   return data;
@@ -279,30 +279,30 @@ export async function controlActivity(config, action) {
       String(error?.message || "").includes("not allowed")
     ) {
       throw new Error(
-        `The published Code.gs is outdated. Install Code.gs ${REQUIRED_CODE_VERSION} and publish a new version.`
+        `Guest Star needs service version ${REQUIRED_CODE_VERSION}. Contact the Superhost to update it.`
       );
     }
     throw error;
   }
   if (!data?.state || !Array.isArray(data.requests)) {
     throw new Error(
-      `Google Sheets did not confirm the change. Install Code.gs ${REQUIRED_CODE_VERSION} and publish a new version.`
+      `Guest Star did not confirm the change. Contact the Superhost and report version ${REQUIRED_CODE_VERSION}.`
     );
   }
   if (action === "open" && data.state.accepting === false) {
-    throw new Error("Google Sheets did not confirm that requests are open.");
+    throw new Error("Guest Star did not confirm that requests are open.");
   }
   if (action === "close" && data.state.accepting !== false) {
-    throw new Error("Google Sheets did not confirm that requests are closed.");
+    throw new Error("Guest Star did not confirm that requests are closed.");
   }
   if (action === "reset" && data.state.lastAction !== "reset") {
-    throw new Error("Google Sheets did not confirm the activity reset.");
+    throw new Error("Guest Star did not confirm the activity reset.");
   }
   if (action === "start" && data.state.lastAction !== "start") {
-    throw new Error("Google Sheets did not confirm the activity start.");
+    throw new Error("Guest Star did not confirm the activity start.");
   }
   if (action === "reset" && data.requests.length !== 0) {
-    throw new Error("Google Sheets did not archive every request during reset.");
+    throw new Error("Guest Star did not archive every request during reset.");
   }
   return data;
 }

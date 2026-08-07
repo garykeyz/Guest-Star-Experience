@@ -15,7 +15,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.0.1"
+      "X-Guest-Star-Bridge-Proxy": "4.1.0"
     }
   });
 }
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     if (!upstream.ok) {
       return response({
         ok: false,
-        error: `Google Apps Script returned ${upstream.status}.`
+        error: `The Guest Star service returned ${upstream.status}. Contact the Superhost if this continues.`
       }, 502);
     }
     try {
@@ -59,15 +59,15 @@ export async function POST(request: NextRequest) {
     } catch {
       return response({
         ok: false,
-        error: "Google Apps Script did not return a valid JSON response."
+        error: "The Guest Star service returned an invalid response. Contact the Superhost."
       }, 502);
     }
   } catch (error) {
     return response({
       ok: false,
       error: error instanceof Error && error.name === "AbortError"
-        ? "Google Apps Script took longer than 60 seconds to respond."
-        : "The Bridge proxy could not reach Google Apps Script."
+        ? "Guest Star took longer than 60 seconds to respond. Try again."
+        : "Bridge could not reach Guest Star. Contact the Superhost if this continues."
     }, 502);
   } finally {
     clearTimeout(timeout);

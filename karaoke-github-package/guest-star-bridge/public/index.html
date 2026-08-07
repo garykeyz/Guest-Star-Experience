@@ -17,7 +17,8 @@
         <p class="subtitle">Local library · YouTube · Live VirtualDJ Karaoke queue</p>
       </div>
       <div class="topbar-actions">
-        <button class="button ghost hidden" id="openHostPanel">Open Host Panel</button>
+        <button class="button ghost hidden" id="openHostPanel">Superhost</button>
+        <button class="button ghost hidden" id="liveEventButton">Evento en vivo</button>
         <button class="button ghost hidden" id="switchActivity">Switch Activity</button>
         <button class="button ghost hidden" id="logoutButton">Log Out</button>
         <div class="live-pill"><i></i> LOCAL BRIDGE</div>
@@ -25,6 +26,23 @@
     </header>
 
     <main>
+      <section id="superhostWorkspace" class="superhost-workspace hidden" aria-live="polite">
+        <header class="superhost-hero">
+          <div>
+            <p class="eyebrow">GUEST STAR EXPERIENCE</p>
+            <h2 id="superhostTitle">Panel Superhost</h2>
+            <p id="superhostSubtitle">Administra toda la operación desde el Bridge.</p>
+          </div>
+          <div class="language-switch" role="group" aria-label="Language">
+            <button type="button" class="button ghost" data-superhost-language="es">Español</button>
+            <button type="button" class="button ghost" data-superhost-language="en">English</button>
+          </div>
+        </header>
+        <nav id="superhostTabs" class="superhost-tabs" aria-label="Superhost sections"></nav>
+        <section id="superhostNotice" class="notice hidden" role="status"></section>
+        <section id="superhostContent" class="superhost-content"></section>
+      </section>
+
       <section class="status-grid" aria-label="Connection status">
         <article class="status-card" id="libraryStatus">
           <span class="status-icon">♫</span>
@@ -112,6 +130,23 @@
 
       <section id="notice" class="notice hidden" role="status"></section>
       <section id="requests" class="request-groups" aria-live="polite"></section>
+      <section id="randomRotation" class="hit-suggestions rotation-panel hidden">
+        <div class="hit-header rotation-header">
+          <div>
+            <p class="eyebrow">ALEATORIO · RANDOM</p>
+            <h2>Listas infinitas para llenar la rotación</h2>
+            <p>Sin repetir temas hasta completar cada vuelta.</p>
+          </div>
+          <div class="rotation-controls">
+            <button class="button ghost" id="randomSpanish">Español</button>
+            <button class="button ghost" id="randomEnglish">English</button>
+            <button class="button ghost" id="randomFavorites">Favoritos</button>
+            <button class="button primary" id="randomBoth">Ambas listas</button>
+          </div>
+        </div>
+        <p id="rotationEmpty" class="group-empty">Elige una lista para generar los próximos temas.</p>
+        <div id="rotationGrid" class="hit-grid"></div>
+      </section>
       <section id="hitSuggestions" class="hit-suggestions hidden"></section>
     </main>
 
@@ -216,14 +251,14 @@
       <form id="loginForm">
         <p class="eyebrow">WELCOME TO GUEST STAR BRIDGE · <span id="bridgeVersion">v—</span></p>
         <h2>Sign in</h2>
-        <p>Use the account created for you by the Superhost. Your Google account is not required on this Mac.</p>
+        <p>Use the account created for you by the Superhost.</p>
         <label for="loginUsername">Username or email</label>
         <input id="loginUsername" autocomplete="username" required />
         <label for="loginPassword">Password</label>
         <input id="loginPassword" type="password" autocomplete="current-password" required />
         <p class="first-login-help">
-          First installation or no temporary password? Open the master Google Sheet and choose
-          <strong>🎤 Karaoke → Set Up or Recover Superhost Access</strong>.
+          Forgot your username or password, or having trouble signing in?
+          <strong>Contact your Superhost.</strong>
         </p>
         <label class="toggle memory-toggle">
           <input id="rememberLogin" type="checkbox" checked />
@@ -280,6 +315,7 @@
           <button type="button" class="close-button" id="closeShare" aria-label="Close">×</button>
         </header>
         <img id="shareQr" class="share-qr" alt="Permanent Guest Star QR code" />
+        <p id="shareQrStatus" class="settings-help">Generated securely on this Mac.</p>
         <input id="shareUrl" readonly />
         <div class="button-row">
           <button type="button" class="button primary" id="copyShareLink">Copy Link</button>
@@ -350,6 +386,7 @@
       </article>
     </template>
 
+    <script src="/vendor/qrcode.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
