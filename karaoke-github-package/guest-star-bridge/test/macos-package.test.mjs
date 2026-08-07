@@ -68,3 +68,15 @@ test("la publicación y el instructivo entregan el paquete Universal 4.0.0", () 
   assert.match(guideSource, /No necesitas instalar Node, npm ni usar Terminal/);
   assert.match(guideSource, /clic derecho sobre Guest Star Bridge y elige Abrir/);
 });
+
+test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare", () => {
+  assert.match(workflowSource, /validate:\s*\n\s*runs-on: ubuntu-latest/);
+  assert.match(workflowSource, /npm ci --ignore-scripts/);
+  assert.match(workflowSource, /npm audit --audit-level=low/);
+  assert.match(workflowSource, /Test Bridge and Apps Script regression suite/);
+  assert.match(workflowSource, /npx tsc --noEmit/);
+  assert.match(workflowSource, /npm run build/);
+  assert.match(workflowSource, /npm run test:http/);
+  assert.match(workflowSource, /npx opennextjs-cloudflare build/);
+  assert.match(workflowSource, /release:\s*\n\s*needs: validate/);
+});
