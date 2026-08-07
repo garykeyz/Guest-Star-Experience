@@ -12,7 +12,7 @@ const HEADERS = [
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.0.1";
-const GUEST_STAR_CODE_BUILD = "4.0.1-drive-fallback-1";
+const GUEST_STAR_CODE_BUILD = "4.0.1-sheets-only-hotel-2";
 const V4_SCHEMA_VERSION = "4.0.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_REQUIRED_OAUTH_SCOPES = [
@@ -1665,7 +1665,7 @@ function createHotelSpreadsheetV4_(hotel, legacySource, destinationFolder) {
       spreadsheet.getSheetByName(CONFIG).getRange("B4").setValue(false);
     }
   } catch (error) {
-    if (spreadsheet) {
+    if (spreadsheet && destinationFolder) {
       try {
         DriveApp.getFileById(spreadsheet.getId()).setTrashed(true);
       } catch (cleanupError) {
@@ -2746,8 +2746,6 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
       hotel: existingHotel
     };
   }
-  const driveReadiness = guestStarDriveReadinessV4_(auth.master);
-  const destinationFolder = driveReadiness.ok ? driveReadiness.folder : null;
   const now = isoNowV4_();
   const hotelId = Utilities.getUuid();
   const slug = uniqueSlugV4_(auth.master, body.slug || name, "");
@@ -2769,10 +2767,8 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
     updatedAt: now
   };
   try {
-    hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null, destinationFolder);
-    hotel.qrFileId = destinationFolder
-      ? createHotelQrV4_(hotel, destinationFolder)
-      : "";
+    hotel.dataSheetId = createHotelSpreadsheetV4_(hotel, null, null);
+    hotel.qrFileId = "";
   } catch (error) {
     const detail = String(error && error.message ? error.message : error).slice(0, 500);
     console.error(JSON.stringify({
@@ -2872,9 +2868,7 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
     hotel: saved,
     venue: venue,
     activity: activity,
-    warning: driveReadiness.ok
-      ? ""
-      : "The hotel Sheet was created in My Drive. Folder organization and Drive-stored QR were skipped, but the direct QR remains available."
+    warning: "The hotel Sheet was created in My Drive. Folder organization and Drive-stored QR were skipped, but the direct QR remains available."
   };
 }
 
