@@ -5,9 +5,41 @@ import {
   appsScriptAction,
   controlActivity,
   searchKaraokeYouTube,
+  signInBridge,
   updateBridgeConfig,
   updateBridgeRequest
 } from "../src/apps-script.mjs";
+
+test("espera el arranque lento de Apps Script al iniciar sesion", async (t) => {
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) {
+      // Consume the request body before simulating an Apps Script cold start.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10500));
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      authToken: "auth-token",
+      deviceToken: "device-token",
+      deviceId: "device-1",
+      user: { userId: "user-1", role: "superhost" },
+      selection: { hotels: [], venues: [], activities: [] }
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await signInBridge({
+    appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`
+  }, {
+    username: "superhost",
+    password: "temporary-password",
+    deviceName: "Guest Star Bridge test"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deviceId, "device-1");
+});
 
 test("envía al Apps Script la acción, el PIN y los datos de la solicitud", async (t) => {
   let received;
