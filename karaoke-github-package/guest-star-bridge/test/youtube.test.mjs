@@ -167,6 +167,6 @@ test("abre enlaces web con macOS sin crear una ventana en el WebView", async () 
 test("rechaza esquemas que no son enlaces web", async () => {
   await assert.rejects(
     openMacUrl("file:///Users/Yefry/secret.txt", { platform: "darwin" }),
-    /Solo se pueden abrir enlaces web/
+    /Only secure web links can be opened/
   );
 });

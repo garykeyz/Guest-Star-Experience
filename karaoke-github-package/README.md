@@ -1,88 +1,101 @@
-# Guest Star Experience — Karaoke Host
+# Guest Star Experience 4.0.0
 
-## Instalar en GitHub
-Sube el contenido de esta carpeta dentro de `karaoke-github-package`, reemplazando los archivos existentes.
+Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
+sincronización con VirtualDJ.
 
-Cloudflare:
+## Modelo 4.0
+
+El **Superhost** administra el sistema desde su propia cuenta de Google:
+
+- un Apps Script central;
+- una hoja maestra central;
+- una hoja independiente por hotel, creada automáticamente al registrar el
+  hotel;
+- usuarios y permisos dentro del registro maestro, sin crear hojas por usuario;
+- enlace público permanente y QR por hotel;
+- panel seguro `/host` para Superhost y Hosts, sin compartir Google.
+
+Al crear un hotel desde el panel se crean en una sola operación: hoja del hotel,
+sede principal, actividad Guest Star Karaoke, identidad inicial, enlace, QR y
+asignación del Superhost.
+
+## Primera configuración
+
+Lee [MULTIUSER-SETUP.md](MULTIUSER-SETUP.md). El resumen es:
+
+1. El Superhost crea una hoja maestra en Google Sheets.
+2. Abre su Apps Script ligado y pega `google-apps-script/Code.gs`.
+3. Ejecuta `setupMultiUserV4` y guarda la contraseña temporal mostrada una vez.
+4. Implementa como aplicación web, ejecutando como el Superhost y con acceso
+   para cualquier persona.
+5. Configura la URL `/exec` como `KARAOKE_APPS_SCRIPT_URL` del sitio.
+6. Entra en `/host`, cambia la contraseña y crea hoteles/usuarios.
+
+La autorización inicial de Google no puede automatizarse sin consentimiento del
+propietario. Después de ese único paso, hoteles, hojas, sedes, actividades,
+enlaces y QR sí se crean desde el panel.
+
+## Despliegue web
+
 - Root directory: `karaoke-github-package`
-- Build command: `npx opennextjs-cloudflare build`
-- Deploy command: `npx wrangler deploy`
+- Build: `npx opennextjs-cloudflare build`
+- Deploy: `npx wrangler deploy`
+- Variable requerida: `KARAOKE_APPS_SCRIPT_URL=https://script.google.com/.../exec`
 
-## Google Apps Script
-1. Abre la hoja y entra a Extensiones → Apps Script.
-2. Reemplaza `Code.gs` por `google-apps-script/Code.gs`.
-3. Ejecuta `setup`.
-   Si el proyecto es independiente, la confirmación aparece en el Registro de ejecución
-   en vez de una ventana emergente.
-4. Ejecuta `configurarCredenciales`.
-5. Implementar → Administrar implementaciones → Editar.
-6. Selecciona **Nueva versión**, ejecutar como tú y acceso para **Cualquier persona**.
-7. Confirma que la URL `/exec` continúe siendo la misma.
+El mismo despliegue puede servir `request.gstarxp.com` y el dominio Host. La
+página pública usa `/h/<hotel>` y el panel seguro usa `/host`.
 
-El menú **🎤 Karaoke** permitirá iniciar, abrir, cerrar y reiniciar desde la hoja. El botón **HOST** de la página utiliza el mismo PIN.
+## Bridge Universal para Mac
 
-Esta versión guarda los tiempos como duraciones reales, repara automáticamente
-los contadores que Google haya convertido en fechas de 1899 y mantiene un estado
-compartido para **iniciar, abrir, cerrar y reiniciar** desde la web, Google Sheets o el
-Bridge local.
+`guest-star-bridge` conecta la actividad autorizada con:
 
-## Guest Star Bridge 3.0.7 Universal para Mac
+- carpetas locales de karaoke;
+- cola Karaoke real de VirtualDJ mediante Network Control;
+- búsqueda de hasta seis versiones Karaoke/Lyrics respetando estrictamente el
+  idioma seleccionado;
+- comandos remotos del panel Host y estado del dispositivo.
 
-La carpeta `guest-star-bridge` conecta las solicitudes de esta misma hoja con:
+La app incluye motores Intel `x86_64` y Apple Silicon `arm64` (M1–M5), usa
+macOS Keychain para secretos y no requiere Node, npm ni Terminal en la Mac del
+operador.
 
-- las canciones guardadas en el disco local;
-- hasta seis opciones directas de YouTube cuando falta una canción, priorizando
-  karaoke con letras y usando lyrics con voces como respaldo;
-- la rotación Karaoke de VirtualDJ con el nombre del cantante.
+## Funciones principales
 
-Después de actualizar `Code.gs` y publicar una **Nueva versión**, abre
-`guest-star-bridge/INICIAR-GUEST-STAR.command`. La guía completa está dentro de
-`guest-star-bridge/README.md`.
+- selector de idioma obligatorio para cada canción;
+- un enlace priorizado en Sheets y seis opciones para el Host;
+- orden real de llegada, cola VDJ, acumulados, turno estimado y hora final;
+- reloj por segundo y duración exacta más transición;
+- dedicatorias visibles;
+- deshacer Completed/Skipped con restauración de posición;
+- prevención de falsos “falta local” y duplicados durante la sincronización;
+- horarios y recurrencia por zona horaria;
+- estado público opcional, cuenta regresiva, siguiente actividad y calendario;
+- identidad por hotel, reseñas opcionales y recordatorios solo con consentimiento;
+- sesiones, dispositivos, permisos por tenant y registro de auditoría.
 
-El Bridge deja que el host elija qué enlace copiar y vigila las carpetas en
-tiempo real. Cuando un archivo aparece, se mueve o se borra, la interfaz se
-actualiza al momento. Si una pista desaparece, el Bridge vuelve a buscar hasta
-seis opciones de YouTube para que el host elija cuál copiar. El escaneo cada
-10 segundos permanece como respaldo.
+## Documentación
 
-La versión 3.0.7 exige que el huésped elija el idioma de la canción antes de
-mostrar el formulario. El idioma se guarda en Sheets, aparece en la tarjeta del
-Bridge y determina el orden de canales usado para las seis opciones de YouTube.
-**Español** usa la lista ampliada de Latinoamérica.
-La pantalla de selección usa inglés como idioma universal y, al pulsar
-**Submit another song**, vuelve a pedir obligatoriamente el idioma de la nueva
-canción en lugar de reutilizar la selección anterior.
-El Bridge resalta a simple vista cualquier comentario o dedicatoria escrita por
-el solicitante, sin necesidad de desplegar las opciones de la canción.
+- [Guía del Superhost](SUPERHOST-GUIDE.md)
+- [Guía del Host](HOST-GUIDE.md)
+- [Migración 4.0](MIGRATION-V4.md)
+- [Seguridad](SECURITY.md)
+- [Enlace público y QR](PUBLIC-LINK-AND-QR.md)
+- [Horarios](ACTIVITY-SCHEDULING.md)
+- [Reseñas y experiencia](REVIEWS-AND-GUEST-EXPERIENCE.md)
+- [VirtualDJ](VIRTUALDJ-SYNC.md)
+- [Búsqueda por idioma](LANGUAGE-AWARE-SEARCH.md)
+- [Reconciliación de cola](QUEUE-RECONCILIATION.md)
 
-La versión 3.0.7 verifica la cola Karaoke real de VirtualDJ en cada
-sincronización. Si una canción enviada ya no está en la cola, pregunta si debe
-volver a colocarla al final o dejarla fuera. La interfaz conserva el número por
-orden de llegada y separa pendientes, en cola y finalizadas; un panel desplegable
-muestra la cola real, el turno, el acumulado y la hora estimada sin saturar la
-vista principal. Las solicitudes nuevas de Google Sheets se consultan cada dos
-segundos y también al volver a enfocar la aplicación.
+## Pruebas
 
-Esta versión actualiza el reloj y todas las sumas cada segundo, toma la duración
-exacta de VirtualDJ y permite deshacer **Ya cantó** o **Saltado**, restaurando la
-pista en su turno anterior, al final o fuera de la cola. La duración, transición
-y apertura de solicitudes se pueden editar desde el Bridge. Si la cola queda
-vacía, muestra temas hit para el EMCEE o para elegir un cantante al azar.
-También evita que Sheets convierta una transición de 30 segundos en 4:40:30 por
-la zona horaria histórica de Santo Domingo y calcula el tiempo confirmado con
-todas las pistas verificadas en la cola real de VirtualDJ.
-El menú HOST puede mostrar u ocultar un panel público traducido con el estado de
-inicio, el tiempo transcurrido, el tiempo faltante y la cantidad de personas en
-cola. La pestaña del navegador usa el favicon propio de Guest Star.
-Esas sugerencias alternan español e inglés; si falta una pista, permiten buscar
-y copiar su mejor enlace Karaoke. El formulario advierte en el idioma elegido
-cuando el cantante repite o cuando la canción ya fue pedida o cantada.
+```bash
+cd guest-star-bridge
+npm test
+```
 
-El formulario guarda en la columna Fuente un solo resultado Karaoke/Lyrics,
-respetando el idioma y la prioridad de canales; ya no guarda el video original.
-El Bridge conserva seis opciones para el host y actualiza esa única fuente si se
-elige otro enlace.
+Para la web:
 
-El paquete Universal funciona en Mac Intel y Apple Silicon M1–M5. La aplicación
-trae ambos motores nativos, inicia el servidor en segundo plano sin mostrar
-Terminal y presenta el panel dentro de su propia ventana de macOS.
+```bash
+npm ci
+npm run build
+```

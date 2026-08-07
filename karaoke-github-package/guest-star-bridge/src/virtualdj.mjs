@@ -135,12 +135,12 @@ async function request(config, endpoint, script) {
     });
     const text = (await response.text()).trim();
     if (!response.ok) {
-      throw new Error(`VirtualDJ respondió ${response.status}: ${text || "sin detalle"}`);
+      throw new Error(`VirtualDJ returned ${response.status}: ${text || "no details"}`);
     }
     return text;
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error("VirtualDJ no respondió a tiempo. Revisa Network Control y el puerto.");
+      throw new Error("VirtualDJ did not respond in time. Check Network Control and the port.");
     }
     throw error;
   } finally {
@@ -151,7 +151,7 @@ async function request(config, endpoint, script) {
 export async function executeVdj(config, script) {
   const result = await request(config, "execute", script);
   if (result.toLowerCase() === "false") {
-    throw new Error("VirtualDJ rechazó el comando.");
+    throw new Error("VirtualDJ rejected the command.");
   }
   return result;
 }
@@ -171,7 +171,7 @@ export async function listKaraokeEntries(config) {
   );
   if (!/^\d+$/.test(rawCount)) {
     throw new Error(
-      "VirtualDJ no devolvió el tamaño de la cola Karaoke. Comprueba que Network Control esté actualizado."
+      "VirtualDJ did not return the Karaoke queue size. Check that Network Control is up to date."
     );
   }
   const count = Math.min(500, Number.parseInt(rawCount, 10));
@@ -195,7 +195,7 @@ export async function listKaraokeEntries(config) {
     };
     if (!entry.filePath && !entry.singer && !entry.song && !entry.artist) {
       throw new Error(
-        `VirtualDJ informó ${count} canciones, pero no permitió leer la posición ${index + 1}.`
+        `VirtualDJ reported ${count} songs but did not allow queue position ${index + 1} to be read.`
       );
     }
     entries.push(entry);
@@ -204,11 +204,16 @@ export async function listKaraokeEntries(config) {
   return entries;
 }
 
-export async function insertKaraokeEntry(config, entry, targetIndex) {
+export async function insertKaraokeEntry(
+  config,
+  entry,
+  targetIndex,
+  options = {}
+) {
   const filePath = normalizedQueryValue(entry?.filePath);
   const singer = normalizedQueryValue(entry?.singer);
   if (!filePath || !singer) {
-    throw new Error("Faltan el archivo o el cantante para restaurar la canción.");
+    throw new Error("The file or singer is missing, so the song cannot be restored.");
   }
 
   const before = await listKaraokeEntries(config);
@@ -220,7 +225,8 @@ export async function insertKaraokeEntry(config, entry, targetIndex) {
       inserted: false,
       alreadyQueued: true,
       index: existing.index,
-      verified: true
+      verified: true,
+      entry: existing
     };
   }
 
@@ -232,25 +238,39 @@ export async function insertKaraokeEntry(config, entry, targetIndex) {
     config,
     buildKaraokeInsertScript(filePath, singer, desired, before.length)
   );
-  const after = await listKaraokeEntries(config);
-  const restored = after.find((candidate) =>
-    sameKaraokeIdentity(candidate, entry)
+  const attempts = Math.max(1, Math.min(6, Number(options.attempts) || 3));
+  const retryDelayMs = Math.max(
+    0,
+    Math.min(2000, Number(options.retryDelayMs) || 150)
   );
+  let after = [];
+  let restored = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    after = await listKaraokeEntries(config);
+    restored = after.find((candidate) =>
+      sameKaraokeIdentity(candidate, entry)
+    );
+    if (restored) break;
+    if (attempt + 1 < attempts && retryDelayMs > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs));
+    }
+  }
   if (!restored) {
     throw new Error(
-      "VirtualDJ recibió el comando, pero no confirmó la canción restaurada."
+      "VirtualDJ received the command but did not confirm the restored song."
     );
   }
   if (restored.index !== desired) {
     throw new Error(
-      `VirtualDJ agregó la canción, pero quedó en el turno ${restored.index + 1} en vez del ${desired + 1}.`
+      `VirtualDJ added the song at position ${restored.index + 1} instead of ${desired + 1}.`
     );
   }
   return {
     inserted: true,
     alreadyQueued: false,
     index: restored.index,
-    verified: true
+    verified: true,
+    entry: restored
   };
 }
 
@@ -260,7 +280,7 @@ export async function removeKaraokeEntry(config, entry) {
   const targetSong = normalizeVdjMetadata(entry?.song);
   const targetArtist = normalizeVdjMetadata(entry?.artist);
   if (!targetSinger || (!targetPath && !targetSong)) {
-    throw new Error("Faltan los datos para retirar esta solicitud de VirtualDJ.");
+    throw new Error("The request data required to remove it from VirtualDJ is missing.");
   }
 
   const entries = await listKaraokeEntries(config);
@@ -324,7 +344,7 @@ export async function removeKaraokeEntry(config, entry) {
   const updatedEntries = await listKaraokeEntries(config);
   if (updatedEntries.some((candidate) => sameKaraokeIdentity(candidate, selectedEntry))) {
     throw new Error(
-      "VirtualDJ recibió el comando, pero la canción todavía aparece en la cola Karaoke."
+      "VirtualDJ received the command, but the song is still in the Karaoke queue."
     );
   }
   return { removed: true, verified: true, index: selected };

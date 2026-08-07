@@ -262,15 +262,15 @@ def prepare_distribution(
     app_bundle: Path,
     readme: Path,
     installation_guide: Path,
-) -> None:
+) -> Path:
     if distribution.exists():
         shutil.rmtree(distribution)
     distribution.mkdir(parents=True)
     distributed_app = distribution / APP_NAME
-    # ditto conserva firmas ad-hoc guardadas como atributos extendidos (por
-    # ejemplo, la del helper Bash). shutil.copytree las descarta en macOS y
-    # produce un ZIP cuya aplicación deja de pasar codesign al descomprimirla.
-    run(["/usr/bin/ditto", str(app_bundle), str(distributed_app)])
+    # Both paths live in the same staging volume. A rename preserves every
+    # signature/xattr without keeping a second full copy of both Node runtimes,
+    # which also prevents the macOS release runner from exhausting its disk.
+    app_bundle.rename(distributed_app)
     run(
         [
             "codesign",
@@ -283,6 +283,7 @@ def prepare_distribution(
     )
     shutil.copy2(readme, distribution / "LEEME.txt")
     shutil.copy2(installation_guide, distribution / "INSTALACION-OTRA-MAC.txt")
+    return distributed_app
 
 
 def create_disk_image(distribution: Path, output_path: Path, version: str) -> None:
@@ -410,7 +411,7 @@ def main() -> None:
     sign_and_verify_app(app_bundle, node_arm64, node_x64)
 
     distribution = staging / "distribution"
-    prepare_distribution(
+    distributed_app = prepare_distribution(
         distribution,
         app_bundle,
         bridge_root / "macos" / "LEEME.txt",
@@ -424,7 +425,7 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "app": str(app_bundle),
+                "app": str(distributed_app),
                 "dmg": str(dmg_path),
                 "zip": str(zip_path),
                 "version": version,

@@ -1,18 +1,126 @@
 async function parseResponse(response) {
   const text = await response.text();
-  if (!response.ok) throw new Error(`Google Apps Script respondió ${response.status}.`);
+  if (!response.ok) throw new Error(`Google Apps Script returned ${response.status}.`);
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Google Apps Script no devolvió una respuesta JSON válida.");
+    throw new Error("Google Apps Script did not return a valid JSON response.");
   }
 }
 
-const REQUIRED_CODE_VERSION = "3.0.7";
+const REQUIRED_CODE_VERSION = "4.0.0";
+
+function endpoint(config) {
+  if (!config.appsScriptUrl) throw new Error("Guest Star connection is not configured.");
+  return config.appsScriptUrl;
+}
+
+async function postPayload(config, payload, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(endpoint(config), {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    const data = await parseResponse(response);
+    if (!data.ok) {
+      const messages = {
+        INVALID_PIN: "The legacy host PIN does not match.",
+        UNAUTHORIZED: "Your Guest Star session expired. Sign in again.",
+        FORBIDDEN: "Your account does not have permission for this action.",
+        DEVICE_REVOKED: "This Bridge computer was revoked by the Superhost.",
+        BRIDGE_OFFLINE: "The selected Bridge is offline."
+      };
+      throw new Error(messages[data.code] || data.error || data.code || "Guest Star rejected the request.");
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Guest Star did not respond in time.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function hasV4Session(config) {
+  return Boolean(config.authToken && config.deviceToken && config.deviceId);
+}
+
+export function v4AppsScriptAction(config, action, extra = {}) {
+  if (!config.authToken) throw new Error("Sign in to Guest Star first.");
+  return postPayload(config, {
+    action,
+    authToken: config.authToken,
+    deviceToken: config.deviceToken || "",
+    ...extra
+  });
+}
+
+export function signInBridge(config, credentials) {
+  return postPayload(config, {
+    action: "login",
+    username: credentials.username,
+    password: credentials.password,
+    clientType: "bridge",
+    deviceId: config.deviceId || credentials.deviceId || "",
+    deviceName: credentials.deviceName || "Guest Star Bridge",
+    bridgeVersion: REQUIRED_CODE_VERSION,
+    rememberLogin: credentials.rememberLogin !== false
+  });
+}
+
+export function signOutBridge(config) {
+  return v4AppsScriptAction(config, "logout");
+}
+
+export function fetchBridgeIdentity(config) {
+  return v4AppsScriptAction(config, "me");
+}
+
+export function selectBridgeActivity(config, selection) {
+  return v4AppsScriptAction(config, "selectActivity", selection);
+}
+
+export function createHostPanelLogin(config) {
+  return v4AppsScriptAction(config, "createOneTimeLoginCode");
+}
+
+export function sendBridgeHeartbeat(config, status = {}) {
+  return v4AppsScriptAction(config, "bridgeHeartbeat", {
+    bridgeVersion: REQUIRED_CODE_VERSION,
+    virtualDJConnected: status.virtualDJConnected === true
+  });
+}
+
+export function pollBridgeCommands(config) {
+  return v4AppsScriptAction(config, "pollBridgeCommands");
+}
+
+export function completeBridgeCommand(config, commandId, result) {
+  return v4AppsScriptAction(config, "completeBridgeCommand", {
+    commandId,
+    ok: result.ok === true,
+    result: result.result || {},
+    errorMessage: result.errorMessage || ""
+  });
+}
+
+export function syncExternalVirtualDjEntries(config, entries, confirmedMissingIds = []) {
+  return v4AppsScriptAction(config, "bridgeExternalSync", {
+    entries,
+    confirmedMissingIds
+  });
+}
 
 export async function appsScriptAction(config, action, extra = {}) {
-  if (!config.appsScriptUrl) throw new Error("Configura el enlace de Google Apps Script.");
-  if (!config.hostPin) throw new Error("Configura el PIN privado del host.");
+  if (!config.appsScriptUrl) throw new Error("Configure the Google Apps Script URL.");
+  if (!config.hostPin) throw new Error("Configure the private legacy host PIN.");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
@@ -27,14 +135,14 @@ export async function appsScriptAction(config, action, extra = {}) {
     if (!data.ok) {
       const message =
         data.code === "INVALID_PIN"
-          ? "El PIN del host no coincide."
-          : data.error || data.code || "Google Apps Script rechazó la solicitud.";
+          ? "The legacy host PIN does not match."
+          : data.error || data.code || "Google Apps Script rejected the request.";
       throw new Error(message);
     }
     return data;
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error("Google Apps Script no respondió a tiempo.");
+      throw new Error("Google Apps Script did not respond in time.");
     }
     throw error;
   } finally {
@@ -43,10 +151,17 @@ export async function appsScriptAction(config, action, extra = {}) {
 }
 
 export async function fetchBridgeQueue(config) {
+  if (hasV4Session(config)) {
+    return v4AppsScriptAction(config, "activityState", {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId
+    });
+  }
   const data = await appsScriptAction(config, "bridgeQueue");
   if (!Array.isArray(data.requests)) {
     throw new Error(
-      "La implementación publicada de Apps Script no devolvió la cola. Publica Code.gs como una nueva versión."
+      "The published Apps Script deployment did not return the queue. Publish Code.gs as a new version."
     );
   }
   return data;
@@ -59,6 +174,19 @@ export function updateBridgeRequest(
   fileName = "",
   extra = {}
 ) {
+  if (hasV4Session(config)) {
+    return v4AppsScriptAction(config, "bridgeRequestUpdate", {
+      id,
+      status,
+      fileName,
+      durationSeconds: extra.durationSeconds,
+      sourceUrl: extra.sourceUrl,
+      virtualDJItemId: extra.virtualDJItemId,
+      queuePosition: extra.queuePosition,
+      syncState: extra.syncState,
+      lastSeenAt: extra.lastSeenAt
+    });
+  }
   return appsScriptAction(config, "bridgeUpdate", {
     id,
     status,
@@ -69,6 +197,19 @@ export function updateBridgeRequest(
 }
 
 export function updateBridgeConfig(config, sheetConfig = {}) {
+  if (hasV4Session(config)) {
+    return v4AppsScriptAction(config, "updateActivitySettings", {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId,
+      source: "bridge",
+      defaultDurationSeconds:
+        sheetConfig.activityHours === undefined
+          ? undefined
+          : Math.round(Number(sheetConfig.activityHours) * 3600),
+      defaultTransitionSeconds: sheetConfig.transitionSeconds
+    });
+  }
   return appsScriptAction(config, "bridgeConfigUpdate", {
     source: "bridge",
     activityHours: sheetConfig.activityHours,
@@ -77,16 +218,56 @@ export function updateBridgeConfig(config, sheetConfig = {}) {
   });
 }
 
-export function searchKaraokeYouTube(config, song, artist, language = "") {
-  return appsScriptAction(config, "youtubeSearch", { song, artist, language });
+export function searchKaraokeYouTube(
+  config,
+  song,
+  artist,
+  language = "",
+  languageCode = ""
+) {
+  if (hasV4Session(config)) {
+    return v4AppsScriptAction(config, "youtubeSearchV4", {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId,
+      song,
+      artist,
+      language,
+      languageCode
+    });
+  }
+  return appsScriptAction(config, "youtubeSearch", {
+    song,
+    artist,
+    language,
+    languageCode
+  });
 }
 
 export async function controlActivity(config, action) {
   if (!["start", "open", "close", "reset"].includes(action)) {
-    throw new Error("Acción de actividad no permitida.");
+    throw new Error("Activity action is not allowed.");
   }
   let data;
   try {
+    if (hasV4Session(config)) {
+      const common = {
+        hotelId: config.lastHotelId,
+        venueId: config.lastVenueId,
+        activityId: config.lastActivityId,
+        source: "bridge"
+      };
+      if (action === "start") {
+        return v4AppsScriptAction(config, "startActivityV4", common);
+      }
+      if (action === "open" || action === "close") {
+        return v4AppsScriptAction(config, "toggleRequests", {
+          ...common,
+          open: action === "open"
+        });
+      }
+      return v4AppsScriptAction(config, "archiveClearQueue", common);
+    }
     data = await appsScriptAction(config, "bridgeControl", {
       control: action,
       source: "bridge"
@@ -94,33 +275,33 @@ export async function controlActivity(config, action) {
   } catch (error) {
     if (
       String(error?.message || "").includes("INVALID_ACTION") ||
-      String(error?.message || "").includes("Acción")
+      String(error?.message || "").includes("not allowed")
     ) {
       throw new Error(
-        `El Code.gs publicado está desactualizado. Instala el Code.gs ${REQUIRED_CODE_VERSION} y publica una versión nueva.`
+        `The published Code.gs is outdated. Install Code.gs ${REQUIRED_CODE_VERSION} and publish a new version.`
       );
     }
     throw error;
   }
   if (!data?.state || !Array.isArray(data.requests)) {
     throw new Error(
-      `Google Sheets no confirmó el cambio. Instala el Code.gs ${REQUIRED_CODE_VERSION} y publica una versión nueva.`
+      `Google Sheets did not confirm the change. Install Code.gs ${REQUIRED_CODE_VERSION} and publish a new version.`
     );
   }
   if (action === "open" && data.state.accepting === false) {
-    throw new Error("Google Sheets no confirmó que las solicitudes quedaron abiertas.");
+    throw new Error("Google Sheets did not confirm that requests are open.");
   }
   if (action === "close" && data.state.accepting !== false) {
-    throw new Error("Google Sheets no confirmó que las solicitudes quedaron cerradas.");
+    throw new Error("Google Sheets did not confirm that requests are closed.");
   }
   if (action === "reset" && data.state.lastAction !== "reset") {
-    throw new Error("Google Sheets no confirmó el reinicio de la actividad.");
+    throw new Error("Google Sheets did not confirm the activity reset.");
   }
   if (action === "start" && data.state.lastAction !== "start") {
-    throw new Error("Google Sheets no confirmó el inicio de la actividad.");
+    throw new Error("Google Sheets did not confirm the activity start.");
   }
   if (action === "reset" && data.requests.length !== 0) {
-    throw new Error("Google Sheets no archivó todas las solicitudes al reiniciar.");
+    throw new Error("Google Sheets did not archive every request during reset.");
   }
   return data;
 }

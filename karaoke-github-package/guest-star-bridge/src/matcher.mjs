@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
+import { languagePathEvidence, normalizeLanguage } from "./language.mjs";
 
 export const MEDIA_EXTENSIONS = new Set([
   ".mp3", ".mp4", ".m4a", ".m4v", ".mov", ".avi", ".mkv", ".wav", ".flac",
@@ -41,7 +42,7 @@ function fileLabel(path) {
     .replace(/[_–—]+/g, " ");
 }
 
-export function scoreFile(filePath, song, artist) {
+export function scoreFile(filePath, song, artist, language = "") {
   const label = fileLabel(filePath);
   const labelTokens = tokens(label);
   const titleTokens = tokens(song);
@@ -51,26 +52,53 @@ export function scoreFile(filePath, song, artist) {
   const artistCoverage = artistTokens.length ? coverage(artistTokens, labelTokens) : 1;
   const combinedCoverage = coverage(combinedTokens, labelTokens);
   const titlePhrase = normalizeText(label).includes(normalizeText(song)) ? 1 : 0;
-  const score =
+  const baseScore =
     titleCoverage * 0.5 +
     artistCoverage * 0.25 +
     combinedCoverage * 0.15 +
     titlePhrase * 0.1;
+  const languageEvidence = languagePathEvidence(filePath, language);
+  const languageAdjustment = languageEvidence.match
+    ? 0.08
+    : languageEvidence.conflict
+      ? -0.08
+      : 0;
+  const score = Math.max(0, Math.min(1, baseScore + languageAdjustment));
   return {
     filePath,
     fileName: basename(filePath),
     score: Math.round(Math.min(1, score) * 1000) / 1000,
     titleCoverage: Math.round(titleCoverage * 1000) / 1000,
     artistCoverage: Math.round(artistCoverage * 1000) / 1000,
-    exact: score >= 0.78 && titleCoverage >= 0.7 && artistCoverage >= 0.5
+    baseScore: Math.round(Math.min(1, baseScore) * 1000) / 1000,
+    languageCode: normalizeLanguage(language),
+    languageMatch: languageEvidence.match,
+    languageConflict: languageEvidence.conflict,
+    languageDetected: languageEvidence.detected,
+    exact: baseScore >= 0.78 && titleCoverage >= 0.7 && artistCoverage >= 0.5
   };
 }
 
-export function findMatches(files, song, artist, limit = 3) {
+export function findMatches(
+  files,
+  song,
+  artist,
+  languageOrLimit = "",
+  requestedLimit = 3
+) {
+  const legacyLimit = typeof languageOrLimit === "number";
+  const language = legacyLimit ? "" : languageOrLimit;
+  const limit = legacyLimit ? languageOrLimit : requestedLimit;
   return files
-    .map((path) => scoreFile(path, song, artist))
+    .map((path) => scoreFile(path, song, artist, language))
     .filter((item) => item.score >= 0.28)
-    .sort((a, b) => b.score - a.score || a.fileName.localeCompare(b.fileName))
+    .sort((a, b) =>
+      Number(b.exact) - Number(a.exact) ||
+      Number(b.languageMatch) - Number(a.languageMatch) ||
+      Number(a.languageConflict) - Number(b.languageConflict) ||
+      b.score - a.score ||
+      a.fileName.localeCompare(b.fileName)
+    )
     .slice(0, limit);
 }
 
@@ -79,7 +107,7 @@ async function walk(folder, output, seen) {
   try {
     info = await stat(folder);
   } catch {
-    throw new Error(`No se pudo revisar la carpeta de karaoke: ${folder}`);
+    throw new Error(`The karaoke folder could not be checked: ${folder}`);
   }
   if (!info.isDirectory()) return;
   let realKey = `${info.dev}:${info.ino}`;
@@ -89,7 +117,7 @@ async function walk(folder, output, seen) {
   try {
     entries = await readdir(folder, { withFileTypes: true });
   } catch {
-    throw new Error(`No se pudo leer la carpeta de karaoke: ${folder}`);
+    throw new Error(`The karaoke folder could not be read: ${folder}`);
   }
   for (const entry of entries) {
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
@@ -110,10 +138,10 @@ export async function scanLibrary(folders) {
     try {
       info = await stat(folder);
     } catch {
-      throw new Error(`La carpeta de karaoke no está disponible: ${folder}`);
+      throw new Error(`The karaoke folder is not available: ${folder}`);
     }
     if (!info.isDirectory()) {
-      throw new Error(`La ruta de karaoke ya no es una carpeta: ${folder}`);
+      throw new Error(`The karaoke path is no longer a folder: ${folder}`);
     }
     await walk(folder, files, seen);
   }

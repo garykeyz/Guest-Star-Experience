@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "3\.0\.7"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.0"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -179,11 +179,15 @@ test("la hoja entrega el idioma al Bridge y a la búsqueda de YouTube", () => {
   assert.match(source, /language:\s*String\(row\[5\]/);
   assert.match(
     source,
-    /findSong_\(body\.song,\s*body\.artist,\s*body\.language\)/
+    /const requestedLanguage = body\.languageCode \|\| body\.language;/
   );
   assert.match(
     source,
-    /findKaraokeCandidates_\(body\.song,\s*body\.artist,\s*body\.language\)/
+    /findSong_\(body\.song,\s*body\.artist,\s*requestedLanguage\)/
+  );
+  assert.match(
+    source,
+    /findKaraokeCandidates_\(body\.song,\s*body\.artist,\s*requestedLanguage\)/
   );
 });
 
@@ -338,7 +342,7 @@ test("conserva varias opciones para que el host elija", () => {
     { id: "lyrics1", qualityScore: 70, resultType: "lyrics-vocals" }
   ];
 
-  const options = context.findKaraokeCandidates_("Hello", "Adele");
+  const options = context.findKaraokeCandidates_("Hello", "Adele", "English");
   context.youtubeKey_ = originalKey;
   context.youtubeCandidates_ = originalCandidates;
 
@@ -359,7 +363,7 @@ test("conserva las seis mejores opciones y descarta la séptima", () => {
       resultType: "karaoke"
     }));
 
-  const options = context.findKaraokeCandidates_("Dancing Queen", "ABBA");
+  const options = context.findKaraokeCandidates_("Dancing Queen", "ABBA", "English");
   context.youtubeKey_ = originalKey;
   context.youtubeCandidates_ = originalCandidates;
 
@@ -420,4 +424,247 @@ test("rechaza una pista karaoke sin señal de letras", () => {
   );
   assert.equal(items[0].resultType, "karaoke");
   assert.equal(items[1].resultType, "lyrics-vocals");
+});
+
+test("normaliza los siete idiomas y nunca cae silenciosamente a inglés", () => {
+  const languages = [
+    ["English", "english"],
+    ["Español", "spanish"],
+    ["Français", "french"],
+    ["Português", "portuguese"],
+    ["Deutsch", "german"],
+    ["Italiano", "italian"],
+    ["Русский", "russian"]
+  ];
+  languages.forEach(function(pair) {
+    assert.equal(context.youtubeLanguageKey_(pair[0]), pair[1]);
+  });
+  assert.equal(context.youtubeLanguageKey_("idioma desconocido"), "");
+  assert.deepEqual(
+    Array.from(context.findKaraokeCandidates_("Hello", "Adele", "idioma desconocido")),
+    []
+  );
+});
+
+test("cada idioma construye su búsqueda regional y sus términos propios", () => {
+  const captured = [];
+  const originalFetch = context.fetchJson_;
+  context.fetchJson_ = function(url) {
+    captured.push(String(url));
+    return { items: [] };
+  };
+
+  context.youtubeCandidates_(
+    "Celine Dion Pour que tu m'aimes encore " + context.youtubeSearchTerms_("french", false),
+    "key",
+    "french"
+  );
+  context.youtubeCandidates_(
+    "Roberto Carlos Detalhes " + context.youtubeSearchTerms_("portuguese", false),
+    "key",
+    "portuguese"
+  );
+  context.fetchJson_ = originalFetch;
+
+  assert.match(captured[0], /relevanceLanguage=fr/);
+  assert.match(captured[0], /regionCode=FR/);
+  assert.match(decodeURIComponent(captured[0]), /paroles a l ecran/);
+  assert.match(captured[1], /relevanceLanguage=pt/);
+  assert.match(captured[1], /regionCode=BR/);
+  assert.match(decodeURIComponent(captured[1]), /letra na tela/);
+  assert.notEqual(captured[0], captured[1]);
+});
+
+test("descarta evidencia explícita de otro idioma", () => {
+  const french = context.youtubeLanguageEvidence_(
+    "Hello karaoke English lyrics",
+    "Canal desconocido",
+    "french"
+  );
+  const english = context.youtubeLanguageEvidence_(
+    "Hello karaoke English lyrics",
+    "Canal desconocido",
+    "english"
+  );
+  assert.equal(french.conflict, true);
+  assert.equal(english.match, true);
+  assert.equal(english.conflict, false);
+});
+
+test("la migración 4.0 crea registro central, respaldo y un Sheet independiente por hotel", () => {
+  assert.match(source, /function setupMultiUserV4\(\)/);
+  assert.match(source, /backupLegacySpreadsheetV4_\(master\)/);
+  assert.match(source, /file\.makeCopy\(/);
+  assert.match(source, /function createHotelSpreadsheetV4_\(hotel, legacySource\)/);
+  assert.match(source, /SpreadsheetApp\.create\("Guest Star - " \+ hotel\.name\)/);
+  assert.match(source, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null\)/);
+  assert.match(source, /"MASTER_SHEET_ID"/);
+  assert.match(source, /"HOTEL_DATA_FOLDER_ID"/);
+  assert.match(source, /"DEFAULT_PUBLIC_HOTEL_ID"/);
+  assert.match(source, /dataSheetId/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf("function setupMultiUserV4")),
+    /deleteSheet\(.*Solicitudes|deleteSheet\(.*Historial/
+  );
+});
+
+test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
+  const body = source.slice(
+    source.indexOf("function createHostUserV4_"),
+    source.indexOf("function createHotelForSuperhostV4_")
+  );
+  assert.match(body, /appendRecordV4_\(auth\.master, "Users"/);
+  assert.doesNotMatch(body, /SpreadsheetApp\.create/);
+  assert.doesNotMatch(body, /DriveApp\.create/);
+});
+
+test("crear un hotel automatiza su hoja, sede, actividad, asignación, identidad, enlace y QR", () => {
+  const body = source.slice(
+    source.indexOf("function createHotelForSuperhostV4_"),
+    source.indexOf("function updateHotelForSuperhostV4_")
+  );
+  assert.match(body, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null\)/);
+  assert.match(body, /hotel\.qrFileId = createHotelQrV4_/);
+  assert.match(body, /appendRecordV4_\(auth\.master, "Hotels"/);
+  assert.match(body, /appendRecordV4_\(auth\.master, "Venues"/);
+  assert.match(body, /appendRecordV4_\(auth\.master, "Activities"/);
+  assert.match(body, /appendRecordV4_\(auth\.master, "UserAssignments"/);
+  assert.match(body, /appendRecordV4_\(auth\.master, "HotelBranding"/);
+  assert.match(body, /activePublicActivityId:\s*activity\.activityId/);
+  assert.match(body, /publicBaseUrlV4_\(\) \+ "\/h\/"/);
+  assert.match(body, /return \{ ok: true, hotel: saved, venue: venue, activity: activity \}/);
+});
+
+test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a la hoja del hotel", () => {
+  assert.match(source, /getProperty\("MASTER_SHEET_ID"\)/);
+  assert.match(source, /properties\.setProperty\("MASTER_SHEET_ID", master\.getId\(\)\)/);
+  assert.match(source, /REQUEST_DATA_SHEET_ID_ = hotel\.dataSheetId/);
+  assert.match(source, /SpreadsheetApp\.openById\(dataSheetId\)/);
+  assert.match(source, /function accessibleSelectionV4_\(user\)/);
+  assert.match(source, /activity\.hotelId === hotelId/);
+});
+
+test("la sincronización multi-hotel no queda serializada por el lock legado", () => {
+  const body = source.slice(source.indexOf("function doPost(e)"), source.indexOf("function hostAction_"));
+  assert.match(body, /const v4Response = dispatchV4Action_\(body\);/);
+  assert.match(body, /if \(v4Response !== null\) return json_\(v4Response\);/);
+  assert.ok(body.indexOf("dispatchV4Action_(body)") < body.indexOf("LockService.getScriptLock()"));
+  assert.match(body, /legacy\/public submission path atomic/);
+});
+
+test("las respuestas de usuario nunca exponen hashes ni salts", () => {
+  const body = source.slice(
+    source.indexOf("function publicUserV4_"),
+    source.indexOf("function loginRateLimitV4_")
+  );
+  assert.doesNotMatch(body, /passwordHash:/);
+  assert.doesNotMatch(body, /passwordSalt:/);
+  assert.match(source, /computeHmacSha256Signature/);
+  assert.match(source, /sessionTokenHash:\s*tokenHashV4_\(token\)/);
+  assert.match(source, /deviceTokenHash:\s*tokenHashV4_\(rawToken\)/);
+});
+
+test("el permiso más específico puede restringir el permiso heredado del hotel", () => {
+  const originalMaster = context.masterSpreadsheetV4_;
+  const originalRows = context.tableRowsV4_;
+  context.masterSpreadsheetV4_ = () => ({});
+  context.tableRowsV4_ = (_master, table) => table === "UserAssignments" ? [
+    {
+      userId: "host-1",
+      hotelId: "hotel-1",
+      venueId: "",
+      activityId: "",
+      status: "active",
+      permissionsJson: JSON.stringify({ canStartActivity: true, canViewReviews: true })
+    },
+    {
+      userId: "host-1",
+      hotelId: "hotel-1",
+      venueId: "venue-1",
+      activityId: "activity-1",
+      status: "active",
+      permissionsJson: JSON.stringify({ canStartActivity: false })
+    }
+  ] : [];
+
+  const permissions = context.effectivePermissionsV4_(
+    { userId: "host-1", role: "host" },
+    { hotelId: "hotel-1", venueId: "venue-1", activityId: "activity-1" }
+  );
+  context.masterSpreadsheetV4_ = originalMaster;
+  context.tableRowsV4_ = originalRows;
+
+  assert.equal(permissions.canStartActivity, false);
+  assert.equal(permissions.canViewReviews, true);
+  assert.equal(permissions.canManageHosts, false);
+});
+
+test("una asignación de actividad no expone otras actividades del mismo hotel", () => {
+  const originalMaster = context.masterSpreadsheetV4_;
+  const originalRows = context.tableRowsV4_;
+  context.masterSpreadsheetV4_ = () => ({});
+  context.tableRowsV4_ = (_master, table) => ({
+    Hotels: [
+      { hotelId: "hotel-1", status: "active" },
+      { hotelId: "hotel-2", status: "active" }
+    ],
+    Venues: [
+      { venueId: "venue-1", hotelId: "hotel-1", status: "active" },
+      { venueId: "venue-2", hotelId: "hotel-1", status: "active" },
+      { venueId: "venue-3", hotelId: "hotel-2", status: "active" }
+    ],
+    Activities: [
+      { activityId: "activity-1", hotelId: "hotel-1", venueId: "venue-1", status: "ready" },
+      { activityId: "activity-2", hotelId: "hotel-1", venueId: "venue-2", status: "ready" },
+      { activityId: "activity-3", hotelId: "hotel-2", venueId: "venue-3", status: "ready" }
+    ],
+    UserAssignments: [
+      {
+        userId: "host-1", hotelId: "hotel-1", venueId: "venue-1",
+        activityId: "activity-1", status: "active"
+      }
+    ]
+  }[table] || []);
+
+  const selection = context.accessibleSelectionV4_({ userId: "host-1", role: "host" });
+  context.masterSpreadsheetV4_ = originalMaster;
+  context.tableRowsV4_ = originalRows;
+
+  assert.deepEqual(Array.from(selection.hotels, item => item.hotelId), ["hotel-1"]);
+  assert.deepEqual(Array.from(selection.venues, item => item.venueId), ["venue-1"]);
+  assert.deepEqual(Array.from(selection.activities, item => item.activityId), ["activity-1"]);
+});
+
+test("el login temporal vence y solo puede consumirse una vez", () => {
+  assert.match(source, /now\.getTime\(\) \+ 90 \* 1000/);
+  assert.match(source, /if \(!record \|\| record\.usedAt \|\| new Date\(record\.expiresAt\)/);
+  assert.match(source, /usedAt:\s*isoNowV4_\(\)/);
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf("function createOneTimeLoginCodeV4_"),
+      source.indexOf("function consumeOneTimeLoginCodeV4_")
+    ),
+    /authToken|password|deviceToken=/
+  );
+});
+
+test("la recurrencia semanal respeta el intervalo después del último día del ciclo", () => {
+  const originalUtilities = context.Utilities;
+  const originalSession = context.Session;
+  context.Utilities = {
+    formatDate: date => new Date(date).toISOString().slice(0, 19),
+    parseDate: text => new Date(`${text}Z`)
+  };
+  context.Session = { getScriptTimeZone: () => "UTC" };
+  const schedule = {
+    scheduledStartAt: "2026-08-05T20:00:00.000Z",
+    recurrenceType: "weekly",
+    recurrenceInterval: 2,
+    recurrenceDaysJson: "[1,3]",
+    recurrenceEndAt: ""
+  };
+  const next = context.nextOccurrenceV4_(schedule, "UTC");
+  context.Utilities = originalUtilities;
+  context.Session = originalSession;
+  assert.equal(next, "2026-08-17T20:00:00.000Z");
 });

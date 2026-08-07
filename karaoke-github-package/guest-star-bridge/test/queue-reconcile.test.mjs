@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reconcileTrackedQueue } from "../src/queue-reconcile.mjs";
+import {
+  reconcileTrackedQueue,
+  stabilizeVirtualDjEntries
+} from "../src/queue-reconcile.mjs";
 
 test("detecta qué solicitudes siguen realmente en la cola de VirtualDJ", () => {
   const tracked = [
@@ -96,4 +99,46 @@ test("tolera un typo del artista si cantante y canción coinciden", () => {
 
   assert.equal(result.matched.get("request-1").index, 0);
   assert.deepEqual(result.missing, []);
+});
+
+test("mantiene el identificador estable cuando VirtualDJ reordena la cola", () => {
+  const first = stabilizeVirtualDjEntries([
+    { index: 0, filePath: "/Music/First.mp4", singer: "Ana" },
+    { index: 1, filePath: "/Music/Second.mp4", singer: "Luis" }
+  ]);
+  const reordered = stabilizeVirtualDjEntries([
+    { index: 0, filePath: "/Music/Second.mp4", singer: "Luis" },
+    { index: 1, filePath: "/Music/First.mp4", singer: "Ana" }
+  ], first);
+
+  assert.equal(reordered[0].virtualDJItemId, first[1].virtualDJItemId);
+  assert.equal(reordered[1].virtualDJItemId, first[0].virtualDJItemId);
+});
+
+test("prefiere el vínculo estable y expone pistas externas sin perder duplicados", () => {
+  const actual = stabilizeVirtualDjEntries([
+    { index: 0, filePath: "/Music/Same.mp4", singer: "Ana" },
+    { index: 1, filePath: "/Music/Same.mp4", singer: "Ana" },
+    { index: 2, filePath: "/Music/External.mp4", singer: "Invitado" }
+  ]);
+  const tracked = [
+    {
+      id: "request-2",
+      filePath: "/Music/Same.mp4",
+      singer: "Ana",
+      virtualDJItemId: actual[1].virtualDJItemId
+    },
+    {
+      id: "request-1",
+      filePath: "/Music/Same.mp4",
+      singer: "Ana",
+      virtualDJItemId: actual[0].virtualDJItemId
+    }
+  ];
+
+  const result = reconcileTrackedQueue(tracked, actual);
+  assert.equal(result.matched.get("request-2").virtualDJItemId, actual[1].virtualDJItemId);
+  assert.equal(result.matched.get("request-1").virtualDJItemId, actual[0].virtualDJItemId);
+  assert.equal(result.unmatched.length, 1);
+  assert.match(result.unmatched[0].filePath, /External/);
 });

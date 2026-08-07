@@ -18,6 +18,18 @@ const formSource = await readFile(
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
 const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
 const faviconSource = await readFile(resolve(root, "../app/icon.svg"), "utf8");
+const hostPanelSource = await readFile(
+  resolve(root, "../components/HostPanel.tsx"),
+  "utf8"
+);
+const hostApiSource = await readFile(
+  resolve(root, "../app/api/host/route.ts"),
+  "utf8"
+);
+const publicApiSource = await readFile(
+  resolve(root, "../app/api/karaoke/route.ts"),
+  "utf8"
+);
 
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.doesNotMatch(appSource, /window\.open/);
@@ -39,7 +51,7 @@ test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () =
   assert.match(formSource, /What language will you sing in\?/);
   assert.match(formSource, /!lang\?<motion\.section/);
   assert.match(bridgeHtml, /class="request-language"/);
-  assert.match(appSource, /Idioma: \$\{item\.language\}/);
+  assert.match(appSource, /Language: \$\{item\.language\}/);
 });
 
 test("el selector universal está en inglés sin cambiar el idioma guardado", () => {
@@ -73,29 +85,30 @@ test("las acciones usan confirmación interna y notifican su resultado", () => {
   assert.match(appSource, /function confirmAction/);
   assert.match(appSource, /function runAction/);
   assert.match(appSource, /showSuccess\(success\.title, success\.detail\)/);
-  assert.match(appSource, /Canción retirada de VirtualDJ/);
-  assert.match(appSource, /Cantante completado/);
-  assert.match(appSource, /Canción saltada/);
+  assert.match(appSource, /Song removed from VirtualDJ/);
+  assert.match(appSource, /Singer completed/);
+  assert.match(appSource, /Song skipped/);
   assert.match(bridgeHtml, /id="confirmDialog"/);
   assert.match(bridgeHtml, /id="acceptConfirm"/);
 });
 
 test("permite deshacer el resultado y elegir dónde restaurar la pista", () => {
   assert.match(appSource, /function undoOutcome\(id, placement\)/);
-  assert.match(appSource, /Deshacer y volver al turno/);
-  assert.match(appSource, /Deshacer y enviar al final/);
-  assert.match(appSource, /Solo deshacer · dejar fuera/);
+  assert.match(appSource, /Undo and Restore Position/);
+  assert.match(appSource, /Undo and Send to End/);
+  assert.match(appSource, /Undo Only · Keep Outside/);
   assert.match(serverSource, /\/undo-outcome/);
   assert.match(serverSource, /async function undoRequestOutcome/);
 });
 
 test("el reloj visible avanza cada segundo y recalcula todos los totales", () => {
   assert.match(appSource, /window\.setInterval\(updateTimeDashboard, 1000\)/);
-  assert.match(appSource, /Date\.now\(\) - started/);
-  assert.match(appSource, /Pulsa Iniciar actividad para activar el reloj/);
-  assert.match(appSource, /activityBusy \|\| running/);
-  assert.match(appSource, /Pista \$\{activityDuration\(songSeconds\)\}/);
-  assert.match(appSource, /transición \$\{activityDuration\(transitionSeconds\)\}/);
+  assert.match(appSource, /Number\.isFinite\(finished\) \? finished : Date\.now\(\)/);
+  assert.match(appSource, /activityFinishedAt/);
+  assert.match(appSource, /Select Start Activity to activate the clock/);
+  assert.match(appSource, /primary\.disabled = activityBusy/);
+  assert.match(appSource, /Track \$\{activityDuration\(songSeconds\)\}/);
+  assert.match(appSource, /transition \$\{activityDuration\(transitionSeconds\)\}/);
 });
 
 test("el Bridge respeta el estado sin iniciar y no inventa una hora local", () => {
@@ -111,7 +124,7 @@ test("el Bridge respeta el estado sin iniciar y no inventa una hora local", () =
 test("el enlace seleccionado se copia y se guarda como fuente única en Sheets", () => {
   assert.match(
     appSource,
-    /quedó como el único enlace de esa solicitud en Google Sheets/
+    /saved as the request’s only Google Sheets link/
   );
   assert.match(serverSource, /sourceUrl: selected\.url/);
   assert.match(serverSource, /item\.sourceUrl = selected\.url/);
@@ -125,23 +138,24 @@ test("la sincronización de fondo no bloquea los botones por canción", () => {
 });
 
 test("separa solicitudes compactas por estado sin perder el orden de llegada", () => {
-  assert.match(appSource, /Pendientes de entrar a la cola/);
-  assert.match(appSource, /En la cola de VirtualDJ/);
-  assert.match(appSource, /Ya cantaron \/ finalizadas/);
-  assert.match(appSource, /Llegada #\$\{arrival\.number\}/);
-  assert.match(appSource, /total solicitado al llegar/);
+  assert.match(appSource, /Waiting to Enter the Queue/);
+  assert.match(appSource, /In the VirtualDJ Queue/);
+  assert.match(appSource, /Completed \/ Finished/);
+  assert.match(appSource, /Arrival #\$\{arrival\.number\}/);
+  assert.match(appSource, /requested total at arrival/);
   assert.match(bridgeHtml, /class="request-details"/);
-  assert.match(bridgeHtml, /id="startRequests"/);
+  assert.match(bridgeHtml, /id="primaryActivity"/);
+  assert.match(bridgeHtml, /id="requestsToggle"/);
 });
 
 test("muestra la cola real de VirtualDJ y la hora final sin saturar la lista", () => {
   assert.match(bridgeHtml, /id="vdjQueuePanel"/);
   assert.match(bridgeHtml, /id="eventEndTime"/);
   assert.match(appSource, /function renderVdjQueue/);
-  assert.match(appSource, /EMCEE: organiza los turnos/);
+  assert.match(appSource, /EMCEE: manage the rotation/);
   assert.match(serverSource, /entries: vdjQueueEntries\.map/);
   assert.match(serverSource, /verifiedQueue = vdjQueueHasSnapshot/);
-  assert.match(appSource, /pistas reales/);
+  assert.match(appSource, /live VDJ/);
 });
 
 test("el formulario confirma repeticiones en el idioma elegido", () => {
@@ -151,15 +165,24 @@ test("el formulario confirma repeticiones en el idioma elegido", () => {
   assert.match(formSource, /duplicateDialog/);
 });
 
-test("muestra opcionalmente el estado público y el HOST puede ocultarlo", () => {
+test("muestra opcionalmente el estado público y el Host seguro lo controla", () => {
   assert.match(formSource, /activityCopy: Record<Lang, ActivityCopy>/);
   assert.match(formSource, /activity\.showPublicStatus/);
   assert.match(formSource, /className="publicActivityStatus"/);
   assert.match(formSource, /queuePeopleCount/);
   assert.match(formSource, /setClockNow\(Date\.now\(\)\),1000/);
-  assert.match(formSource, /action:"publicStatusVisibility"/);
-  assert.match(formSource, /Mostrar estado al público/);
-  assert.match(formSource, /Ocultar estado al público/);
+  assert.match(formSource, /_receivedAt:\s*Date\.now\(\)/);
+  assert.match(formSource, /const synchronizedNow=clockNow\+serverOffset/);
+  assert.doesNotMatch(formSource, /HOST PIN/);
+  assert.match(hostPanelSource, /Host Panel/);
+  assert.match(hostPanelSource, /canShowHidePublicStatus/);
+  assert.match(hostPanelSource, /Show Public Status/);
+  assert.match(hostPanelSource, /Hide Public Status/);
+  assert.match(hostPanelSource, /action:\"updateActivitySettings\"|\"updateActivitySettings\"/);
+  assert.match(hostApiSource, /httpOnly:\s*true/);
+  assert.match(hostApiSource, /delete payload\.authToken/);
+  assert.match(publicApiSource, /submitReview.*createGuestReminder.*unsubscribeGuest/);
+  assert.match(publicApiSource, /Public action is not allowed/);
 });
 
 test("la página incluye un favicon propio de Guest Star", () => {
@@ -170,8 +193,8 @@ test("la página incluye un favicon propio de Guest Star", () => {
 });
 
 test("el Plan B alterna idiomas y permite buscar un enlace Karaoke", () => {
-  assert.match(appSource, /Temas hit equilibrados en español e inglés/);
-  assert.match(appSource, /Buscar enlace Karaoke/);
-  assert.match(appSource, /Copiar enlace Karaoke/);
+  assert.match(appSource, /Balanced Spanish and English Hits/);
+  assert.match(appSource, /Find Karaoke Link/);
+  assert.match(appSource, /Copy Karaoke Link/);
   assert.match(serverSource, /\/api\/suggestions\/youtube/);
 });

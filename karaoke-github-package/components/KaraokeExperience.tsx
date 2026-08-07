@@ -1,10 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowRight, Check, ChevronDown, Clock3, Eye, EyeOff, Headphones, Hourglass,
-  LockKeyhole, MessageCircleMore, Mic2, Music2, Radio, RotateCcw, Send,
+  ArrowRight, Bell, CalendarPlus, Check, ChevronDown, Clock3, Headphones,
+  Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
   Sparkles, UserRound, UsersRound, XCircle
 } from "lucide-react";
 
@@ -20,11 +20,33 @@ type ApiState = {
   accepting?: boolean;
   activityHours?: number;
   activityStartedAt?: string;
+  activityFinishedAt?: string;
   activityRunning?: boolean;
   showPublicStatus?: boolean;
   queuePeopleCount?: number;
   stateRevision?: number;
   activityId?: string;
+  serverNow?: string;
+  _receivedAt?: number;
+  hotel?: { name?: string; slug?: string; publicUrl?: string; timezone?: string };
+  venue?: { name?: string } | null;
+  activity?: {
+    activityId?: string;
+    name?: string;
+    status?: string;
+    scheduledStartAt?: string;
+    showCountdown?: boolean;
+    acceptEarlyRequests?: boolean;
+  } | null;
+  branding?: Record<string, string | boolean>;
+  upcomingActivities?: Array<{
+    scheduleId?: string;
+    activityName?: string;
+    venueName?: string;
+    scheduledStartAt?: string;
+    durationSeconds?: number;
+    showCountdown?: boolean;
+  }>;
 };
 type ApiResponse = ApiState & {
   ok?: boolean;
@@ -32,6 +54,7 @@ type ApiResponse = ApiState & {
   error?: string;
   state?: ApiState;
   duplicates?: DuplicateWarning;
+  externalReview?: { provider?: string; url?: string; guestCanChoose?: boolean } | null;
 };
 type DuplicateWarning = {
   repeatedSinger?: boolean;
@@ -181,7 +204,7 @@ function acceptingFrom(data: ApiResponse) {
 }
 
 function stateFrom(data: ApiResponse): ApiState {
-  return data.state || data;
+  return { ...(data.state || data), _receivedAt: Date.now() };
 }
 
 function activityDuration(seconds: number) {
@@ -192,7 +215,7 @@ function activityDuration(seconds: number) {
   return `${hours}:${String(minutes).padStart(2,"0")}:${String(remainder).padStart(2,"0")}`;
 }
 
-export default function KaraokeExperience() {
+export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: string }) {
   const [lang,setLang]=useState<Lang|null>(null);
   const [menu,setMenu]=useState(false);
   const [values,setValues]=useState<Record<FieldKey,string>>({name:"",song:"",artist:"",comment:""});
@@ -202,52 +225,130 @@ export default function KaraokeExperience() {
   const [accepting,setAccepting]=useState(true);
   const [activity,setActivity]=useState<ApiState>({});
   const [clockNow,setClockNow]=useState(()=>Date.now());
-  const [host,setHost]=useState(false);
-  const [pin,setPin]=useState("");
-  const [hostAuthenticated,setHostAuthenticated]=useState(false);
-  const [newPin,setNewPin]=useState("");
-  const [hostBusy,setHostBusy]=useState(false);
-  const [message,setMessage]=useState("");
+  const [bootstrapError,setBootstrapError]=useState("");
   const [submitError,setSubmitError]=useState("");
   const [duplicateWarning,setDuplicateWarning]=useState<DuplicateWarning|null>(null);
+  const [reviewRating,setReviewRating]=useState(0);
+  const [reviewComment,setReviewComment]=useState("");
+  const [reviewEmail,setReviewEmail]=useState("");
+  const [reviewConsent,setReviewConsent]=useState(false);
+  const [reviewSent,setReviewSent]=useState(false);
+  const [reminderEmail,setReminderEmail]=useState("");
+  const [reminderConsent,setReminderConsent]=useState(false);
+  const [reminderSent,setReminderSent]=useState(false);
+  const [moduleError,setModuleError]=useState("");
+  const [externalReview,setExternalReview]=useState<{provider?:string;url?:string}|null>(null);
   const text=copy[lang||"en"];
   const warningText=duplicateCopy[lang||"en"];
   const statusText=activityCopy[lang||"en"];
   const active=languages.find(x=>x[0]===lang)||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
+  const serverOffset=Number.isFinite(Date.parse(String(activity.serverNow||"")))
+    ? Date.parse(String(activity.serverNow))-Number(activity._receivedAt||clockNow)
+    : 0;
+  const synchronizedNow=clockNow+serverOffset;
   const targetSeconds=Math.max(0,Math.round((Number(activity.activityHours)||0)*3600));
   const startedAt=Date.parse(String(activity.activityStartedAt||""));
-  const activityRunning=Number.isFinite(startedAt)&&activity.activityRunning!==false;
-  const elapsedSeconds=activityRunning?Math.max(0,Math.floor((clockNow-startedAt)/1000)):0;
+  const finishedAt=Date.parse(String(activity.activityFinishedAt||""));
+  const hasStarted=Number.isFinite(startedAt);
+  const activityRunning=hasStarted&&activity.activityRunning!==false;
+  const elapsedSeconds=hasStarted
+    ? Math.max(0,Math.floor(((Number.isFinite(finishedAt)?finishedAt:synchronizedNow)-startedAt)/1000))
+    : 0;
   const remainingSeconds=Math.max(0,targetSeconds-elapsedSeconds);
-  const activityFinished=activityRunning&&targetSeconds>0&&remainingSeconds===0;
+  const activityFinished=String(activity.activity?.status||"")==="finished"||
+    (activityRunning&&targetSeconds>0&&remainingSeconds===0);
   const queuePeopleCount=Math.max(0,Math.floor(Number(activity.queuePeopleCount)||0));
+  const branding=activity.branding||{};
+  const scheduledAt=Date.parse(String(activity.activity?.scheduledStartAt||""));
+  const countdownSeconds=Number.isFinite(scheduledAt)
+    ? Math.max(0,Math.floor((scheduledAt-synchronizedNow)/1000))
+    : 0;
+  const brandStyle={
+    "--p":String(branding.primaryColor||"#ff2d95"),
+    "--v":String(branding.secondaryColor||"#8b3dff"),
+    "--b":String(branding.accentColor||"#00c8ff")
+  } as CSSProperties;
+  const replaceMessage=(input:unknown)=>String(input||"")
+    .replaceAll("{hotel_name}",String(activity.hotel?.name||""))
+    .replaceAll("{activity_name}",String(activity.activity?.name||""))
+    .replaceAll("{venue_name}",String(activity.venue?.name||""));
+  const activityStatus=String(activity.activity?.status||"");
+  const publicMessage=activityStatus==="finished"
+    ? [branding.activityFinishedTitle,branding.activityFinishedMessage||branding.activityEndingMessage]
+    : activityStatus==="in_progress"&&!accepting
+      ? [branding.requestsClosedTitle,branding.requestsClosedMessage]
+      : activityStatus==="in_progress"
+        ? [branding.inProgressTitle,branding.inProgressMessage]
+        : activityStatus==="scheduled"&&accepting
+          ? [branding.beforeStartOpenTitle,branding.beforeStartOpenMessage]
+          : activity.activity
+            ? [branding.beforeStartClosedTitle,branding.beforeStartClosedMessage]
+            : [branding.noActivityTitle,branding.noActivityMessage];
+  const nextActivity=activity.upcomingActivities?.[0];
+  const calendarStamp=(value:string|undefined)=>value
+    ? new Date(value).toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z")
+    : "";
+  const calendarUrl=nextActivity?.scheduledStartAt
+    ? `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(nextActivity.activityName||"Guest Star Activity")}&dates=${calendarStamp(nextActivity.scheduledStartAt)}/${calendarStamp(new Date(new Date(nextActivity.scheduledStartAt).getTime()+(Number(nextActivity.durationSeconds)||7200)*1000).toISOString())}&details=${encodeURIComponent(activity.hotel?.publicUrl||"")}`
+    : "";
 
   useEffect(()=>{
     let mounted=true;
     const refreshStatus=async()=>{
       try{
-        const data=await api(`${ENDPOINT}?action=status&t=${Date.now()}`);
-        if(mounted){setAccepting(acceptingFrom(data));setActivity(stateFrom(data));}
+        const query=new URLSearchParams({
+          action:hotelCode?"publicBootstrap":"status",
+          t:String(Date.now())
+        });
+        if(hotelCode)query.set("hotel",hotelCode);
+        const data=await api(`${ENDPOINT}?${query.toString()}`);
+        if(mounted){
+          setAccepting(acceptingFrom(data));
+          setActivity(stateFrom(data));
+          setBootstrapError("");
+        }
       }catch{
-        // Conserva el último estado conocido mientras se recupera la conexión.
+        if(mounted)setBootstrapError(hotelCode?"This hotel link is unavailable or no longer active.":"");
       }
     };
     refreshStatus();
     const id=window.setInterval(refreshStatus,5000);
     return()=>{mounted=false;clearInterval(id);};
-  },[]);
+  },[hotelCode]);
 
   useEffect(()=>{
     const id=window.setInterval(()=>setClockNow(Date.now()),1000);
     return()=>clearInterval(id);
   },[]);
 
+  useEffect(()=>{
+    if(!hotelCode)return;
+    const query=new URLSearchParams(window.location.search);
+    const recordId=query.get("unsubscribe");
+    const token=query.get("token");
+    if(!recordId||!token)return;
+    void post({action:"unsubscribeGuest",publicCode:hotelCode,recordId,token})
+      .then(()=>setModuleError("You have been unsubscribed from future Guest Star messages."))
+      .catch(()=>setModuleError("This unsubscribe link is invalid or has expired."));
+  },[hotelCode]);
+
   const sendRequest=async(confirmDuplicate=false)=>{
     if(!complete||!accepting)return;
     setLoading(true);setSubmitError("");
     try{
-      const data=await post({...values,language:active[3],confirmDuplicate});
+      const data=await post({
+        ...values,
+        ...(hotelCode?{publicCode:hotelCode}:{}),
+        language:active[3],
+        languageCode:active[0] === "es" ? "spanish" :
+          active[0] === "en" ? "english" :
+          active[0] === "fr" ? "french" :
+          active[0] === "it" ? "italian" :
+          active[0] === "de" ? "german" :
+          active[0] === "ru" ? "russian" : "portuguese",
+        confirmDuplicate
+      });
       setAccepting(acceptingFrom(data));
       setActivity(stateFrom(data));
       setDuplicateWarning(null);
@@ -267,64 +368,30 @@ export default function KaraokeExperience() {
     e.preventDefault();setTouched({name:true,song:true,artist:true});
     void sendRequest(false);
   };
-  const hostAction=async(action:"start"|"open"|"close"|"reset")=>{
-    if(!hostAuthenticated){setMessage("Primero valida el PIN.");return;}
-    if(action==="reset"&&!window.confirm("¿Archivar y reiniciar la actividad?"))return;
-    setHostBusy(true);setMessage("Procesando...");
+  const submitReminder=async(e:FormEvent<HTMLFormElement>)=>{
+    e.preventDefault();setModuleError("");
+    if(!reminderEmail||!reminderConsent){setModuleError("Enter your email and confirm consent for one reminder.");return;}
     try{
-      const data=await post({action,pin:pin.trim(),source:"web"});
-      setAccepting(acceptingFrom(data));
-      setActivity(stateFrom(data));
-      setMessage(action==="start"?"Actividad iniciada; el reloj ya está corriendo.":action==="open"?"Solicitudes abiertas.":action==="close"?"Solicitudes cerradas.":"Actividad reiniciada.");
-    }catch(error){
-      const code=(error as Error & {code?:string}).code;
-      if(code==="INVALID_PIN")setHostAuthenticated(false);
-      setMessage(code==="INVALID_PIN"?"El PIN ya no es válido.":"No se pudo completar la acción.");
-    }finally{setHostBusy(false);}
+      await post({action:"createGuestReminder",publicCode:hotelCode,guestEmail:reminderEmail,consent:true});
+      setReminderSent(true);
+    }catch{setModuleError("The reminder could not be created. Please try again.");}
   };
-  const togglePublicStatus=async()=>{
-    if(!hostAuthenticated){setMessage("Primero valida el PIN.");return;}
-    const show=!activity.showPublicStatus;
-    setHostBusy(true);setMessage(show?"Mostrando estado público...":"Ocultando estado público...");
+  const submitReview=async(e:FormEvent<HTMLFormElement>)=>{
+    e.preventDefault();setModuleError("");
+    if(reviewRating<1){setModuleError("Choose a rating before submitting.");return;}
     try{
-      const data=await post({action:"publicStatusVisibility",pin:pin.trim(),show,source:"web"});
-      setAccepting(acceptingFrom(data));
-      setActivity(stateFrom(data));
-      setMessage(show?"El estado de la actividad ya es visible para los huéspedes.":"El estado de la actividad quedó oculto.");
-    }catch(error){
-      const code=(error as Error & {code?:string}).code;
-      if(code==="INVALID_PIN")setHostAuthenticated(false);
-      setMessage(code==="INVALID_PIN"?"El PIN ya no es válido.":"No se pudo cambiar la visualización.");
-    }finally{setHostBusy(false);}
-  };
-  const loginHost=async()=>{
-    if(!pin.trim()){setMessage("Introduce el PIN.");return;}
-    setHostBusy(true);setMessage("Verificando...");
-    try{
-      const data=await api(`${ENDPOINT}?action=verifyHost&pin=${encodeURIComponent(pin.trim())}&t=${Date.now()}`);
-      const valid=data.ok===true;
-      setHostAuthenticated(valid);
-      setMessage(valid?"Acceso autorizado.":"PIN incorrecto.");
-    }catch{
-      setHostAuthenticated(false);setMessage("PIN incorrecto.");
-    }finally{setHostBusy(false);}
-  };
-  const changeHostPin=async()=>{
-    if(!hostAuthenticated)return;
-    if(!/^\d{6,12}$/.test(newPin)){setMessage("El PIN nuevo debe tener entre 6 y 12 números.");return;}
-    setHostBusy(true);setMessage("Actualizando PIN...");
-    try{
-      await post({action:"changePin",pin:pin.trim(),newPin,source:"web"});
-      setPin(newPin);setNewPin("");setMessage("PIN actualizado correctamente.");
-    }catch{
-      setMessage("No se pudo actualizar el PIN.");
-    }finally{setHostBusy(false);}
+      const result=await post({
+        action:"submitReview",publicCode:hotelCode,rating:reviewRating,comment:reviewComment,
+        guestEmail:reviewEmail,guestContactConsent:Boolean(reviewEmail&&reviewConsent)
+      });
+      setReviewSent(true);setExternalReview(result.externalReview||null);
+    }catch{setModuleError("Your review could not be submitted. Please try again.");}
   };
   const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setMenu(false);setLang(null);setDone(false);};
 
-  return <main className="page">
+  return <main className="page" style={brandStyle}>
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
-    <div className="brand">✦ GUEST STAR EXPERIENCE</div>
+    <div className="brand">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
     <AnimatePresence>{duplicateWarning&&<motion.div className="duplicateBackdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
       <motion.section className="duplicateDialog" role="alertdialog" aria-modal="true" aria-labelledby="duplicate-title" initial={{opacity:0,scale:.94,y:14}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.96,y:10}}>
         <span className="duplicateIcon">!</span><h2 id="duplicate-title">{warningText.title}</h2>
@@ -344,18 +411,21 @@ export default function KaraokeExperience() {
     <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[2]}</span><ChevronDown size={16}/></button>
       <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{languages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[2]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
     </div>
-    <button className="hostToggle" type="button" onClick={()=>setHost(!host)}><LockKeyhole size={15}/> HOST</button>
-    <AnimatePresence>{host&&<motion.aside className="hostPanel" initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} exit={{opacity:0,y:12}}>
-      <strong><Radio size={17}/> Control del anfitrión</strong>
-      {!hostAuthenticated?<><input type="password" inputMode="numeric" placeholder="PIN privado" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
-      <div><button disabled={hostBusy} onClick={loginHost}>Entrar</button></div></>:<>
-      <div><button disabled={hostBusy} onClick={()=>hostAction("start")}>Iniciar</button><button disabled={hostBusy} onClick={()=>hostAction("open")}>Abrir</button><button disabled={hostBusy} onClick={()=>hostAction("close")}>Cerrar</button><button disabled={hostBusy} onClick={()=>hostAction("reset")}>Reiniciar</button></div>
-      <div className="hostStatusControl"><button disabled={hostBusy} onClick={togglePublicStatus}>{activity.showPublicStatus?<><EyeOff size={16}/> Ocultar estado al público</>:<><Eye size={16}/> Mostrar estado al público</>}</button></div>
-      <input type="password" inputMode="numeric" placeholder="PIN nuevo (6–12 números)" value={newPin} onChange={e=>setNewPin(e.target.value.replace(/\D/g,"").slice(0,12))}/>
-      <div><button disabled={hostBusy||!newPin} onClick={changeHostPin}>Actualizar PIN</button><button onClick={()=>{setHostAuthenticated(false);setPin("");setNewPin("");setMessage("");}}>Salir</button></div>
-      </>}
-      <p>{message||(accepting?"● Solicitudes abiertas":"● Solicitudes cerradas")}</p>
-    </motion.aside>}</AnimatePresence>
+    {bootstrapError&&<section className="tenantError" role="alert"><strong>Link unavailable</strong><span>{bootstrapError}</span></section>}
+    {activity.hotel&&<section className="tenantIdentity">
+      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<img src={String(branding.hotelLogoUrl||branding.teamLogoUrl)} alt=""/>}
+      <div>
+        {branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}
+        {branding.showActivityDetails!==false&&<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span>}
+      </div>
+    </section>}
+    {(publicMessage[0]||publicMessage[1])&&<section className="publicMessage">
+      {publicMessage[0]&&<strong>{replaceMessage(publicMessage[0])}</strong>}
+      {publicMessage[1]&&<p>{replaceMessage(publicMessage[1])}</p>}
+    </section>}
+    {!activityRunning&&activity.activity?.showCountdown&&countdownSeconds>0&&<motion.section className="publicCountdown" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}}>
+      <Clock3 size={18}/><span><small>STARTS IN</small><strong>{activityDuration(countdownSeconds)}</strong></span>
+    </motion.section>}
     <AnimatePresence>{activity.showPublicStatus&&<motion.section className="publicActivityStatus" role="status" initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-10}}>
       <div className="publicActivityHead"><span className={`activityPulse ${activityFinished?"finished":activityRunning?"running":"waiting"}`}/><div><small>{statusText.label}</small><strong>{activityFinished?statusText.finished:activityRunning?statusText.running:statusText.notStarted}</strong></div></div>
       <div className="publicActivityMetrics"><div><Clock3 size={17}/><span><small>{statusText.elapsed}</small><strong>{activityDuration(elapsedSeconds)}</strong></span></div><div><Hourglass size={17}/><span><small>{statusText.remaining}</small><strong>{activityDuration(remainingSeconds)}</strong></span></div><div><UsersRound size={18}/><span><small>{statusText.queue}</small><strong>{queuePeopleCount}</strong></span></div></div>
@@ -366,6 +436,19 @@ export default function KaraokeExperience() {
         <button className="submit" disabled={!complete||loading}>{loading?<><i className="loader"/>{text.sending}</>:<><Mic2 size={21}/>{text.submit}<Send className="send" size={17}/></>}</button>{submitError&&<p className="submitError" role="alert">{submitError}</p>}
       </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
     </motion.div>
+    {nextActivity&&branding.showNextActivity!==false&&<section className="publicModule nextActivity">
+      <div className="moduleIcon"><CalendarPlus/></div><div><small>NEXT ACTIVITY</small><strong>{nextActivity.activityName||"Guest Star Activity"}</strong><p>{[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString()].filter(Boolean).join(" · ")}</p></div>
+      <div className="moduleActions">{branding.showAddToCalendar!==false&&calendarUrl&&<a href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus/>Add to Calendar</a>}</div>
+      {branding.showRemindMe===true&&!reminderSent&&<form onSubmit={submitReminder}><label><Mail/><input type="email" value={reminderEmail} onChange={e=>setReminderEmail(e.target.value)} placeholder="Email for one reminder" required/></label><label className="consent"><input type="checkbox" checked={reminderConsent} onChange={e=>setReminderConsent(e.target.checked)}/> Yes, send me one reminder for this activity.</label><button><Bell/>Remind Me</button></form>}
+      {reminderSent&&<p className="moduleSuccess">✓ Your one-time reminder is scheduled.</p>}
+    </section>}
+    {(activityStatus==="finished"||activityFinished)&&branding.showInternalRating===true&&<section className="publicModule reviewModule">
+      <div className="moduleIcon"><Star/></div><div><small>OPTIONAL REVIEW</small><strong>{replaceMessage(branding.reviewInvitationMessage)||"How was your Guest Star experience?"}</strong><p>No review is required to continue or to use any other option.</p></div>
+      {!reviewSent?<form onSubmit={submitReview}><div className="rating" aria-label="Rating from one to five">{[1,2,3,4,5].map(rating=><button type="button" key={rating} className={reviewRating>=rating?"active":""} aria-label={`${rating} stars`} onClick={()=>setReviewRating(rating)}><Star/></button>)}</div><textarea value={reviewComment} onChange={e=>setReviewComment(e.target.value)} placeholder="Optional comment"/><input type="email" value={reviewEmail} onChange={e=>setReviewEmail(e.target.value)} placeholder="Email (optional)"/>{reviewEmail&&branding.offerFollowUp===true&&<label className="consent"><input type="checkbox" checked={reviewConsent} onChange={e=>setReviewConsent(e.target.checked)}/> Yes, I would like one follow-up message about my experience.</label>}<button className="reviewSubmit">Submit Optional Review</button></form>:<p className="moduleSuccess">✓ Thank you. Your review was saved.</p>}
+      {externalReview?.url&&<a className="externalReview" href={externalReview.url} target="_blank" rel="noreferrer">Leave a separate {externalReview.provider||"hotel"} review <ArrowRight/></a>}
+    </section>}
+    {branding.showExternalReview===true&&branding.externalReviewUrl&&!(externalReview?.url)&&<a className="publicModule externalOnly" href={String(branding.externalReviewUrl)} target="_blank" rel="noreferrer">Leave an optional {String(branding.externalReviewProvider||"hotel")} review <ArrowRight/></a>}
+    {moduleError&&<p className="moduleNotice" role="status">{moduleError}</p>}
     <footer>{text.steps.map((x,i)=><div className="stepWrap" key={x}><div className="step">{i===0?<MessageCircleMore/>:i===1?<Music2/>:<Mic2/>}<span>{x}</span></div>{i<2&&<ArrowRight className="arrow" size={16}/>}</div>)}</footer>
     </>}
   </main>;

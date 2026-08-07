@@ -1,81 +1,34 @@
-GUEST STAR BRIDGE 3.0.7 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR BRIDGE 4.0.0 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
-Si la Mac sera operada por un DJ o tecnico que utilizara solamente el Bridge,
-consulta tambien el archivo descargable “GUIA-MAC-SOLO-BRIDGE.txt”.
+Compatible con Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
+No necesitas instalar Node, npm ni usar Terminal.
 
-COMPATIBILIDAD
+REQUISITOS
 
-- Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
-- macOS 11 Big Sur o una versión posterior.
-- No necesitas instalar Node, npm ni usar Terminal: el motor viene incluido.
+1. VirtualDJ instalado.
+2. Network Control instalado y activo.
+3. Biblioteca de karaoke local o en disco conectado.
+4. Internet.
+5. Cuenta Host y asignación creadas por el Superhost.
 
-LO QUE DEBES TENER
+INSTALAR
 
-1. Internet activo.
-2. VirtualDJ instalado y abierto.
-3. La extensión Network Control de VirtualDJ activa.
-4. La carpeta con tus videos de karaoke en esa Mac o en un disco conectado.
-5. El enlace /exec de Google Apps Script.
-6. El PIN privado del host.
-7. Code.gs 3.0.7 publicado como una versión nueva de la implementación.
+1. Descarga Guest-Star-Bridge-Universal-v4.0.0-app.zip o el DMG.
+2. Descomprime y mueve Guest Star Bridge.app a Aplicaciones.
+3. La primera vez, usa clic derecho sobre Guest Star Bridge y elige Abrir.
+4. Si macOS bloquea la app, usa Privacidad y seguridad → Abrir de todos modos.
 
-INSTALACIÓN
+CONFIGURAR
 
-1. Cierra cualquier versión anterior de Guest Star Bridge.
-2. Descarga “Guest-Star-Bridge-Universal-v3.0.7-app.zip”.
-3. Haz doble clic al ZIP para descomprimirlo.
-4. Mueve “Guest Star Bridge.app” a la carpeta Aplicaciones.
-5. En Aplicaciones, haz clic derecho sobre Guest Star Bridge y elige Abrir.
-6. Pulsa Abrir en la confirmación de macOS. Esto solo se hace la primera vez.
-7. Si macOS no muestra el botón, ve a Ajustes del Sistema → Privacidad y
-   seguridad, pulsa Abrir de todos modos y confirma Abrir.
+1. Abre Bridge e inicia sesión con el usuario Host.
+2. Cambia la contraseña temporal.
+3. Selecciona hotel, sede y actividad asignados.
+4. En Settings, elige la carpeta de karaoke.
+5. Configura el mismo puerto/contraseña de Network Control.
+6. Prueba VirtualDJ, guarda y sincroniza.
 
-CONFIGURAR VIRTUALDJ
+El operador no inicia sesión en Google. Apps Script y las hojas pertenecen al
+Superhost y funcionan en la nube. Crear una cuenta Host no crea otra hoja.
 
-1. Abre VirtualDJ.
-2. Ve a Configuración → Extensiones.
-3. Busca e instala Network Control si todavía no está instalado.
-4. Abre Network Control y déjalo activado.
-5. Usa el mismo puerto y la misma contraseña en VirtualDJ y en el Bridge.
-6. Deja visible la lista Karaoke de VirtualDJ durante la prueba inicial.
-
-CONFIGURAR EL BRIDGE
-
-1. Abre Configuración dentro de Guest Star Bridge.
-2. Pega el enlace de Apps Script que termina en /exec.
-3. Escribe el PIN del host.
-4. Pulsa Elegir carpeta y selecciona tu carpeta de karaoke.
-5. Activa por separado Recordar carpeta y Recordar PIN si lo deseas.
-6. Pulsa Probar hoja. Debe aparecer la confirmación verde.
-7. Pulsa Probar VirtualDJ. Debe aparecer la confirmación verde.
-8. Guarda y pulsa Sincronizar.
-9. Pulsa Iniciar actividad cuando comience el evento. Verifica que aparezcan
-   la hora final, el reloj en movimiento y la cola real de VirtualDJ.
-
-ACTUALIZAR CODE.GS SIN CAMBIAR EL ENLACE /EXEC
-
-1. En Apps Script, reemplaza todo el contenido por Code.gs 3.0.7.
-2. Guarda y ejecuta setup una vez.
-3. Ve a Implementar → Administrar implementaciones.
-4. Edita la implementación actual.
-5. Elige Nueva versión y pulsa Implementar.
-6. No crees otra implementación: así se conserva el mismo enlace /exec.
-
-USO EN OTRA COMPUTADORA
-
-- Google Sheets, la web y el PIN pueden ser los mismos.
-- La carpeta de karaoke y VirtualDJ son locales en cada computadora.
-- Usa una sola Mac como Bridge activo para el mismo VirtualDJ durante cada
-  actividad, para evitar que dos equipos intenten ordenar la misma cola.
-- Mantén el disco o carpeta de karaoke conectado. Si falla temporalmente, el
-  Bridge conservará el último inventario válido y mostrará el aviso de lectura.
-
-SI LA APP NO ABRE
-
-1. Confirma que la app fue descomprimida y movida a Aplicaciones.
-2. Ábrela con clic derecho → Abrir, no con doble clic la primera vez.
-3. Usa Privacidad y seguridad → Abrir de todos modos si macOS lo solicita.
-4. Si continúa, elimina solamente esa copia de la app y descarga otra vez el
-   ZIP Universal; tu configuración permanece en Application Support.
-
-Guest Star Bridge abre su propia interfaz y no muestra Terminal.
+La URL /exec y el PIN son solamente compatibilidad avanzada para migrar 3.x.
+Consulta GUIA-MAC-SOLO-BRIDGE.txt para la prueba completa y el evento.

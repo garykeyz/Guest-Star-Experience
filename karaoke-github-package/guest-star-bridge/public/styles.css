@@ -121,6 +121,7 @@ h1 span { background: linear-gradient(90deg, var(--pink), #db75ff); -webkit-back
 .state-badge.queued { background: rgba(0,200,255,.1); color: var(--blue); }
 .state-badge.queued-missing { background: rgba(246,200,102,.11); color: var(--gold); }
 .state-badge.unverified, .state-badge.unverified-missing { background: rgba(246,200,102,.11); color: var(--gold); }
+.state-badge.adding, .state-badge.confirming { background: rgba(0,200,255,.1); color: var(--blue); }
 .state-badge.removed, .state-badge.removed-missing { background: rgba(246,200,102,.11); color: var(--gold); }
 .state-badge.completed { background: rgba(76,230,162,.11); color: var(--green); }
 .state-badge.skipped { background: rgba(255,107,129,.1); color: #ff9dac; }
@@ -229,6 +230,29 @@ input:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,
 .confirm-content h2 { margin-bottom: 10px; }
 .confirm-content > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
 .confirm-actions { justify-content: center; margin-top: 24px; }
+.topbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.compact-controls { display: grid; justify-items: end; gap: 10px; }
+.main-activity-action { min-width: 190px; min-height: 44px; }
+.requests-toggle { margin: 0; }
+.requests-toggle b { min-width: 48px; color: var(--muted); font-size: .72rem; text-align: right; }
+.secondary-actions { display: flex; justify-content: flex-end; gap: 8px; margin: -7px 0 16px; }
+.legacy-settings { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.legacy-settings > summary { color: var(--muted); cursor: pointer; font-size: .76rem; font-weight: 750; }
+select { width: 100%; border: 1px solid var(--line); border-radius: 11px; padding: 12px 13px; background: #211628; color: white; outline: none; }
+select:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,45,149,.09); }
+.auth-dialog { width: min(480px, calc(100% - 28px)); }
+.auth-dialog form > p:not(.eyebrow) { color: var(--muted); line-height: 1.5; }
+.auth-dialog form > .button { width: 100%; margin-top: 20px; }
+.form-error { margin: 12px 0 0; color: #ff9dac !important; font-size: .78rem; }
+.share-content, .more-menu { padding: 24px; }
+.share-content { text-align: center; }
+.share-content header { text-align: left; }
+.share-qr { display: block; width: min(340px, 80vw); aspect-ratio: 1; margin: 0 auto 18px; border-radius: 16px; background: white; object-fit: contain; }
+.share-content input { margin-bottom: 14px; text-align: center; }
+.share-content .button-row { justify-content: center; }
+.more-menu { display: grid; gap: 8px; }
+.more-menu header { align-items: center; margin-bottom: 8px; }
+.more-menu .button { width: 100%; text-align: left; }
 
 @media (max-width: 760px) {
   .topbar, .toolbar { align-items: flex-start; flex-direction: column; }
@@ -247,6 +271,10 @@ input:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,
   .two-columns, .sheet-state-grid { grid-template-columns: 1fr; gap: 0; }
   .settings-actions { justify-content: stretch; }
   .settings-actions .button { flex: 1 1 100%; }
+  .topbar-actions, .compact-controls { justify-content: flex-start; justify-items: start; }
+  .compact-controls { width: 100%; }
+  .main-activity-action { width: 100%; }
+  .secondary-actions { justify-content: flex-start; }
 }
 
 @media (min-width: 761px) and (max-width: 1050px) {

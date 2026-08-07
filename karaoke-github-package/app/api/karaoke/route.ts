@@ -58,6 +58,10 @@ async function forward(url: URL, init: RequestInit = {}) {
 }
 
 export async function GET(request: NextRequest) {
+  const action = request.nextUrl.searchParams.get("action") || "";
+  if (!["", "status", "publicBootstrap"].includes(action)) {
+    return errorResponse("Public action is not allowed.", 403);
+  }
   const target = new URL(APPS_SCRIPT_ENDPOINT);
   request.nextUrl.searchParams.forEach((value, key) => {
     if (key !== "callback") target.searchParams.set(key, value);
@@ -68,10 +72,15 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
+  let parsed: JsonObject;
   try {
-    JSON.parse(body);
+    parsed = JSON.parse(body) as JsonObject;
   } catch {
     return errorResponse("La solicitud no contiene datos válidos.", 400);
+  }
+  const action = String(parsed.action || "");
+  if (!["", "submitReview", "createGuestReminder", "unsubscribeGuest"].includes(action)) {
+    return errorResponse("Public action is not allowed.", 403);
   }
   return forward(new URL(APPS_SCRIPT_ENDPOINT), {
     method: "POST",

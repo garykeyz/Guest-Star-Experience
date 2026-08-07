@@ -92,16 +92,20 @@ export function buildActivitySummary(
   const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
   const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
   const startedAtMs = Date.parse(String(activity.activityStartedAt || ""));
-  const activityRunning = Number.isFinite(startedAtMs);
-  const elapsedSeconds = activityRunning
-    ? Math.max(0, Math.floor((Number(now) - startedAtMs) / 1000))
+  const finishedAtMs = Date.parse(String(activity.activityFinishedAt || ""));
+  const hasStarted = Number.isFinite(startedAtMs);
+  const activityRunning = hasStarted &&
+    activity.activityRunning !== false &&
+    !Number.isFinite(finishedAtMs);
+  const elapsedSeconds = hasStarted
+    ? Math.max(0, Math.floor(((Number.isFinite(finishedAtMs) ? finishedAtMs : Number(now)) - startedAtMs) / 1000))
     : 0;
 
   return {
     targetSeconds,
     activityRunning,
     eventEndsAt:
-      activityRunning && targetSeconds > 0
+      hasStarted && targetSeconds > 0
         ? new Date(startedAtMs + targetSeconds * 1000).toISOString()
         : "",
     elapsedSeconds,

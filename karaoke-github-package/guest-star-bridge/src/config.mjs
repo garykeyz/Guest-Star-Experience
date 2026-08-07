@@ -1,14 +1,25 @@
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadBridgeSecrets, storeBridgeSecrets } from "./keychain.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = resolve(ROOT, "data");
 const CONFIG_PATH = resolve(DATA_DIR, "config.json");
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 6,
+  configVersion: 7,
   bridgePort: 8787,
+  authToken: "",
+  deviceToken: "",
+  deviceId: "",
+  lastHotelId: "",
+  lastVenueId: "",
+  lastActivityId: "",
+  lastUsername: "",
+  rememberLogin: true,
+  rememberSelection: true,
+  secretsInKeychain: false,
   libraryFolders: [],
   rememberLibraryFolders: true,
   appsScriptUrl:
@@ -42,6 +53,30 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
   return {
     configVersion: DEFAULT_CONFIG.configVersion,
     bridgePort: numberInRange(input.bridgePort, current.bridgePort, 1024, 65535),
+    authToken:
+      input.authToken === undefined ? String(current.authToken || "") : String(input.authToken || ""),
+    deviceToken:
+      input.deviceToken === undefined ? String(current.deviceToken || "") : String(input.deviceToken || ""),
+    deviceId:
+      input.deviceId === undefined ? String(current.deviceId || "") : String(input.deviceId || ""),
+    lastHotelId:
+      input.lastHotelId === undefined ? String(current.lastHotelId || "") : String(input.lastHotelId || ""),
+    lastVenueId:
+      input.lastVenueId === undefined ? String(current.lastVenueId || "") : String(input.lastVenueId || ""),
+    lastActivityId:
+      input.lastActivityId === undefined ? String(current.lastActivityId || "") : String(input.lastActivityId || ""),
+    lastUsername:
+      input.lastUsername === undefined ? String(current.lastUsername || "") : String(input.lastUsername || "").trim(),
+    rememberLogin:
+      input.rememberLogin === undefined ? Boolean(current.rememberLogin) : Boolean(input.rememberLogin),
+    rememberSelection:
+      input.rememberSelection === undefined
+        ? Boolean(current.rememberSelection)
+        : Boolean(input.rememberSelection),
+    secretsInKeychain:
+      input.secretsInKeychain === undefined
+        ? Boolean(current.secretsInKeychain)
+        : Boolean(input.secretsInKeychain),
     libraryFolders: normalizeFolders(
       input.libraryFolders === undefined ? current.libraryFolders : input.libraryFolders
     ),
@@ -94,6 +129,11 @@ export function configForStorage(config) {
   const clean = sanitizeConfig(config, DEFAULT_CONFIG);
   return {
     ...clean,
+    authToken: clean.rememberLogin ? clean.authToken : "",
+    deviceToken: clean.rememberLogin ? clean.deviceToken : "",
+    lastHotelId: clean.rememberSelection ? clean.lastHotelId : "",
+    lastVenueId: clean.rememberSelection ? clean.lastVenueId : "",
+    lastActivityId: clean.rememberSelection ? clean.lastActivityId : "",
     libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : [],
     hostPin: clean.rememberHostPin ? clean.hostPin : ""
   };
@@ -113,8 +153,14 @@ export async function loadConfig() {
         parsed.rememberLibraryFolders = true;
       }
       if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
+      if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;
+      if (parsed.rememberSelection === undefined) parsed.rememberSelection = true;
     }
-    const clean = sanitizeConfig(parsed, DEFAULT_CONFIG);
+    let clean = sanitizeConfig(parsed, DEFAULT_CONFIG);
+    if (clean.secretsInKeychain && clean.deviceId) {
+      const keychain = await loadBridgeSecrets(clean.deviceId);
+      clean = sanitizeConfig({ ...clean, ...keychain }, clean);
+    }
     if (needsMigration) await saveConfig(clean);
     return clean;
   } catch {
@@ -126,7 +172,17 @@ export async function loadConfig() {
 
 export async function saveConfig(config) {
   const clean = sanitizeConfig(config, DEFAULT_CONFIG);
-  const stored = configForStorage(clean);
+  const keychainSaved = clean.rememberLogin
+    ? await storeBridgeSecrets(clean)
+    : false;
+  const stored = configForStorage({
+    ...clean,
+    secretsInKeychain: keychainSaved
+  });
+  if (keychainSaved) {
+    stored.authToken = "";
+    stored.deviceToken = "";
+  }
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
   try {
@@ -140,6 +196,9 @@ export async function saveConfig(config) {
 export function publicConfig(config) {
   return {
     ...config,
+    authToken: "",
+    deviceToken: "",
+    signedIn: Boolean(config.authToken && config.deviceToken && config.deviceId),
     hostPin: "",
     hostPinConfigured: Boolean(config.hostPin),
     virtualDJ: {
