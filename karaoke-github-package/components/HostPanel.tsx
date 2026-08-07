@@ -36,7 +36,7 @@ function friendlyHostError(value: unknown, code = "") {
     return message;
   }
   if (code === "GOOGLE_AUTHORIZATION_REQUIRED") {
-    return "Google Drive access is missing. Open Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment before trying again.";
+    return "Guest Star needs administrative attention. Contact your Superhost.";
   }
   return message;
 }
@@ -284,10 +284,10 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   if(loading)return <main className="hostPage"><section className="hostCard loadingCard"><RefreshCw className="spin"/>Loading secure Host Panel…</section></main>;
   if(!user)return <main className="hostPage"><section className="hostLogin hostCard">
-    <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.0</p><h1>Host Panel</h1>
-    <p>Sign in with the account created by your Superhost. Google credentials are never required here.</p>
+    <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.1</p><h1>Host Panel</h1>
+    <p>Sign in with the account created by your Superhost.</p>
     <form onSubmit={login}><label>Username or email<input name="username" autoComplete="username" required/></label><label>Password<input name="password" type="password" autoComplete="current-password" required/></label><button disabled={busy}><KeyRound/>Sign In</button></form>
-    <p className="hostSetupHelp">First installation or no temporary password? Open the master Google Sheet and choose <strong>🎤 Karaoke → Set Up or Recover Superhost Access</strong>.</p>
+    <p className="hostSetupHelp">Forgot your username or password, or having trouble signing in? <strong>Contact your Superhost.</strong></p>
     {error&&<p className="hostError" role="alert">{error}</p>}
   </section></main>;
   if(user.mustChangePassword)return <main className="hostPage"><section className="hostLogin hostCard">
@@ -312,7 +312,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const activityVenues=adminVenues.filter(item=>value(item,"hotelId")===activityHotelId);
 
   return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.0.1</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{codeVersion?` · Code.gs v${codeVersion}`:""}</span></div><button onClick={logout}><LogOut/>Log Out</button></header>
+    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.1.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><button onClick={logout}><LogOut/>Log Out</button></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
       <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
@@ -324,7 +324,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     {user.role==="superhost"&&<section className="adminStack">
       <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Independent Sheets</h2><p>Creating a hotel automatically creates its own spreadsheet in the Superhost’s Google Drive. Creating a user never creates a spreadsheet.</p></div></div>
         <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel + Sheet</button></form>
-        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a><a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this hotel and its public link?"))return;await run(inactive?"Hotel activated.":"Hotel deactivated.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive"}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></div></article>)}</div>
+        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a><a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";let confirmHotelName="";if(!inactive){confirmHotelName=window.prompt(`Type ${value(item,"name")} exactly to delete this hotel:`,"")||"";if(confirmHotelName!==value(item,"name"))return;}await run(inactive?"Hotel restored.":"Hotel deleted and recoverable.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive",confirmHotelName}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Restore":"Delete"}</button></div></article>)}</div>
       </section>
       <div className="adminColumns">
         <section className="hostCard"><div className="sectionTitle"><MapPin/><div><h2>Venues</h2><p>Add physical locations inside a hotel.</p></div></div><form onSubmit={createVenue}><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue name<input name="name" required/></label><button disabled={busy}><Plus/>Create Venue</button></form></section>

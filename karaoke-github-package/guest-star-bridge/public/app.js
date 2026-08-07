@@ -1,3 +1,6 @@
+import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
+import { initSuperhostPanel } from "./superhost.js";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const requestsEl = $("#requests");
 const noticeEl = $("#notice");
@@ -15,11 +18,18 @@ let folders = [];
 let activityBusy = false;
 let scanBusy = false;
 let syncBusy = false;
+let rotationItems = [];
 const actionLocks = new Set();
 const hitSearchLocks = new Set();
 const expandedRequestIds = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
+const superhostPanel = initSuperhostPanel({
+  api,
+  showNotice,
+  copyLink,
+  openExternal
+});
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -271,7 +281,7 @@ function activityMessage(activity) {
   if (!action) return "";
   const source = {
     web: "from the web controls",
-    sheet: "from Google Sheets",
+    sheet: "from Guest Star",
     bridge: "from this panel"
   }[activity.lastSource] || "from the host controls";
   return `${action} ${source}.`;
@@ -389,9 +399,11 @@ function updateStatus() {
   );
   $("#shareButton").disabled = !tenant.share?.publicUrl;
   $("#settingsButton").disabled = !selectedActivity;
-  ["#openHostPanel", "#switchActivity", "#logoutButton"].forEach((selector) => {
-    $(selector).classList.toggle("hidden", !authenticated);
-  });
+  const isSuperhost = authenticated && state.account?.user?.role === "superhost";
+  $("#openHostPanel").classList.toggle("hidden", !isSuperhost || superhostPanel.isOpen());
+  $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen());
+  $("#switchActivity").classList.toggle("hidden", !authenticated);
+  $("#logoutButton").classList.toggle("hidden", !authenticated);
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -442,7 +454,7 @@ function renderSourceLink(panel, url) {
   panel.classList.remove("hidden");
   const info = document.createElement("div");
   const label = document.createElement("small");
-  label.textContent = "GOOGLE SHEETS LINK";
+  label.textContent = "SAVED SOURCE LINK";
   const link = document.createElement("a");
   link.href = "#";
   link.textContent = url;
@@ -455,7 +467,7 @@ function renderSourceLink(panel, url) {
   actions.className = "source-actions";
   actions.append(
     button("Copy Link", "primary", () =>
-      copyLink(url, "Google Sheets link copied.")
+      copyLink(url, "Saved link copied.")
     ),
     button("Open ↗", "youtube", () => openExternal(url))
   );
@@ -599,6 +611,8 @@ async function queueSuggestion(item, singerMode) {
       body: JSON.stringify({
         song: item.song,
         artist: item.artist,
+        language: item.language,
+        list: item.list,
         singerMode
       })
     }),
@@ -607,6 +621,87 @@ async function queueSuggestion(item, singerMode) {
       detail: `${data.song} was added to VirtualDJ for ${data.singer}.`
     })
   );
+}
+
+function rotationCard(item) {
+  const card = document.createElement("article");
+  card.className = "hit-card";
+  const info = document.createElement("div");
+  const language = document.createElement("small");
+  language.textContent = item.list === "favorites"
+    ? `★ ${item.language}`
+    : item.language;
+  const song = document.createElement("strong");
+  song.textContent = item.song;
+  const artist = document.createElement("p");
+  artist.textContent = item.artist;
+  const availability = document.createElement("em");
+  availability.textContent = item.localAvailable
+    ? `Local: ${item.fileName}`
+    : "No disponible localmente";
+  info.append(language, song, artist, availability);
+  const actions = document.createElement("div");
+  actions.className = "queue-actions";
+  if (item.localAvailable) {
+    actions.append(
+      button("Agregar para EMCEE", "primary", () => queueSuggestion(item, "emcee")),
+      button("Cantante aleatorio", "ghost", () => queueSuggestion(item, "random"))
+    );
+  } else {
+    const key = `${item.language}:${item.artist}:${item.song}`;
+    if (item.youtube?.[0]) {
+      const selected = item.youtube[0];
+      actions.append(
+        button("Copiar karaoke", "primary", () =>
+          copyLink(selected.url, `Enlace de ${item.song} copiado.`)
+        ),
+        button("Abrir ↗", "youtube", () => openExternal(selected.url))
+      );
+    } else {
+      const search = button(
+        hitSearchLocks.has(key) ? "Buscando…" : "Buscar karaoke",
+        "youtube",
+        () => searchHitYoutube(item, key)
+      );
+      search.disabled = hitSearchLocks.has(key);
+      actions.append(search);
+    }
+  }
+  card.append(info, actions);
+  return card;
+}
+
+function renderRandomRotation() {
+  const panel = $("#randomRotation");
+  const authenticated = state?.account?.authenticated === true;
+  const selected = Boolean(state?.tenant?.activity);
+  panel.classList.toggle("hidden", !authenticated || !selected);
+  const grid = $("#rotationGrid");
+  grid.innerHTML = "";
+  rotationItems.forEach((item) => grid.append(rotationCard(item)));
+  $("#rotationEmpty").classList.toggle("hidden", rotationItems.length > 0);
+  if (!state?.rotation?.counts?.favorites) {
+    $("#randomFavorites").title =
+      "El Superhost todavía no ha agregado favoritos para este hotel.";
+  } else {
+    $("#randomFavorites").removeAttribute("title");
+  }
+}
+
+async function drawRandomRotation(list) {
+  try {
+    const data = await api("/api/rotation/draw", {
+      method: "POST",
+      body: JSON.stringify({ list, count: 6 })
+    });
+    rotationItems = data.items || [];
+    renderRandomRotation();
+    showNotice(rotationItems.length
+      ? "Nueva ronda aleatoria lista; no se repetirá un tema antes de completar la vuelta."
+      : "Esta lista todavía no tiene temas. Agrega favoritos desde Superhost.");
+  } catch (error) {
+    showNotice(error.message, true);
+  }
 }
 
 async function youtube(id, panel) {
@@ -630,7 +725,7 @@ async function copyYoutubeOption(id, url) {
       body: JSON.stringify({ url })
     });
     const detail = data.sheetUpdated
-      ? "The selected link was copied and saved as the request’s only Google Sheets link."
+      ? "The selected link was copied and saved with the request."
       : "The selected link was copied to the clipboard.";
     showNotice(detail);
     showSuccess("Karaoke link selected", detail);
@@ -858,7 +953,7 @@ function renderRequests() {
     const requestNumber = $(".request-number", card);
     requestNumber.textContent = `#${arrival.number}`;
     requestNumber.title = item.sheetRow
-      ? `Request ${arrival.number} · Google Sheets row ${item.sheetRow}`
+      ? `Request ${arrival.number} · record ${item.sheetRow}`
       : `Request ${arrival.number} by arrival order`;
     $(".singer", card).textContent = item.singer;
     $(".song", card).textContent = item.song;
@@ -964,12 +1059,12 @@ function renderRequests() {
       }
     } else if (wasRemoved) {
       match.innerHTML =
-        '<div class="requeue-prompt"><strong>This song is no longer in the VirtualDJ queue.</strong><p>Would you like to place it at the end of the rotation?</p></div>';
+        '<div class="requeue-prompt"><strong>This song is no longer in the VirtualDJ queue.</strong><p>Did you remove it intentionally?</p></div>';
       const actions = document.createElement("div");
       actions.className = "queue-actions";
       if (item.localAvailable) {
         actions.append(
-          button("Add Again at the End", "primary", () =>
+          button("No — Re-add at the End", "primary", () =>
             queue(
               item.id,
               item.matches.find((candidate) => candidate.exact)?.filePath ||
@@ -980,7 +1075,7 @@ function renderRequests() {
         );
       }
       actions.append(
-        button("Keep It Outside", "ghost", () => dismissRequeue(item.id))
+        button("Yes — Keep It Outside", "ghost", () => dismissRequeue(item.id))
       );
       match.append(actions);
       if (!item.localAvailable) {
@@ -1234,6 +1329,8 @@ async function searchHitYoutube(item, key) {
         force: true
       })
     });
+    item.youtube = data.items || [];
+    item.youtubeSearched = true;
     await refresh();
     showNotice(data.items?.length
       ? "Karaoke link found; you can copy it now."
@@ -1243,6 +1340,7 @@ async function searchHitYoutube(item, key) {
   } finally {
     hitSearchLocks.delete(key);
     renderHitSuggestions();
+    renderRandomRotation();
   }
 }
 
@@ -1285,7 +1383,10 @@ function fillSettings() {
     ? "PIN saved · leave blank to keep"
     : "Private PIN";
   $("#rememberHostPin").checked = state.config.rememberHostPin !== false;
-  $("#legacyConnection").classList.toggle("hidden", state.config.signedIn === true);
+  $("#legacyConnection").classList.toggle(
+    "hidden",
+    state.account?.user?.role !== "superhost"
+  );
   $("#vdjPort").value = state.config.virtualDJ.port || 80;
   $("#vdjPassword").value = "";
   $("#vdjPassword").placeholder = state.config.virtualDJ.passwordConfigured
@@ -1535,6 +1636,7 @@ function updateAuthUi() {
     if (!passwordDialog.open) passwordDialog.showModal();
     return;
   }
+  if (state.account?.user?.role === "superhost") return;
   if (!state.account?.current?.activityId && !passwordDialog.open) {
     fillSelection();
     if (!selectionDialog.open) selectionDialog.showModal();
@@ -1559,7 +1661,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     await refresh();
     if (data.mustChangePassword) {
       if (!passwordDialog.open) passwordDialog.showModal();
-    } else {
+    } else if (data.user?.role !== "superhost") {
       fillSelection();
       if (!selectionDialog.open) selectionDialog.showModal();
     }
@@ -1642,13 +1744,13 @@ async function logout() {
 
 $("#logoutButton").addEventListener("click", logout);
 $("#menuLogout").addEventListener("click", logout);
-$("#openHostPanel").addEventListener("click", async () => {
-  try {
-    await api("/api/host-panel/open", { method: "POST", body: "{}" });
-    showNotice("The Host Panel opened in your default browser.");
-  } catch (error) {
-    showNotice(error.message, true);
-  }
+$("#openHostPanel").addEventListener("click", () => {
+  superhostPanel.open();
+  updateStatus();
+});
+$("#liveEventButton").addEventListener("click", () => {
+  superhostPanel.close();
+  updateStatus();
 });
 
 $("#primaryActivity").addEventListener("click", () =>
@@ -1665,9 +1767,16 @@ $("#archiveQueue").addEventListener("click", async () => {
 
 $("#shareButton").addEventListener("click", () => {
   const share = state.tenant?.share || {};
-  $("#shareUrl").value = share.publicUrl || "";
-  $("#shareQr").src = share.qrViewUrl || "";
-  $("#downloadShareQr").disabled = !share.qrDownloadUrl;
+  const publicUrl = share.publicUrl || "";
+  $("#shareUrl").value = publicUrl;
+  $("#downloadShareQr").disabled = !publicUrl;
+  try {
+    setLocalQrImage($("#shareQr"), publicUrl);
+    $("#shareQrStatus").textContent = "QR verified and generated on this Mac.";
+  } catch (error) {
+    $("#shareQr").removeAttribute("src");
+    $("#shareQrStatus").textContent = error.message;
+  }
   shareDialog.showModal();
 });
 $("#closeShare").addEventListener("click", () => shareDialog.close());
@@ -1675,10 +1784,23 @@ $("#copyShareLink").addEventListener("click", () =>
   copyLink(state.tenant?.share?.publicUrl || "", "Permanent hotel link copied.")
 );
 $("#downloadShareQr").addEventListener("click", () => {
-  const url = state.tenant?.share?.qrDownloadUrl;
-  if (url) openExternal(url);
+  const url = state.tenant?.share?.publicUrl;
+  if (url) downloadLocalQr(url, "Guest-Star-QR.png");
 });
 $("#printShareQr").addEventListener("click", () => window.print());
+window.addEventListener("guest-star:show-qr", (event) => {
+  const url = event.detail?.url || "";
+  $("#shareUrl").value = url;
+  $("#downloadShareQr").disabled = !url;
+  try {
+    setLocalQrImage($("#shareQr"), url);
+    $("#shareQrStatus").textContent = "QR verified and generated on this Mac.";
+  } catch (error) {
+    $("#shareQr").removeAttribute("src");
+    $("#shareQrStatus").textContent = error.message;
+  }
+  shareDialog.showModal();
+});
 $("#moreButton").addEventListener("click", () => moreDialog.showModal());
 $("#closeMore").addEventListener("click", () => moreDialog.close());
 $("#previewGuestPage").addEventListener("click", () => {
@@ -1686,7 +1808,7 @@ $("#previewGuestPage").addEventListener("click", () => {
   if (url) openExternal(url);
 });
 $("#viewPrevious").addEventListener("click", () => {
-  showNotice("Previous activity details are available in the Host Panel.");
+  showNotice("Previous activity details are available from the administration view.");
 });
 
 $("#scanButton").addEventListener("click", scan);
@@ -1772,8 +1894,8 @@ $("#testSheet").addEventListener("click", async () => {
       body: JSON.stringify(settingsPayload())
     });
     showSuccess(
-      "Google Sheets Is Connected",
-      `Everything is working. Code.gs ${data.codeVersion} returned ${data.requestCount} active requests.`
+      "Guest Star Is Connected",
+      `Everything is working. Service ${data.codeVersion} returned ${data.requestCount} active requests.`
     );
   } catch (error) {
     showNotice(error.message, true);
@@ -1809,8 +1931,16 @@ function applyState(nextState) {
   renderVdjQueue();
   renderRequests();
   renderHitSuggestions();
+  renderRandomRotation();
   updateAuthUi();
+  superhostPanel.sync(state);
+  updateStatus();
 }
+
+$("#randomSpanish").addEventListener("click", () => drawRandomRotation("spanish"));
+$("#randomEnglish").addEventListener("click", () => drawRandomRotation("english"));
+$("#randomFavorites").addEventListener("click", () => drawRandomRotation("favorites"));
+$("#randomBoth").addEventListener("click", () => drawRandomRotation("both"));
 
 function connectRealtime() {
   const source = new EventSource("/api/events");

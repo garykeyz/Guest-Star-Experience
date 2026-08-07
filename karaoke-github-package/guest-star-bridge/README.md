@@ -1,4 +1,4 @@
-# Guest Star Bridge 4.0.1
+# Guest Star Bridge 4.1.0
 
 Aplicación local Universal para Mac que conecta Guest Star con la biblioteca de
 karaoke y la cola Karaoke real de VirtualDJ.
@@ -11,12 +11,12 @@ karaoke y la cola Karaoke real de VirtualDJ.
 - Internet.
 - Usuario Host, contraseña temporal y asignación creados por el Superhost.
 
-El operador no necesita cuenta Google, acceso a Sheets, Apps Script, Node, npm
-ni Terminal.
+El operador solo necesita la app, sus credenciales y la asignación entregada por
+el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Bridge-Universal-v4.0.1-app.zip` o abre el DMG.
+1. Descomprime `Guest-Star-Bridge-Universal-v4.1.0-app.zip` o abre el DMG.
 2. Mueve **Guest Star Bridge.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario Host y cambia la contraseña temporal.
@@ -24,9 +24,9 @@ ni Terminal.
 6. En Settings, elige las carpetas locales y configura Network Control.
 7. Prueba VirtualDJ y sincroniza.
 
-La URL `/exec` y el PIN solo se mantienen como configuración avanzada para
-migrar instalaciones 3.x. En 4.0 el flujo normal utiliza cuenta y token de
-dispositivo; los secretos se guardan en macOS Keychain.
+La configuración técnica heredada solo aparece para el Superhost al migrar una
+instalación 3.x. En 4.1 el flujo normal utiliza cuenta y token de dispositivo;
+los secretos se guardan en macOS Keychain.
 
 ## Operación
 
@@ -34,8 +34,11 @@ dispositivo; los secretos se guardan en macOS Keychain.
 - **Requests** abre o cierra solicitudes sin reiniciar el evento.
 - **Finish Activity** termina el ciclo conservando historial.
 - **Share** muestra el enlace permanente y QR del hotel.
-- El menú adicional permite abrir `/host`, cambiar actividad, archivar la cola o
-  cerrar sesión.
+- El menú adicional permite cambiar actividad, archivar la cola o cerrar sesión.
+- Al iniciar sesión como Superhost, Bridge abre su administración bilingüe
+  integrada; **Evento en vivo** regresa a la operación de karaoke.
+- **Aleatorio · Random** genera rondas en español, inglés, ambas listas o los
+  favoritos del hotel sin repetir antes de completar cada vuelta.
 
 Las solicitudes se separan en pendientes, cola VDJ y completadas, sin perder su
 número de llegada. Cada tarjeta muestra idioma, duración, transición,
@@ -49,7 +52,7 @@ si un disco falla temporalmente. La ruta confirmada por VirtualDJ también cuent
 como evidencia local.
 
 Cuando falta una pista, se muestran hasta seis opciones con letra en el idioma
-elegido. No existe caída silenciosa a inglés. Sheets conserva un solo mejor
+elegido. No existe caída silenciosa a inglés. Guest Star conserva un solo mejor
 enlace y cualquier opción elegida por el Host reemplaza esa misma fuente.
 
 ## Reconciliación VirtualDJ
@@ -70,7 +73,7 @@ completo.
 - credenciales en macOS Keychain;
 - archivo de configuración con permisos `0600`;
 - token de dispositivo separado de la sesión web;
-- selección y permisos verificados de nuevo en Apps Script.
+- selección y permisos verificados de nuevo por el servicio Guest Star.
 
 ## Pruebas
 

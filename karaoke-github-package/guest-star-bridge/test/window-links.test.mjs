@@ -17,6 +17,8 @@ const formSource = await readFile(
 );
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
 const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
+const superhostSource = await readFile(resolve(root, "public/superhost.js"), "utf8");
+const qrSource = await readFile(resolve(root, "public/qr-ui.js"), "utf8");
 const faviconSource = await readFile(resolve(root, "../app/icon.svg"), "utf8");
 const hostPanelSource = await readFile(
   resolve(root, "../components/HostPanel.tsx"),
@@ -66,7 +68,12 @@ test("la sincronización en vivo no borra el usuario mientras se escribe", () =>
     (authUiSource.match(/loginUsername"\)\.value =/g) || []).length,
     1
   );
-  assert.match(bridgeHtml, /Set Up or Recover Superhost Access/);
+  const loginHelp = bridgeHtml.slice(
+    bridgeHtml.indexOf('id="loginDialog"'),
+    bridgeHtml.indexOf('id="selectionDialog"')
+  );
+  assert.match(loginHelp, /Contact your Superhost/);
+  assert.doesNotMatch(loginHelp, /Google|Sheets|Drive|Apps Script|Code\.gs/i);
 });
 
 test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {
@@ -144,10 +151,10 @@ test("el Bridge respeta el estado sin iniciar y no inventa una hora local", () =
   assert.doesNotMatch(normalizedActivitySource, /new Date\(\)\.toISOString\(\)/);
 });
 
-test("el enlace seleccionado se copia y se guarda como fuente única en Sheets", () => {
+test("el enlace seleccionado se copia y se guarda como fuente única", () => {
   assert.match(
     appSource,
-    /saved as the request’s only Google Sheets link/
+    /The selected link was copied and saved with the request/
   );
   assert.match(serverSource, /sourceUrl: selected\.url/);
   assert.match(serverSource, /item\.sourceUrl = selected\.url/);
@@ -208,16 +215,22 @@ test("muestra opcionalmente el estado público y el Host seguro lo controla", ()
   assert.match(publicApiSource, /Public action is not allowed/);
 });
 
-test("el panel conserva el diagnóstico real y ofrece QR aunque Drive sea opcional", () => {
-  assert.match(hostPanelSource, /function friendlyHostError/);
-  assert.match(hostPanelSource, /HOTEL_CREATION_IN_PROGRESS/);
-  assert.match(hostPanelSource, /HOTEL_ALREADY_EXISTS/);
-  assert.match(hostPanelSource, /run authorizeGuestStarV4/);
-  assert.match(hostPanelSource, /update the existing web app deployment/);
-  assert.doesNotMatch(hostPanelSource, /googleapis\\\.com\\\/auth\\\/drive/);
-  assert.match(hostPanelSource, /function hotelQrPngUrl/);
-  assert.match(hostPanelSource, /quickchart\.io\/qr/);
-  assert.match(hostPanelSource, /data\.codeBuild\|\|data\.codeVersion/);
+test("el Superhost administra todo dentro del Bridge y usa QR local", () => {
+  assert.match(superhostSource, /\/api\/superhost\/state/);
+  assert.match(superhostSource, /\/api\/superhost\/action/);
+  assert.match(superhostSource, /Hoteles/);
+  assert.match(superhostSource, /Hosts y permisos/);
+  assert.match(superhostSource, /Experiencia pública/);
+  assert.match(superhostSource, /Dispositivos y auditoría/);
+  assert.match(superhostSource, /type its exact name|escribe exactamente su nombre/);
+  assert.match(superhostSource, /confirmHotelName/);
+  assert.match(superhostSource, /status: "inactive"/);
+  assert.match(superhostSource, /status: "active"/);
+  assert.match(superhostSource, /data-superhost-language/);
+  assert.match(superhostSource, /setLocalQrImage/);
+  assert.match(qrSource, /globalThis\.qrcode/);
+  assert.doesNotMatch(qrSource, /quickchart|drive\.google/i);
+  assert.doesNotMatch(serverSource, /pathname === "\/api\/host-panel\/open"/);
   assert.match(hostApiSource, /HOTEL_PROVISIONING_TIMEOUT_MS = 120_000/);
   assert.match(hostApiSource, /payload\.action === "createHotel"/);
 });
@@ -228,8 +241,15 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.0\.1/);
-  assert.match(hostPanelSource, /Code\.gs v/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.1\.0"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.1\.0/);
+  assert.match(hostPanelSource, /Service v/);
+});
+
+test("si una canción desaparece, pregunta si fue intencional", () => {
+  assert.match(appSource, /Did you remove it intentionally\?/);
+  assert.match(appSource, /No — Re-add at the End/);
+  assert.match(appSource, /Yes — Keep It Outside/);
 });
 
 test("la página incluye un favicon propio de Guest Star", () => {

@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBridgeSecrets, storeBridgeSecrets } from "./keychain.mjs";
+import { normalizeFavoriteSongs } from "./random-rotation.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = resolve(ROOT, "data");
@@ -11,7 +12,7 @@ const LEGACY_DIRECT_APPS_SCRIPT_URL =
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 8,
+  configVersion: 9,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -22,6 +23,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   lastUsername: "",
   rememberLogin: true,
   rememberSelection: true,
+  superhostLanguage: "es",
+  favoriteSongsByHotel: {},
   secretsInKeychain: false,
   libraryFolders: [],
   rememberLibraryFolders: true,
@@ -47,6 +50,17 @@ function numberInRange(value, fallback, min, max) {
 function normalizeFolders(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function normalizeFavoritesByHotel(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [hotelId, songs] of Object.entries(value).slice(0, 50)) {
+    const safeHotelId = String(hotelId || "").trim().slice(0, 100);
+    if (!safeHotelId) continue;
+    result[safeHotelId] = normalizeFavoriteSongs(songs);
+  }
+  return result;
 }
 
 export function migrateAppsScriptUrl(value, configVersion) {
@@ -91,6 +105,19 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.rememberSelection === undefined
         ? Boolean(current.rememberSelection)
         : Boolean(input.rememberSelection),
+    superhostLanguage:
+      String(
+        input.superhostLanguage === undefined
+          ? current.superhostLanguage || "es"
+          : input.superhostLanguage
+      ).toLowerCase() === "en"
+        ? "en"
+        : "es",
+    favoriteSongsByHotel: normalizeFavoritesByHotel(
+      input.favoriteSongsByHotel === undefined
+        ? current.favoriteSongsByHotel
+        : input.favoriteSongsByHotel
+    ),
     secretsInKeychain:
       input.secretsInKeychain === undefined
         ? Boolean(current.secretsInKeychain)
@@ -179,6 +206,8 @@ export async function loadConfig() {
       if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;
       if (parsed.rememberSelection === undefined) parsed.rememberSelection = true;
+      if (parsed.superhostLanguage === undefined) parsed.superhostLanguage = "es";
+      if (parsed.favoriteSongsByHotel === undefined) parsed.favoriteSongsByHotel = {};
     }
     let clean = sanitizeConfig(parsed, DEFAULT_CONFIG);
     if (clean.secretsInKeychain && clean.deviceId) {
@@ -225,6 +254,7 @@ export function publicConfig(config) {
     signedIn: Boolean(config.authToken && config.deviceToken && config.deviceId),
     hostPin: "",
     hostPinConfigured: Boolean(config.hostPin),
+    favoriteSongsByHotel: {},
     virtualDJ: {
       ...config.virtualDJ,
       password: "",

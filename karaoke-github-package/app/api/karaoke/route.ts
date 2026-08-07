@@ -18,13 +18,13 @@ function errorResponse(message: string, status = 502) {
 async function readAppsScriptJson(response: Response): Promise<JsonObject> {
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Google Apps Script respondió ${response.status}.`);
+    throw new Error(`Guest Star respondió ${response.status}.`);
   }
   try {
     return JSON.parse(text) as JsonObject;
   } catch {
     throw new Error(
-      "Google Apps Script no devolvió una respuesta válida. Revisa que la implementación permita acceso a cualquier persona."
+      "Guest Star no devolvió una respuesta válida. Intenta de nuevo o avisa al equipo de la actividad."
     );
   }
 }
@@ -47,10 +47,10 @@ async function forward(url: URL, init: RequestInit = {}) {
   } catch (error) {
     const message =
       error instanceof Error && error.name === "AbortError"
-        ? "Google Sheets tardó demasiado en responder. Intenta de nuevo."
+        ? "Guest Star tardó demasiado en responder. Intenta de nuevo."
         : error instanceof Error
           ? error.message
-          : "No se pudo conectar con Google Sheets.";
+          : "No se pudo conectar con Guest Star.";
     return errorResponse(message);
   } finally {
     clearTimeout(timeout);

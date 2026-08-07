@@ -83,7 +83,33 @@ function normalizeVdjMetadata(value) {
     .trim();
 }
 
-function sameKaraokeIdentity(candidate, target) {
+function metadataContains(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    (left === right || left.includes(right) || right.includes(left))
+  );
+}
+
+function sameMetadataPair(candidate, target) {
+  const candidateSong = normalizeVdjMetadata(candidate?.song);
+  const targetSong = normalizeVdjMetadata(target?.song);
+  const candidateArtist = normalizeVdjMetadata(candidate?.artist);
+  const targetArtist = normalizeVdjMetadata(target?.artist);
+  if (!candidateSong || !targetSong) return false;
+  const direct = candidateSong === targetSong && (
+    !candidateArtist || !targetArtist || metadataContains(candidateArtist, targetArtist)
+  );
+  const reversed = Boolean(
+    candidateArtist &&
+    targetArtist &&
+    metadataContains(candidateSong, targetArtist) &&
+    metadataContains(candidateArtist, targetSong)
+  );
+  return direct || reversed;
+}
+
+export function sameKaraokeIdentity(candidate, target) {
   const sameSinger =
     normalizeVdjSinger(candidate?.singer) === normalizeVdjSinger(target?.singer);
   if (!sameSinger) return false;
@@ -91,18 +117,7 @@ function sameKaraokeIdentity(candidate, target) {
   const targetPath = normalizeVdjPath(target?.filePath);
   if (candidatePath && targetPath) return candidatePath === targetPath;
 
-  const candidateSong = normalizeVdjMetadata(candidate?.song);
-  const targetSong = normalizeVdjMetadata(target?.song);
-  if (!candidateSong || !targetSong || candidateSong !== targetSong) return false;
-  const candidateArtist = normalizeVdjMetadata(candidate?.artist);
-  const targetArtist = normalizeVdjMetadata(target?.artist);
-  return (
-    !candidateArtist ||
-    !targetArtist ||
-    candidateArtist === targetArtist ||
-    candidateArtist.includes(targetArtist) ||
-    targetArtist.includes(candidateArtist)
-  );
+  return sameMetadataPair(candidate, target);
 }
 
 export function buildKaraokeRemoveScript(index) {
@@ -278,7 +293,6 @@ export async function removeKaraokeEntry(config, entry) {
   const targetPath = normalizeVdjPath(entry?.filePath);
   const targetSinger = normalizeVdjSinger(entry?.singer);
   const targetSong = normalizeVdjMetadata(entry?.song);
-  const targetArtist = normalizeVdjMetadata(entry?.artist);
   if (!targetSinger || (!targetPath && !targetSong)) {
     throw new Error("The request data required to remove it from VirtualDJ is missing.");
   }
@@ -298,20 +312,12 @@ export async function removeKaraokeEntry(config, entry) {
       pathMatches.push(candidate.index);
       if (sameSinger) exactMatches.push(candidate.index);
     }
-    if (
-      sameSinger &&
-      targetSong &&
-      normalizeVdjMetadata(candidate.song) === targetSong
-    ) {
+    if (sameSinger && targetSong && (
+      normalizeVdjMetadata(candidate.song) === targetSong ||
+      sameMetadataPair(candidate, entry)
+    )) {
       songSingerMatches.push(candidate.index);
-      const candidateArtist = normalizeVdjMetadata(candidate.artist);
-      if (
-        !targetArtist ||
-        !candidateArtist ||
-        targetArtist === candidateArtist ||
-        targetArtist.includes(candidateArtist) ||
-        candidateArtist.includes(targetArtist)
-      ) {
+      if (sameMetadataPair(candidate, entry)) {
         metadataMatches.push(candidate.index);
       }
     }

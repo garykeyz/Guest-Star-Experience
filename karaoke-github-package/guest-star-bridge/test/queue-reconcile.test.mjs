@@ -101,6 +101,33 @@ test("tolera un typo del artista si cantante y canción coinciden", () => {
   assert.deepEqual(result.missing, []);
 });
 
+test("reconoce Mi Vida aunque VirtualDJ invierta título y artista", () => {
+  const result = reconcileTrackedQueue([
+    {
+      id: "request-mi-vida",
+      singer: "Laura",
+      song: "Mi Vida",
+      artist: "Divino",
+      durationSeconds: 237
+    }
+  ], [
+    {
+      index: 0,
+      singer: "Laura",
+      song: "Divino",
+      artist: "Mi vida",
+      durationSeconds: 237
+    }
+  ]);
+
+  assert.equal(result.matched.get("request-mi-vida").index, 0);
+  assert.equal(
+    result.matchDetails.get("request-mi-vida").fields.includes("metadataReversed"),
+    true
+  );
+  assert.deepEqual(result.missing, []);
+});
+
 test("mantiene el identificador estable cuando VirtualDJ reordena la cola", () => {
   const first = stabilizeVirtualDjEntries([
     { index: 0, filePath: "/Music/First.mp4", singer: "Ana" },

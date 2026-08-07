@@ -1,9 +1,9 @@
-# Guest Star Experience 4.0.1
+# Guest Star Experience 4.1.0
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
 
-## Modelo 4.0
+## Modelo 4.1
 
 El **Superhost** administra el sistema desde su propia cuenta de Google:
 
@@ -13,7 +13,8 @@ El **Superhost** administra el sistema desde su propia cuenta de Google:
   hotel;
 - usuarios y permisos dentro del registro maestro, sin crear hojas por usuario;
 - enlace público permanente y QR por hotel;
-- panel seguro `/host` para Superhost y Hosts, sin compartir Google.
+- panel Superhost bilingüe integrado directamente en Bridge;
+- panel seguro `/host` conservado como acceso web complementario.
 
 Al crear un hotel desde el panel se crean en una sola operación: hoja del hotel,
 sede principal, actividad Guest Star Karaoke, identidad inicial, enlace, QR y
@@ -29,7 +30,7 @@ Lee [MULTIUSER-SETUP.md](MULTIUSER-SETUP.md). El resumen es:
 4. Implementa como aplicación web, ejecutando como el Superhost y con acceso
    para cualquier persona.
 5. Configura la URL `/exec` como `KARAOKE_APPS_SCRIPT_URL` del sitio.
-6. Entra en `/host`, cambia la contraseña y crea hoteles/usuarios.
+6. Inicia sesión como Superhost en Bridge, cambia la contraseña y administra hoteles y usuarios desde el panel integrado.
 
 La autorización inicial de Google no puede automatizarse sin consentimiento del
 propietario. Después de ese único paso, hoteles, hojas, sedes, actividades,
@@ -68,6 +69,10 @@ operador.
 - dedicatorias visibles;
 - deshacer Completed/Skipped con restauración de posición;
 - prevención de falsos “falta local” y duplicados durante la sincronización;
+- listas aleatorias infinitas en español e inglés sin repetir antes de completar cada vuelta;
+- favoritos persistentes e independientes por hotel;
+- QR generado localmente en Bridge, sin depender de una imagen externa;
+- eliminación recuperable de hoteles con confirmación por nombre, suspensión de asignaciones y agenda;
 - horarios y recurrencia por zona horaria;
 - estado público opcional, cuenta regresiva, siguiente actividad y calendario;
 - identidad por hotel, reseñas opcionales y recordatorios solo con consentimiento;

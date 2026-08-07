@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.1"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.0"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -823,6 +823,88 @@ test("crear un hotel serializa la provisión y nunca duplica un nombre existente
   }
 });
 
+test("eliminar un hotel exige el nombre exacto, suspende dependencias y permite restaurarlo", () => {
+  const originals = {
+    findRecordV4_: context.findRecordV4_,
+    tableRowsV4_: context.tableRowsV4_,
+    updateRecordV4_: context.updateRecordV4_,
+    auditV4_: context.auditV4_
+  };
+  const hotel = {
+    _row: 2,
+    hotelId: "hotel-1",
+    name: "Moon Palace",
+    status: "active",
+    publicCode: "public-code",
+    slug: "moon-palace",
+    publicUrl: "https://request.gstarxp.com/h/moon-palace-public-code"
+  };
+  const tables = {
+    UserAssignments: [
+      { _row: 2, assignmentId: "a-1", hotelId: "hotel-1", status: "active" },
+      { _row: 3, assignmentId: "a-2", hotelId: "hotel-1", status: "inactive" }
+    ],
+    ActivitySchedules: [
+      { _row: 2, scheduleId: "s-1", hotelId: "hotel-1", status: "active" },
+      { _row: 3, scheduleId: "s-2", hotelId: "hotel-1", status: "cancelled" }
+    ],
+    Devices: [
+      { _row: 2, deviceId: "d-1", hotelId: "hotel-1", venueId: "v-1", activityId: "act-1", status: "active" }
+    ]
+  };
+  const audits = [];
+  try {
+    context.findRecordV4_ = () => hotel;
+    context.tableRowsV4_ = (_master, table) => tables[table] || [];
+    context.updateRecordV4_ = (_master, table, _headers, row, changes) => {
+      const record = table === "Hotels"
+        ? hotel
+        : (tables[table] || []).find((item) => item._row === row);
+      Object.assign(record, changes);
+      return record;
+    };
+    context.auditV4_ = (entry) => audits.push(entry);
+    const auth = { master: {}, user: { userId: "superhost-1", role: "superhost" } };
+
+    const rejected = context.updateHotelForSuperhostV4_(auth, {
+      hotelId: "hotel-1",
+      status: "inactive",
+      confirmHotelName: "moon palace"
+    });
+    assert.equal(rejected.code, "HOTEL_NAME_CONFIRMATION_REQUIRED");
+    assert.equal(hotel.status, "active");
+
+    const deleted = context.updateHotelForSuperhostV4_(auth, {
+      hotelId: "hotel-1",
+      status: "inactive",
+      confirmHotelName: "Moon Palace"
+    });
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.recoverable, true);
+    assert.equal(hotel.status, "inactive");
+    assert.equal(tables.UserAssignments[0].status, "suspended_hotel");
+    assert.equal(tables.UserAssignments[1].status, "inactive");
+    assert.equal(tables.ActivitySchedules[0].status, "suspended_hotel");
+    assert.equal(tables.ActivitySchedules[1].status, "cancelled");
+    assert.equal(tables.Devices[0].status, "active");
+    assert.equal(tables.Devices[0].hotelId, "");
+    assert.equal(audits.at(-1).action, "hotel.deleted");
+
+    const restored = context.updateHotelForSuperhostV4_(auth, {
+      hotelId: "hotel-1",
+      status: "active"
+    });
+    assert.equal(restored.ok, true);
+    assert.equal(hotel.status, "active");
+    assert.equal(tables.UserAssignments[0].status, "active");
+    assert.equal(tables.ActivitySchedules[0].status, "active");
+    assert.equal(audits.at(-1).action, "hotel.restored");
+    assert.match(source, /return hotel\.status === "active"/);
+  } finally {
+    Object.assign(context, originals);
+  }
+});
+
 test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
   const body = source.slice(
     source.indexOf("function createHostUserV4_"),
@@ -860,8 +942,8 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 });
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.1"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.0\.1-sheets-only-hotel-2"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.0"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.1\.0-superhost-bridge"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),
     source.indexOf("function publicHotelIdentifierV4_")

@@ -47,7 +47,8 @@ export function queueEntryFingerprint(entry = {}) {
   const song = normalizeText(entry.song);
   const artist = normalizeText(entry.artist);
   const duration = Math.max(0, Math.round(Number(entry.durationSeconds) || 0));
-  return [path || `${artist}|${song}`, singer, duration].join("|");
+  const metadata = [artist, song].filter(Boolean).sort().join("|");
+  return [path || metadata, singer, duration].join("|");
 }
 
 export function stabilizeVirtualDjEntries(actualEntries = [], previousEntries = []) {
@@ -83,14 +84,31 @@ export function stabilizeVirtualDjEntries(actualEntries = [], previousEntries = 
   });
 }
 
-export function queueMetadataMatches(tracked, actual) {
-  const songSimilarity = textSimilarity(tracked?.song, actual?.song);
-  if (songSimilarity < 0.82) return false;
-
+export function queueMetadataMatchDetails(tracked, actual) {
+  const trackedSong = normalizeText(tracked?.song);
+  const actualSong = normalizeText(actual?.song);
   const trackedArtist = normalizeText(tracked?.artist);
   const actualArtist = normalizeText(actual?.artist);
-  if (!trackedArtist || !actualArtist) return true;
-  return textSimilarity(trackedArtist, actualArtist) >= 0.72;
+  const directSong = textSimilarity(trackedSong, actualSong);
+  const directArtist = !trackedArtist || !actualArtist
+    ? 1
+    : textSimilarity(trackedArtist, actualArtist);
+  if (directSong >= 0.82 && directArtist >= 0.72) {
+    return { matches: true, reversed: false };
+  }
+  if (!trackedSong || !actualSong || !trackedArtist || !actualArtist) {
+    return { matches: false, reversed: false };
+  }
+  const reversedSong = textSimilarity(trackedSong, actualArtist);
+  const reversedArtist = textSimilarity(trackedArtist, actualSong);
+  return {
+    matches: reversedSong >= 0.82 && reversedArtist >= 0.72,
+    reversed: reversedSong >= 0.82 && reversedArtist >= 0.72
+  };
+}
+
+export function queueMetadataMatches(tracked, actual) {
+  return queueMetadataMatchDetails(tracked, actual).matches;
 }
 
 function candidateMatch(tracked, actual, singerPopulation) {
@@ -111,8 +129,9 @@ function candidateMatch(tracked, actual, singerPopulation) {
   const samePath = Boolean(targetPath && actualPath && targetPath === actualPath);
   if (samePath) fields.push("filePath");
 
-  const sameMetadata = queueMetadataMatches(tracked, actual);
-  if (sameMetadata) fields.push("metadata");
+  const metadata = queueMetadataMatchDetails(tracked, actual);
+  const sameMetadata = metadata.matches;
+  if (sameMetadata) fields.push(metadata.reversed ? "metadataReversed" : "metadata");
 
   const trackedDuration = Math.max(0, Number(tracked?.durationSeconds) || 0);
   const actualDuration = Math.max(0, Number(actual?.durationSeconds) || 0);

@@ -436,6 +436,52 @@ test("no duplica una canción que VirtualDJ ya confirma en la cola", async (t) =
   assert.equal(queue.length, 1);
 });
 
+test("no duplica Mi Vida cuando VirtualDJ invierte título y artista", async (t) => {
+  const queue = [{
+    filepath: "",
+    singer: "Laura",
+    title: "Divino",
+    artist: "Mi vida",
+    length: "3:57"
+  }];
+  let executeCalls = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      executeCalls += 1;
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
+      const index = Number(next?.[2] || 0);
+      response.end(next ? queue[index]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await insertKaraokeEntry({
+    host: "127.0.0.1",
+    port: server.address().port,
+    password: "",
+    timeoutMs: 1000
+  }, {
+    filePath: "/Music/Divino - Mi Vida.mp4",
+    singer: "Laura",
+    song: "Mi Vida",
+    artist: "Divino"
+  }, 0);
+
+  assert.equal(result.alreadyQueued, true);
+  assert.equal(result.entry.song, "Divino");
+  assert.equal(executeCalls, 0);
+  assert.equal(queue.length, 1);
+});
+
 test("reintenta hasta que VirtualDJ confirme una inserción demorada", async (t) => {
   const queue = [];
   let insertedCommand = false;
