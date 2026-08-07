@@ -208,12 +208,16 @@ test("muestra opcionalmente el estado público y el Host seguro lo controla", ()
   assert.match(publicApiSource, /Public action is not allowed/);
 });
 
-test("el panel conserva el diagnóstico real de Drive y evita hoteles duplicados", () => {
+test("el panel conserva el diagnóstico real y ofrece QR aunque Drive sea opcional", () => {
   assert.match(hostPanelSource, /function friendlyHostError/);
   assert.match(hostPanelSource, /HOTEL_CREATION_IN_PROGRESS/);
   assert.match(hostPanelSource, /HOTEL_ALREADY_EXISTS/);
   assert.match(hostPanelSource, /run authorizeGuestStarV4/);
   assert.match(hostPanelSource, /update the existing web app deployment/);
+  assert.doesNotMatch(hostPanelSource, /googleapis\\\.com\\\/auth\\\/drive/);
+  assert.match(hostPanelSource, /function hotelQrPngUrl/);
+  assert.match(hostPanelSource, /quickchart\.io\/qr/);
+  assert.match(hostPanelSource, /data\.codeBuild\|\|data\.codeVersion/);
   assert.match(hostApiSource, /HOTEL_PROVISIONING_TIMEOUT_MS = 120_000/);
   assert.match(hostApiSource, /payload\.action === "createHotel"/);
 });

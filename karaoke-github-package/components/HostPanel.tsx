@@ -35,7 +35,7 @@ function friendlyHostError(value: unknown, code = "") {
   if (code === "HOTEL_ALREADY_EXISTS") {
     return message;
   }
-  if (code === "GOOGLE_AUTHORIZATION_REQUIRED" || /googleapis\.com\/auth\/drive/i.test(message)) {
+  if (code === "GOOGLE_AUTHORIZATION_REQUIRED") {
     return "Google Drive access is missing. Open Apps Script, run authorizeGuestStarV4, approve every requested permission, and update the existing web app deployment before trying again.";
   }
   return message;
@@ -59,6 +59,17 @@ async function hostApi(payload: Record<string, unknown>): Promise<HostResponse> 
 
 function value(entity: Entity | undefined, field: string) {
   return String(entity?.[field] || "");
+}
+
+function hotelQrPngUrl(entity: Entity) {
+  const fileId = value(entity, "qrFileId");
+  if (fileId) {
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+  }
+  const publicUrl = value(entity, "publicUrl");
+  return publicUrl
+    ? `https://quickchart.io/qr?size=900&margin=2&format=png&text=${encodeURIComponent(publicUrl)}`
+    : "";
 }
 
 export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }) {
@@ -85,7 +96,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   const acceptIdentity=useCallback(async(data:HostResponse)=>{
     const nextUser=data.user||null;
-    setCodeVersion(String(data.codeVersion||""));
+    setCodeVersion(String(data.codeBuild||data.codeVersion||""));
     setUser(nextUser);
     setSelection(data.selection||EMPTY_SELECTION);
     if(nextUser?.role==="superhost")setAdmin(await hostApi({action:"adminState"}));
@@ -222,7 +233,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   async function createHotel(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
     const data=await run("Hotel created. Its independent Google Sheet and permanent link are ready.",()=>hostApi({action:"createHotel",name:form.get("name"),timezone:form.get("timezone")}));
-    if(data){formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
+    if(data){if(data.warning)setNotice(String(data.warning));formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
   async function createVenue(event:FormEvent<HTMLFormElement>){
@@ -313,7 +324,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     {user.role==="superhost"&&<section className="adminStack">
       <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Independent Sheets</h2><p>Creating a hotel automatically creates its own spreadsheet in the Superhost’s Google Drive. Creating a user never creates a spreadsheet.</p></div></div>
         <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel + Sheet</button></form>
-        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a><a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>{value(item,"qrFileId")&&<a href={`https://drive.google.com/uc?export=download&id=${encodeURIComponent(value(item,"qrFileId"))}`} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this hotel and its public link?"))return;await run(inactive?"Hotel activated.":"Hotel deactivated.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive"}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></div></article>)}</div>
+        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a><a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this hotel and its public link?"))return;await run(inactive?"Hotel activated.":"Hotel deactivated.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive"}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></div></article>)}</div>
       </section>
       <div className="adminColumns">
         <section className="hostCard"><div className="sectionTitle"><MapPin/><div><h2>Venues</h2><p>Add physical locations inside a hotel.</p></div></div><form onSubmit={createVenue}><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue name<input name="name" required/></label><button disabled={busy}><Plus/>Create Venue</button></form></section>
