@@ -4,14 +4,19 @@ const APPS_SCRIPT_ENDPOINT =
   process.env.KARAOKE_APPS_SCRIPT_URL ||
   "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
 const SESSION_COOKIE = "guest_star_host_session";
+const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
+const HOTEL_PROVISIONING_TIMEOUT_MS = 120_000;
 
 export const dynamic = "force-dynamic";
 
 type JsonObject = Record<string, unknown>;
 
 async function callAppsScript(payload: JsonObject) {
+  const timeoutMs = payload.action === "createHotel"
+    ? HOTEL_PROVISIONING_TIMEOUT_MS
+    : DEFAULT_APPS_SCRIPT_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(APPS_SCRIPT_ENDPOINT, {
       method: "POST",

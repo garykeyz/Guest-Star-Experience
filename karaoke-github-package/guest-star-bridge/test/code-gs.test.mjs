@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.0"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.1"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -495,9 +495,10 @@ test("la migración 4.0 crea registro central, respaldo y un Sheet independiente
   assert.match(source, /function setupMultiUserV4\(\)/);
   assert.match(source, /backupLegacySpreadsheetV4_\(master\)/);
   assert.match(source, /file\.makeCopy\(/);
-  assert.match(source, /function createHotelSpreadsheetV4_\(hotel, legacySource\)/);
+  assert.match(source, /function createHotelSpreadsheetV4_\(hotel, legacySource, destinationFolder\)/);
   assert.match(source, /SpreadsheetApp\.create\("Guest Star - " \+ hotel\.name\)/);
-  assert.match(source, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null\)/);
+  assert.match(source, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null, driveReadiness\.folder\)/);
+  assert.match(source, /DriveApp\.getFileById\(spreadsheet\.getId\(\)\)\.setTrashed\(true\)/);
   assert.match(source, /"MASTER_SHEET_ID"/);
   assert.match(source, /"HOTEL_DATA_FOLDER_ID"/);
   assert.match(source, /"DEFAULT_PUBLIC_HOTEL_ID"/);
@@ -616,26 +617,104 @@ test("la autorización termina sin esperar una ventana bloqueante", () => {
   assert.doesNotMatch(body, /getUi\(\)\.alert\(/);
 });
 
-test("el web app comprueba Drive con acceso real y no con un estado ambiguo", () => {
+test("el web app comprueba el archivo y la carpeta reales de Drive", () => {
   const body = source.slice(
-    source.indexOf("function guestStarScopesAuthorizedV4_"),
+    source.indexOf("function guestStarDriveReadinessV4_"),
     source.indexOf("function authorizeGuestStarV4()")
   );
   assert.match(body, /DriveApp\.getFileById\(spreadsheet\.getId\(\)\)\.getName\(\)/);
+  assert.match(body, /hotelDataFolderV4_\(\)/);
+  assert.match(body, /hotel\.drive\.readiness\.failed/);
   assert.doesNotMatch(body, /getAuthorizationInfo/);
 });
 
-test("crear un hotel se detiene antes de crear archivos si falta permiso de Drive", () => {
+test("crear un hotel explica la identidad correcta del despliegue si Drive falla", () => {
   const body = source.slice(
     source.indexOf("function createHotelForSuperhostV4_"),
     source.indexOf("function updateHotelForSuperhostV4_")
   );
-  assert.match(body, /if \(!guestStarScopesAuthorizedV4_\(auth\.master\)\)/);
-  assert.match(body, /code: "GOOGLE_AUTHORIZATION_REQUIRED"/);
+  assert.match(body, /LockService\.getScriptLock\(\)/);
+  assert.match(body, /lock\.tryLock\(5000\)/);
+  assert.match(body, /code: "HOTEL_CREATION_IN_PROGRESS"/);
+  assert.match(body, /code: "HOTEL_ALREADY_EXISTS"/);
   assert.ok(
-    body.indexOf("guestStarScopesAuthorizedV4_(auth.master)") < body.indexOf("createHotelSpreadsheetV4_(hotel, null)"),
-    "authorization must be checked before creating the independent spreadsheet"
+    body.indexOf("HOTEL_ALREADY_EXISTS") < body.indexOf("createHotelSpreadsheetV4_(hotel, null, driveReadiness.folder)"),
+    "an existing hotel must be detected before creating another spreadsheet"
   );
+  assert.match(body, /guestStarDriveReadinessV4_\(auth\.master\)/);
+  assert.match(body, /code: "GOOGLE_DRIVE_UNAVAILABLE"/);
+  assert.match(body, /code: "HOTEL_DRIVE_PROVISIONING_FAILED"/);
+  assert.match(body, /set Execute as to Me \(the script owner\)/);
+  assert.ok(
+    body.indexOf("guestStarDriveReadinessV4_(auth.master)") < body.indexOf("createHotelSpreadsheetV4_(hotel, null, driveReadiness.folder)"),
+    "Drive readiness must be checked before creating the independent spreadsheet"
+  );
+});
+
+test("crear un hotel serializa la provisión y nunca duplica un nombre existente", () => {
+  const originalLockService = context.LockService;
+  const originalUnlocked = context.createHotelForSuperhostUnlockedV4_;
+  const originalRows = context.tableRowsV4_;
+  const originalReadiness = context.guestStarDriveReadinessV4_;
+  const originalTimezone = context.validTimezoneV4_;
+  let released = 0;
+  let provisioned = 0;
+  try {
+    context.LockService = {
+      getScriptLock: () => ({
+        tryLock: () => false,
+        releaseLock: () => { released += 1; }
+      })
+    };
+    const busy = context.createHotelForSuperhostV4_(
+      { user: { role: "superhost" } },
+      { name: "Moon Palace" }
+    );
+    assert.equal(busy.code, "HOTEL_CREATION_IN_PROGRESS");
+    assert.equal(released, 0);
+
+    context.LockService = {
+      getScriptLock: () => ({
+        tryLock: () => true,
+        releaseLock: () => { released += 1; }
+      })
+    };
+    context.createHotelForSuperhostUnlockedV4_ = () => {
+      provisioned += 1;
+      return { ok: true };
+    };
+    assert.equal(
+      context.createHotelForSuperhostV4_({ user: { role: "superhost" } }, {}).ok,
+      true
+    );
+    assert.equal(provisioned, 1);
+    assert.equal(released, 1);
+
+    let driveChecks = 0;
+    context.createHotelForSuperhostUnlockedV4_ = originalUnlocked;
+    context.validTimezoneV4_ = () => true;
+    context.tableRowsV4_ = () => [{
+      hotelId: "hotel-1",
+      name: "Moon Palace",
+      slug: "moon-palace"
+    }];
+    context.guestStarDriveReadinessV4_ = () => {
+      driveChecks += 1;
+      return { ok: true };
+    };
+    const duplicate = context.createHotelForSuperhostUnlockedV4_(
+      { master: {}, user: { role: "superhost" } },
+      { name: "Moon Palace", timezone: "America/Santo_Domingo" }
+    );
+    assert.equal(duplicate.code, "HOTEL_ALREADY_EXISTS");
+    assert.equal(driveChecks, 0);
+  } finally {
+    context.LockService = originalLockService;
+    context.createHotelForSuperhostUnlockedV4_ = originalUnlocked;
+    context.tableRowsV4_ = originalRows;
+    context.guestStarDriveReadinessV4_ = originalReadiness;
+    context.validTimezoneV4_ = originalTimezone;
+  }
 });
 
 test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
@@ -653,7 +732,7 @@ test("crear un hotel automatiza su hoja, sede, actividad, asignación, identidad
     source.indexOf("function createHotelForSuperhostV4_"),
     source.indexOf("function updateHotelForSuperhostV4_")
   );
-  assert.match(body, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null\)/);
+  assert.match(body, /hotel\.dataSheetId = createHotelSpreadsheetV4_\(hotel, null, driveReadiness\.folder\)/);
   assert.match(body, /hotel\.qrFileId = createHotelQrV4_/);
   assert.match(body, /appendRecordV4_\(auth\.master, "Hotels"/);
   assert.match(body, /appendRecordV4_\(auth\.master, "Venues"/);
@@ -672,6 +751,15 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
   assert.match(source, /SpreadsheetApp\.openById\(dataSheetId\)/);
   assert.match(source, /function accessibleSelectionV4_\(user\)/);
   assert.match(source, /activity\.hotelId === hotelId/);
+});
+
+test("las sesiones web informan la versión exacta de Code.gs", () => {
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.0\.1"/);
+  const dispatchBody = source.slice(
+    source.indexOf("function dispatchV4Action_"),
+    source.indexOf("function publicHotelIdentifierV4_")
+  );
+  assert.match(dispatchBody, /codeVersion: BRIDGE_API_VERSION/);
 });
 
 test("la sincronización multi-hotel no queda serializada por el lock legado", () => {

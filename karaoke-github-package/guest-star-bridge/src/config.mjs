@@ -6,9 +6,12 @@ import { loadBridgeSecrets, storeBridgeSecrets } from "./keychain.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = resolve(ROOT, "data");
 const CONFIG_PATH = resolve(DATA_DIR, "config.json");
+const LEGACY_DIRECT_APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
+const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 7,
+  configVersion: 8,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -22,8 +25,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   secretsInKeychain: false,
   libraryFolders: [],
   rememberLibraryFolders: true,
-  appsScriptUrl:
-    "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec",
+  appsScriptUrl: BRIDGE_PROXY_URL,
   hostPin: "",
   rememberHostPin: true,
   virtualDJ: {
@@ -45,6 +47,22 @@ function numberInRange(value, fallback, min, max) {
 function normalizeFolders(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+export function migrateAppsScriptUrl(value, configVersion) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return candidate;
+  try {
+    const url = new URL(candidate);
+    const directAppsScriptWebApp =
+      url.protocol === "https:" &&
+      url.hostname === "script.google.com" &&
+      /^\/macros\/s\/[^/]+\/exec\/?$/.test(url.pathname);
+    if (directAppsScriptWebApp) return BRIDGE_PROXY_URL;
+  } catch {
+    // sanitizeConfig will preserve the invalid value so the UI can report it.
+  }
+  return candidate;
 }
 
 export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
@@ -84,10 +102,12 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.rememberLibraryFolders === undefined
         ? Boolean(current.rememberLibraryFolders)
         : Boolean(input.rememberLibraryFolders),
-    appsScriptUrl:
+    appsScriptUrl: migrateAppsScriptUrl(
       input.appsScriptUrl === undefined
         ? current.appsScriptUrl
-        : String(input.appsScriptUrl || "").trim(),
+        : input.appsScriptUrl,
+      input.configVersion === undefined ? current.configVersion : input.configVersion
+    ),
     hostPin:
       input.hostPin === undefined || input.hostPin === ""
         ? current.hostPin
@@ -146,6 +166,10 @@ export async function loadConfig() {
     const needsMigration =
       Number(parsed.configVersion || 0) < DEFAULT_CONFIG.configVersion;
     if (needsMigration) {
+      parsed.appsScriptUrl = migrateAppsScriptUrl(
+        parsed.appsScriptUrl,
+        parsed.configVersion
+      );
       parsed.configVersion = DEFAULT_CONFIG.configVersion;
       parsed.requestIntervalSeconds = 2;
       if (parsed.autoQueueExact === undefined) parsed.autoQueueExact = true;
@@ -209,4 +233,9 @@ export function publicConfig(config) {
   };
 }
 
-export { CONFIG_PATH, ROOT };
+export {
+  BRIDGE_PROXY_URL,
+  CONFIG_PATH,
+  LEGACY_DIRECT_APPS_SCRIPT_URL,
+  ROOT
+};

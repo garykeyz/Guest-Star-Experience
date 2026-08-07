@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 
-APP_VERSION="4.0.0"
+APP_VERSION="4.0.1"
 PANEL_URL="http://127.0.0.1:8787"
 CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE_DIR="$(cd "$CONTENTS_DIR/.." && pwd)"
@@ -68,8 +68,19 @@ installed_version=""
 if [ -f "$BRIDGE_DIR/.app-version" ]; then
   installed_version="$(/bin/cat "$BRIDGE_DIR/.app-version" 2>/dev/null || true)"
 fi
+bundled_build=""
+installed_build=""
+if [ -f "$RESOURCES_DIR/bridge/.bundle-build" ]; then
+  bundled_build="$(/bin/cat "$RESOURCES_DIR/bridge/.bundle-build" 2>/dev/null || true)"
+fi
+if [ -f "$BRIDGE_DIR/.bundle-build" ]; then
+  installed_build="$(/bin/cat "$BRIDGE_DIR/.bundle-build" 2>/dev/null || true)"
+fi
 
-if [ "$installed_version" != "$APP_VERSION" ]; then
+if [ "$installed_version" != "$APP_VERSION" ] ||
+  [ -z "$bundled_build" ] ||
+  [ "$installed_build" != "$bundled_build" ]
+then
   STAGE_DIR="$SUPPORT_DIR/bridge-stage"
   PREVIOUS_DIR="$SUPPORT_DIR/bridge-previous"
   /bin/rm -rf "$STAGE_DIR" "$PREVIOUS_DIR"

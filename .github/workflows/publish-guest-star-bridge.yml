@@ -77,6 +77,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Read release version
+        id: release_meta
+        working-directory: karaoke-github-package/guest-star-bridge
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Install build dependencies
         run: |
           python3 -m pip install --disable-pip-version-check \
@@ -92,6 +99,8 @@ jobs:
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
 
       - name: Build app and downloadable packages
+        env:
+          VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/release-output"
           python3 karaoke-github-package/guest-star-bridge/macos/build_installer.py \
@@ -102,7 +111,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v4.0.0.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v${VERSION}.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -110,7 +119,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v4.0.0-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v${VERSION}-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -124,7 +133,7 @@ jobs:
           cp karaoke-github-package/guest-star-bridge/macos/GUIA-MAC-SOLO-BRIDGE.txt \
             "$GITHUB_WORKSPACE/release-output/GUIA-MAC-SOLO-BRIDGE.txt"
           zip -q -j \
-            "$GITHUB_WORKSPACE/release-output/Guest-Star-Experience-v4.0.0-Guides.zip" \
+            "$GITHUB_WORKSPACE/release-output/Guest-Star-Experience-v${VERSION}-Guides.zip" \
             karaoke-github-package/MULTIUSER-SETUP.md \
             karaoke-github-package/SUPERHOST-GUIDE.md \
             karaoke-github-package/HOST-GUIDE.md \
@@ -142,11 +151,11 @@ jobs:
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-Universal-v4.0.0-app.zip \
-              Guest-Star-Bridge-Universal-v4.0.0.dmg \
-              guest-star-experience-sync-v4.0.0.zip \
-              guest-star-bridge-v4.0.0-source.zip \
-              Guest-Star-Experience-v4.0.0-Guides.zip \
+              "Guest-Star-Bridge-Universal-v${VERSION}-app.zip" \
+              "Guest-Star-Bridge-Universal-v${VERSION}.dmg" \
+              "guest-star-experience-sync-v${VERSION}.zip" \
+              "guest-star-bridge-v${VERSION}-source.zip" \
+              "Guest-Star-Experience-v${VERSION}-Guides.zip" \
               Code.gs \
               INSTALACION-OTRA-MAC.txt \
               GUIA-MAC-SOLO-BRIDGE.txt \
@@ -156,14 +165,15 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
-          tag="v4.0.0"
+          tag="v${VERSION}"
           assets=(
-            "release-output/Guest-Star-Bridge-Universal-v4.0.0-app.zip"
-            "release-output/Guest-Star-Bridge-Universal-v4.0.0.dmg"
-            "release-output/guest-star-experience-sync-v4.0.0.zip"
-            "release-output/guest-star-bridge-v4.0.0-source.zip"
-            "release-output/Guest-Star-Experience-v4.0.0-Guides.zip"
+            "release-output/Guest-Star-Bridge-Universal-v${VERSION}-app.zip"
+            "release-output/Guest-Star-Bridge-Universal-v${VERSION}.dmg"
+            "release-output/guest-star-experience-sync-v${VERSION}.zip"
+            "release-output/guest-star-bridge-v${VERSION}-source.zip"
+            "release-output/Guest-Star-Experience-v${VERSION}-Guides.zip"
             "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/GUIA-MAC-SOLO-BRIDGE.txt"
@@ -178,6 +188,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Experience 4.0.0 Universal" \
-              --notes "Guest Star 4.0 adds the central Superhost model, automatic independent hotel Sheets, host accounts and scoped permissions, persistent Bridge login, a permanent hotel link and QR, schedules and countdowns, optional reviews and consent-based reminders, language-aware Karaoke search, and stable real-time VirtualDJ reconciliation. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
+              --title "Guest Star Experience ${VERSION} Universal" \
+              --notes "Guest Star ${VERSION} fixes same-version Bridge updates, routes Bridge traffic through the production proxy, and reports actionable Google Drive deployment errors. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
           fi

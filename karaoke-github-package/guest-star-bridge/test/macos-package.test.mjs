@@ -56,11 +56,16 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.0\.0"/);
+  assert.match(shellSource, /APP_VERSION="4\.0\.1"/);
+  assert.match(shellSource, /\.bundle-build/);
+  assert.match(shellSource, /installed_build.*bundled_build/s);
+  assert.match(buildSource, /def write_bundle_build_id/);
+  assert.match(buildSource, /La versión del iniciador no coincide con package\.json/);
 });
 
-test("la publicación y el instructivo entregan el paquete Universal 4.0.0", () => {
-  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v4\.0\.0-app\.zip/);
+test("la publicación deriva el paquete Universal de la versión 4.0.1", () => {
+  assert.match(workflowSource, /release_meta\.outputs\.version/);
+  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v\$\{VERSION\}-app\.zip/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);

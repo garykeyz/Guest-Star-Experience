@@ -8,8 +8,8 @@ async function parseResponse(response) {
   }
 }
 
-const REQUIRED_CODE_VERSION = "4.0.0";
-const APPS_SCRIPT_TIMEOUT_MS = 30000;
+const REQUIRED_CODE_VERSION = "4.0.1";
+const APPS_SCRIPT_TIMEOUT_MS = 70000;
 
 function endpoint(config) {
   if (!config.appsScriptUrl) throw new Error("Guest Star connection is not configured.");
