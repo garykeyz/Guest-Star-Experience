@@ -120,6 +120,9 @@ jobs:
           )
 
           if gh release view "$tag" >/dev/null 2>&1; then
+            git tag --force "$tag" "$GITHUB_SHA"
+            git push --force origin "refs/tags/$tag"
+            gh release edit "$tag" --target "$GITHUB_SHA"
             gh release upload "$tag" "${assets[@]}" --clobber
           else
             gh release create "$tag" "${assets[@]}" \
