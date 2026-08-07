@@ -55,9 +55,9 @@ export async function copyMacClipboard(value, options = {}) {
   const text = String(value || "").trim();
   const platform = options.platform || process.platform;
   const spawnProcess = options.spawnProcess || spawn;
-  if (!text) throw new Error("No hay un enlace para copiar.");
+  if (!text) throw new Error("There is no link to copy.");
   if (platform !== "darwin") {
-    throw new Error("La copia al portapapeles está disponible en Mac.");
+    throw new Error("Clipboard copy is available on Mac.");
   }
   await new Promise((resolve, reject) => {
     const child = spawnProcess("/usr/bin/pbcopy", [], {
@@ -70,7 +70,7 @@ export async function copyMacClipboard(value, options = {}) {
     child.once("error", reject);
     child.once("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || "No se pudo copiar el enlace."));
+      else reject(new Error(stderr.trim() || "The link could not be copied."));
     });
     child.stdin.end(text);
   });
@@ -84,16 +84,16 @@ export async function openMacUrl(value, options = {}) {
   try {
     url = new URL(String(value || "").trim());
   } catch {
-    throw new Error("El enlace no es válido.");
+    throw new Error("The link is not valid.");
   }
   if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error("Solo se pueden abrir enlaces web seguros.");
+    throw new Error("Only secure web links can be opened.");
   }
   if (url.username || url.password) {
-    throw new Error("El enlace contiene credenciales y no se abrirá.");
+    throw new Error("The link contains credentials and will not be opened.");
   }
   if (platform !== "darwin") {
-    throw new Error("La apertura externa está disponible en Mac.");
+    throw new Error("External link opening is available on Mac.");
   }
   await new Promise((resolve, reject) => {
     const child = spawnProcess("/usr/bin/open", [url.toString()], {
@@ -106,7 +106,7 @@ export async function openMacUrl(value, options = {}) {
     child.once("error", reject);
     child.once("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || "No se pudo abrir el enlace."));
+      else reject(new Error(stderr.trim() || "The link could not be opened."));
     });
   });
   return url.toString();

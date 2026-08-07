@@ -63,7 +63,13 @@ export function selectHitSuggestions(
   }
 
   return ordered.slice(0, target).map((item) => {
-    const match = findMatches(libraryFiles, item.song, item.artist, 1)[0];
+    const match = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.language,
+      1
+    )[0];
     return {
       ...item,
       localAvailable: Boolean(match?.exact),

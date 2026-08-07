@@ -44,10 +44,8 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
     /\["lipo", str\(node_x64\), "-verify_arch", "x86_64"\]/
   );
   assert.doesNotMatch(buildSource, /\["lipo", "-verify_arch"/);
-  assert.match(
-    buildSource,
-    /\["\/usr\/bin\/ditto", str\(app_bundle\), str\(distributed_app\)\]/
-  );
+  assert.match(buildSource, /app_bundle\.rename\(distributed_app\)/);
+  assert.match(buildSource, /prevents the macOS release runner from exhausting its disk/);
   assert.match(buildSource, /"--sequesterRsrc"/);
   assert.match(buildSource, /hdiutil/);
   assert.match(buildSource, /hdiutil",\s*"verify/);
@@ -58,11 +56,11 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="3\.0\.7"/);
+  assert.match(shellSource, /APP_VERSION="4\.0\.0"/);
 });
 
-test("la publicación y el instructivo entregan el paquete Universal 3.0.7", () => {
-  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v3\.0\.7-app\.zip/);
+test("la publicación y el instructivo entregan el paquete Universal 4.0.0", () => {
+  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v4\.0\.0-app\.zip/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);

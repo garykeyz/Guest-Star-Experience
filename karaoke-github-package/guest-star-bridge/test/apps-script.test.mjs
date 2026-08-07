@@ -47,7 +47,7 @@ test("envía los controles compartidos con origen bridge", async (t) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({
       ok: true,
-      codeVersion: "3.0.7",
+      codeVersion: "4.0.0",
       state: { accepting: false, stateRevision: 8, activityId: "activity-2" },
       requests: []
     }));
@@ -150,7 +150,8 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
     },
     "Vivir Mi Vida",
     "Marc Anthony",
-    "Español"
+    "Español",
+    "spanish"
   );
 
   assert.deepEqual(received, {
@@ -158,7 +159,8 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
     pin: "123456",
     song: "Vivir Mi Vida",
     artist: "Marc Anthony",
-    language: "Español"
+    language: "Español",
+    languageCode: "spanish"
   });
 });
 
@@ -196,7 +198,7 @@ test("actualiza duración, transición y apertura desde la app", async (t) => {
   });
 });
 
-test("avisa claramente cuando el Code.gs publicado todavía es anterior a 3.0", async (t) => {
+test("avisa claramente cuando el Code.gs publicado todavía es anterior a 4.0", async (t) => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ ok: false, code: "INVALID_ACTION" }));
@@ -212,6 +214,6 @@ test("avisa claramente cuando el Code.gs publicado todavía es anterior a 3.0", 
       },
       "reset"
     ),
-    /Code\.gs 3\.0/
+    /Code\.gs 4\.0/
   );
 });

@@ -233,7 +233,7 @@ test("avisa cuando VirtualDJ acepta el comando pero no retira la canción", asyn
         artist: "ABBA"
       }
     ),
-    /todavía aparece en la cola/
+    /still in the Karaoke queue/
   );
 });
 
@@ -384,6 +384,116 @@ test("restaura una canción en su posición anterior y verifica el orden", async
   );
 });
 
+test("no duplica una canción que VirtualDJ ya confirma en la cola", async (t) => {
+  const queue = [
+    {
+      filepath: "/Music/Hello.mp4",
+      singer: "Ana",
+      title: "Hello",
+      artist: "Adele",
+      length: "4:01"
+    }
+  ];
+  let executeCalls = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      executeCalls += 1;
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
+      const index = Number(next?.[2] || 0);
+      response.end(next ? queue[index]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await insertKaraokeEntry(
+    {
+      host: "127.0.0.1",
+      port: server.address().port,
+      password: "",
+      timeoutMs: 1000
+    },
+    {
+      filePath: "/Music/Hello.mp4",
+      singer: "Ana",
+      song: "Hello",
+      artist: "Adele"
+    },
+    0
+  );
+
+  assert.equal(result.alreadyQueued, true);
+  assert.equal(result.verified, true);
+  assert.equal(executeCalls, 0);
+  assert.equal(queue.length, 1);
+});
+
+test("reintenta hasta que VirtualDJ confirme una inserción demorada", async (t) => {
+  const queue = [];
+  let insertedCommand = false;
+  let scansAfterInsert = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      insertedCommand = true;
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") {
+      if (insertedCommand) {
+        scansAfterInsert += 1;
+        if (scansAfterInsert === 2) {
+          queue.push({
+            filepath: "/Music/Treasure.mp4",
+            singer: "Carlos",
+            title: "Treasure",
+            artist: "Bruno Mars",
+            length: "3:05"
+          });
+        }
+      }
+      response.end(String(queue.length));
+      return;
+    }
+    const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
+    const index = Number(next?.[2] || 0);
+    response.end(next ? queue[index]?.[next[1]] || "" : "");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await insertKaraokeEntry(
+    {
+      host: "127.0.0.1",
+      port: server.address().port,
+      password: "",
+      timeoutMs: 1000
+    },
+    {
+      filePath: "/Music/Treasure.mp4",
+      singer: "Carlos",
+      song: "Treasure",
+      artist: "Bruno Mars"
+    },
+    0,
+    { attempts: 3, retryDelayMs: 1 }
+  );
+
+  assert.equal(result.inserted, true);
+  assert.equal(result.verified, true);
+  assert.equal(scansAfterInsert, 2);
+});
+
 test("una cola Karaoke vacía se confirma sin mover el navegador de VirtualDJ", async (t) => {
   const received = [];
   const server = createServer(async (request, response) => {
@@ -423,6 +533,6 @@ test("no confunde una respuesta inválida con una cola Karaoke vacía", async (t
       password: "",
       timeoutMs: 1000
     }),
-    /no devolvió el tamaño/
+    /did not return the Karaoke queue size/
   );
 });

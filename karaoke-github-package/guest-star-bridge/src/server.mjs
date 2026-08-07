@@ -7,11 +7,22 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
+  completeBridgeCommand,
   controlActivity,
+  createHostPanelLogin,
   fetchBridgeQueue,
+  fetchBridgeIdentity,
+  hasV4Session,
+  pollBridgeCommands,
   searchKaraokeYouTube,
+  selectBridgeActivity,
+  sendBridgeHeartbeat,
+  signInBridge,
+  signOutBridge,
+  syncExternalVirtualDjEntries,
   updateBridgeConfig,
-  updateBridgeRequest
+  updateBridgeRequest,
+  v4AppsScriptAction
 } from "./apps-script.mjs";
 import {
   buildActivitySummary,
@@ -19,13 +30,16 @@ import {
   safeTransitionSeconds
 } from "./activity-summary.mjs";
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
+import { clearBridgeSecrets } from "./keychain.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
 import { reconcileLocalAvailability } from "./local-availability.mjs";
 import { findMatches, normalizeText, scanLibrary } from "./matcher.mjs";
 import {
   queueMetadataMatches,
-  reconcileTrackedQueue
+  reconcileTrackedQueue,
+  stabilizeVirtualDjEntries
 } from "./queue-reconcile.mjs";
+import { reconcileQueuePresence } from "./queue-presence.mjs";
 import { loadQueueState, saveQueueState } from "./queue-state.mjs";
 import { orderRequestViews } from "./request-order.mjs";
 import {
@@ -46,7 +60,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "3.0.7";
+const BRIDGE_VERSION = "4.0.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -57,6 +71,19 @@ const MIME = {
 };
 
 let config = await loadConfig();
+let identityState = {
+  user: null,
+  selection: { hotels: [], venues: [], activities: [] },
+  authenticated: false
+};
+let tenantState = {
+  hotel: null,
+  venue: null,
+  activity: null,
+  permissions: {},
+  share: null,
+  upcomingActivities: []
+};
 const storedQueueState = await loadQueueState();
 let libraryFiles = [];
 let requests = [];
@@ -74,6 +101,7 @@ let activityState = {
   accumulatedSeconds: 0,
   remainingSeconds: 7200,
   activityStartedAt: storedQueueState.activityStartedAt || "",
+  activityFinishedAt: "",
   activityRunning: Boolean(storedQueueState.activityStartedAt),
   stateRevision: 0,
   activityId: storedQueueState.activityId || "",
@@ -92,6 +120,13 @@ const outcomeRecoveries = new Map(
 );
 const removedExternallyIds = new Set();
 const queueLocks = new Set();
+const pendingInsertions = new Map();
+let queuePresenceMisses = new Map();
+let transientQueueMissingIds = new Set();
+let externalQueueEntries = [];
+const knownExternalEntries = new Map();
+const externalQueueMisses = new Map();
+const reconciliationDiagnostics = [];
 const youtubeCache = new Map();
 const youtubeSearchAt = new Map();
 const youtubeSearches = new Map();
@@ -120,6 +155,10 @@ let clipboardState = {
   error: ""
 };
 
+function guestStarConfigured() {
+  return Boolean(config.appsScriptUrl && (hasV4Session(config) || config.hostPin));
+}
+
 function json(response, status, data) {
   const body = JSON.stringify(data);
   response.writeHead(status, {
@@ -134,24 +173,48 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function recordReconciliation(details = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    requestId: String(details.requestId || ""),
+    virtualDJItemId: String(details.virtualDJItemId || ""),
+    confidence: Math.max(0, Number(details.confidence) || 0),
+    matchFields: Array.isArray(details.matchFields)
+      ? details.matchFields.map(String).slice(0, 8)
+      : [],
+    previousStatus: String(details.previousStatus || ""),
+    newStatus: String(details.newStatus || ""),
+    reason: String(details.reason || "").slice(0, 240)
+  };
+  reconciliationDiagnostics.push(entry);
+  if (reconciliationDiagnostics.length > 100) reconciliationDiagnostics.shift();
+  console.info(JSON.stringify({ event: "queue_reconciliation", ...entry }));
+  return entry;
+}
+
 async function readJson(request) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > JSON_LIMIT) throw new Error("La solicitud es demasiado grande.");
+    if (size > JSON_LIMIT) throw new Error("The request is too large.");
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    throw new Error("El contenido recibido no es JSON válido.");
+    throw new Error("The received content is not valid JSON.");
   }
 }
 
 function requestView(item) {
-  const matches = findMatches(libraryFiles, item.song, item.artist);
+  const matches = findMatches(
+    libraryFiles,
+    item.song,
+    item.artist,
+    item.languageCode || item.language
+  );
   const top = matches[0];
   const queuedEntry = queuedEntries.get(item.id);
   const verifiedQueuePath =
@@ -161,6 +224,8 @@ function requestView(item) {
     (verifiedQueuePath &&
       vdjAvailablePaths.has(normalizeVdjPath(verifiedQueuePath)))
   );
+  const pendingInsertion = pendingInsertions.get(item.id) || null;
+  const transientMissing = transientQueueMissingIds.has(item.id);
   const isQueued =
     !suppressedQueueIds.has(item.id) && queuedIds.has(item.id);
   const removedExternally =
@@ -168,8 +233,10 @@ function requestView(item) {
   const queueUnverified =
     !suppressedQueueIds.has(item.id) &&
     !removedExternally &&
-    !vdjQueueHasSnapshot &&
-    (queuedEntries.has(item.id) || sheetMarksVirtualDj(item));
+    (Boolean(pendingInsertion) ||
+      transientMissing ||
+      (!vdjQueueHasSnapshot &&
+        (queuedEntries.has(item.id) || sheetMarksVirtualDj(item))));
   const queueIndex = vdjQueuePositions.get(item.id);
   const outcome = requestOutcome(item.status);
   if (outcome) {
@@ -195,6 +262,7 @@ function requestView(item) {
       youtube: youtubeCache.get(item.id) || [],
       youtubeSearched: youtubeCache.has(item.id),
       youtubeSearching: youtubeSearches.has(item.id),
+      queueSyncState: "",
       clipboardCopied: false
     };
   }
@@ -205,7 +273,12 @@ function requestView(item) {
     removedExternally,
     queueUnverified,
     localAvailable,
-    localState: queueUnverified
+    queueSyncState: pendingInsertion?.phase || (transientMissing ? "confirming" : ""),
+    localState: pendingInsertion
+      ? pendingInsertion.phase === "adding"
+        ? "adding"
+        : "confirming"
+      : queueUnverified
       ? localAvailable
         ? "unverified"
         : "unverified-missing"
@@ -264,6 +337,21 @@ function normalizedActivity(data = {}) {
     : Number.isFinite(savedStartedAtMs)
       ? new Date(savedStartedAtMs).toISOString()
       : "";
+  const hasSuppliedFinish = Object.prototype.hasOwnProperty.call(
+    source,
+    "activityFinishedAt"
+  );
+  const suppliedFinishedAtMs = Date.parse(String(source.activityFinishedAt || ""));
+  const savedFinishedAtMs = sameActivity
+    ? Date.parse(String(activityState.activityFinishedAt || ""))
+    : NaN;
+  const activityFinishedAt = hasSuppliedFinish
+    ? Number.isFinite(suppliedFinishedAtMs)
+      ? new Date(suppliedFinishedAtMs).toISOString()
+      : ""
+    : Number.isFinite(savedFinishedAtMs)
+      ? new Date(savedFinishedAtMs).toISOString()
+      : "";
   return {
     accepting:
       source.accepting === undefined
@@ -283,10 +371,11 @@ function normalizedActivity(data = {}) {
       numberOr(source.remainingSeconds, activityState.remainingSeconds)
     ),
     activityStartedAt,
+    activityFinishedAt,
     activityRunning:
       source.activityRunning === undefined
-        ? Boolean(activityStartedAt)
-        : source.activityRunning !== false && Boolean(activityStartedAt),
+        ? Boolean(activityStartedAt) && !activityFinishedAt
+        : source.activityRunning !== false && Boolean(activityStartedAt) && !activityFinishedAt,
     stateRevision: Math.max(
       0,
       numberOr(source.stateRevision, activityState.stateRevision)
@@ -300,6 +389,12 @@ function normalizedActivity(data = {}) {
 
 function clearTransientCaches() {
   queueLocks.clear();
+  pendingInsertions.clear();
+  queuePresenceMisses = new Map();
+  transientQueueMissingIds = new Set();
+  externalQueueEntries = [];
+  knownExternalEntries.clear();
+  externalQueueMisses.clear();
   queuedIds.clear();
   youtubeCache.clear();
   youtubeSearchAt.clear();
@@ -327,6 +422,18 @@ function clearTransientCaches() {
 function applyActivityState(data) {
   const next = normalizedActivity(data);
   activityState = next;
+  if (data && typeof data === "object") {
+    tenantState = {
+      hotel: data.hotel || tenantState.hotel,
+      venue: data.venue || tenantState.venue,
+      activity: data.activity || tenantState.activity,
+      permissions: data.permissions || tenantState.permissions || {},
+      share: data.share || tenantState.share,
+      upcomingActivities: Array.isArray(data.upcomingActivities)
+        ? data.upcomingActivities
+        : tenantState.upcomingActivities
+    };
+  }
 }
 
 function bridgeRequests(data = {}) {
@@ -340,6 +447,7 @@ function bridgeRequests(data = {}) {
       artist: String(item.artist || "").trim(),
       comment: String(item.comment || "").trim(),
       language: String(item.language || "").trim(),
+      languageCode: String(item.languageCode || "").trim(),
       sourceUrl: String(item.sourceUrl || "").trim(),
       status: String(item.status || "Pendiente"),
       fileName: String(item.fileName || "").trim(),
@@ -353,7 +461,7 @@ function bridgeRequests(data = {}) {
     .filter((item) => item.id && item.singer && item.song);
 }
 
-function queuedEntryFromRequest(item, preferredPath = "") {
+function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
   if (!item?.id || !item?.singer) return null;
   let filePath = String(preferredPath || "").trim();
   if (!filePath && item.fileName) {
@@ -364,7 +472,13 @@ function queuedEntryFromRequest(item, preferredPath = "") {
     if (named.length === 1) filePath = named[0];
   }
   if (!filePath) {
-    const exact = findMatches(libraryFiles, item.song, item.artist, 1)[0];
+    const exact = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.languageCode || item.language,
+      1
+    )[0];
     if (exact?.exact) filePath = exact.filePath;
   }
   if (!filePath) return null;
@@ -373,7 +487,31 @@ function queuedEntryFromRequest(item, preferredPath = "") {
     filePath,
     singer: item.singer,
     song: item.song,
-    artist: item.artist
+    artist: item.artist,
+    durationSeconds:
+      Math.max(0, Number(actualEntry?.durationSeconds) || 0) ||
+      Math.max(0, Number(item.durationSeconds) || 0),
+    virtualDJItemId: String(actualEntry?.virtualDJItemId || ""),
+    fingerprint: String(actualEntry?.fingerprint || ""),
+    insertedAt:
+      String(queuedEntries.get(item.id)?.insertedAt || "") ||
+      new Date().toISOString(),
+    lastSeenAt: actualEntry ? new Date().toISOString() : ""
+  };
+}
+
+function trackingEntryFromRequest(item) {
+  return queuedEntries.get(item.id) || queuedEntryFromRequest(item) || {
+    id: item.id,
+    filePath: "",
+    singer: item.singer,
+    song: item.song,
+    artist: item.artist,
+    durationSeconds: Math.max(0, Number(item.durationSeconds) || 0),
+    virtualDJItemId: "",
+    fingerprint: "",
+    insertedAt: "",
+    lastSeenAt: ""
   };
 }
 
@@ -394,12 +532,19 @@ async function resetLocalActivity(activityId) {
   suppressedQueueIds.clear();
   removedExternallyIds.clear();
   outcomeRecoveries.clear();
+  pendingInsertions.clear();
+  queuePresenceMisses = new Map();
+  transientQueueMissingIds = new Set();
   vdjQueuePositions.clear();
   clearTransientCaches();
   await persistQueuedEntries(activityId);
 }
 
-async function reconcileDeletedRequests(nextRequests, nextActivity) {
+async function reconcileDeletedRequests(
+  nextRequests,
+  nextActivity,
+  { removeFromVirtualDJ = false } = {}
+) {
   const activeIds = new Set(nextRequests.map((item) => item.id));
   const previousById = new Map(requests.map((item) => [item.id, item]));
   const trackedIds = new Set([...queuedIds, ...queuedEntries.keys()]);
@@ -443,27 +588,39 @@ async function reconcileDeletedRequests(nextRequests, nextActivity) {
       changed = true;
       continue;
     }
-    try {
-      const result = await removeKaraokeEntry(config.virtualDJ, entry);
-      if (result.reason === "ambiguous") {
-        throw new Error(
-          `VirtualDJ tiene más de una copia de “${entry.song}” para ${entry.singer}; no se borró ninguna.`
-        );
+    if (removeFromVirtualDJ) {
+      try {
+        const result = await removeKaraokeEntry(config.virtualDJ, entry);
+        if (result.reason === "ambiguous") {
+          throw new Error(
+            `VirtualDJ has more than one copy of “${entry.song}” for ${entry.singer}; none were removed.`
+          );
+        }
+        vdjError = "";
+      } catch (error) {
+        vdjError =
+          `The queue was archived, but one track could not be removed from VirtualDJ: ${errorMessage(error)}`;
       }
-      queuedIds.delete(id);
-      queuedEntries.delete(id);
-      youtubeCache.delete(id);
-      youtubeSearchAt.delete(id);
-      clipboardHandledIds.delete(id);
-      reportedStatuses.delete(id);
-      removedExternallyIds.delete(id);
-      vdjQueuePositions.delete(id);
-      vdjError = "";
-      changed = true;
-    } catch (error) {
-      vdjError =
-        `La solicitud se borró del Bridge, pero no pudo retirarse de VirtualDJ: ${errorMessage(error)}`;
+    } else {
+      recordReconciliation({
+        requestId: id,
+        virtualDJItemId: entry.virtualDJItemId,
+        previousStatus: previousById.get(id)?.status,
+        newStatus: "virtualdj_external",
+        reason: "request_missing_from_sheet_kept_in_virtualdj"
+      });
     }
+    queuedIds.delete(id);
+    queuedEntries.delete(id);
+    youtubeCache.delete(id);
+    youtubeSearchAt.delete(id);
+    clipboardHandledIds.delete(id);
+    reportedStatuses.delete(id);
+    removedExternallyIds.delete(id);
+    vdjQueuePositions.delete(id);
+    queuePresenceMisses.delete(id);
+    pendingInsertions.delete(id);
+    changed = true;
   }
 
   if (
@@ -488,11 +645,11 @@ async function reconcileTerminalRequests(nextRequests) {
         if (Number.isInteger(result.index)) originalPosition = result.index;
         if (result.reason === "ambiguous") {
           vdjError =
-            `VirtualDJ tiene copias ambiguas de “${item.song}”; retírala manualmente de la cola.`;
+            `VirtualDJ has ambiguous copies of “${item.song}”; remove the correct one manually.`;
         }
       } catch (error) {
         vdjError =
-          `El estado se guardó, pero no se pudo retirar “${item.song}” de VirtualDJ: ${errorMessage(error)}`;
+          `The status was saved, but “${item.song}” could not be removed from VirtualDJ: ${errorMessage(error)}`;
       }
     }
     if (!outcomeRecoveries.has(id)) {
@@ -569,6 +726,7 @@ function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
     searchablePaths,
     item.song,
     item.artist,
+    item.languageCode || item.language,
     1
   )[0];
   if (!top?.exact) return null;
@@ -583,7 +741,11 @@ async function reconcileVirtualDjQueue(force = false) {
   vdjQueueCheckPromise = (async () => {
     broadcastState();
     try {
-      const actualEntries = await listKaraokeEntries(config.virtualDJ);
+      const rawActualEntries = await listKaraokeEntries(config.virtualDJ);
+      const actualEntries = stabilizeVirtualDjEntries(
+        rawActualEntries,
+        vdjQueueEntries
+      );
       const inspectedEntries = await Promise.all(
         actualEntries.map(async (entry) => {
           let localAvailable = false;
@@ -604,17 +766,46 @@ async function reconcileVirtualDjQueue(force = false) {
           .map((entry) => normalizeVdjPath(entry.filePath))
       );
       const activeIds = new Set(requests.map((item) => item.id));
-      const tracked = [...queuedEntries.values()].filter(
-        (entry) => {
-          const item = requests.find((request) => request.id === entry.id);
-          return (
-            activeIds.has(entry.id) &&
-            !suppressedQueueIds.has(entry.id) &&
-            !requestOutcome(item?.status)
-          );
+      const trackedById = new Map();
+      for (const entry of queuedEntries.values()) {
+        const item = requests.find((request) => request.id === entry.id);
+        if (
+          activeIds.has(entry.id) &&
+          !suppressedQueueIds.has(entry.id) &&
+          !requestOutcome(item?.status)
+        ) {
+          trackedById.set(entry.id, {
+            ...entry,
+            queuePosition: vdjQueuePositions.get(entry.id)
+          });
         }
-      );
-      const reconciliation = reconcileTrackedQueue(tracked, actualEntries);
+      }
+      for (const item of requests) {
+        if (
+          requestOutcome(item.status) ||
+          !sheetMarksVirtualDj(item) ||
+          suppressedQueueIds.has(item.id) ||
+          trackedById.has(item.id)
+        ) {
+          continue;
+        }
+        trackedById.set(item.id, {
+          ...trackingEntryFromRequest(item),
+          queuePosition: vdjQueuePositions.get(item.id)
+        });
+      }
+      const tracked = [...trackedById.values()];
+      const reconciliation = reconcileTrackedQueue(tracked, inspectedEntries);
+      const presence = reconcileQueuePresence({
+        previous: queuePresenceMisses,
+        trackedIds: tracked.map((entry) => entry.id),
+        matchedIds: new Set(reconciliation.matched.keys()),
+        pendingInsertions,
+        now: Date.now()
+      });
+      queuePresenceMisses = presence.next;
+      transientQueueMissingIds = new Set(presence.transientMissing);
+      const confirmedMissing = new Set(presence.confirmedMissing);
       const nextPositions = new Map();
       const nextRequestFilePaths = new Map();
       const newlyMissing = [];
@@ -626,9 +817,37 @@ async function reconcileVirtualDjQueue(force = false) {
         const item = requests.find((request) => request.id === entry.id);
         const actual = reconciliation.matched.get(entry.id);
         if (actual) {
+          const previousStatus = item?.status || "";
+          const linkedEntry = {
+            ...entry,
+            filePath: actual.filePath || entry.filePath,
+            singer: actual.singer || entry.singer,
+            song: item?.song || actual.song || entry.song,
+            artist: item?.artist || actual.artist || entry.artist,
+            durationSeconds:
+              Math.max(0, Number(actual.durationSeconds) || 0) ||
+              Math.max(0, Number(item?.durationSeconds) || 0),
+            virtualDJItemId: actual.virtualDJItemId,
+            fingerprint: actual.fingerprint,
+            insertedAt: entry.insertedAt || new Date().toISOString(),
+            lastSeenAt: new Date().toISOString()
+          };
+          queuedEntries.set(entry.id, linkedEntry);
+          adopted = true;
           queuedIds.add(entry.id);
+          pendingInsertions.delete(entry.id);
           nextPositions.set(entry.id, actual.index);
           if (actual.filePath) nextRequestFilePaths.set(entry.id, actual.filePath);
+          const matchDetail = reconciliation.matchDetails.get(entry.id) || {};
+          recordReconciliation({
+            requestId: entry.id,
+            virtualDJItemId: actual.virtualDJItemId,
+            confidence: matchDetail.confidence,
+            matchFields: matchDetail.fields,
+            previousStatus,
+            newStatus: "In VirtualDJ",
+            reason: "matched_real_virtualdj_queue"
+          });
           if (
             Number(actual.durationSeconds) > 0 &&
             Math.abs(
@@ -647,67 +866,79 @@ async function reconcileVirtualDjQueue(force = false) {
           }
           continue;
         }
+        if (!confirmedMissing.has(entry.id)) {
+          if (queuedIds.has(entry.id) || sheetMarksVirtualDj(item)) {
+            queuedIds.add(entry.id);
+          }
+          const previousPosition = vdjQueuePositions.get(entry.id);
+          if (Number.isInteger(previousPosition)) {
+            nextPositions.set(entry.id, previousPosition);
+          }
+          const previousPath =
+            vdjRequestFilePaths.get(entry.id) || entry.filePath || "";
+          if (previousPath) nextRequestFilePaths.set(entry.id, previousPath);
+          recordReconciliation({
+            requestId: entry.id,
+            virtualDJItemId: entry.virtualDJItemId,
+            previousStatus: item?.status,
+            newStatus: "Confirming in VirtualDJ",
+            reason: pendingInsertions.has(entry.id)
+              ? "insertion_grace_window"
+              : "temporary_missing_scan"
+          });
+          continue;
+        }
         queuedIds.delete(entry.id);
-        if (
-          !removedExternallyIds.has(entry.id) ||
-          item?.status !== "Fuera de VirtualDJ"
-        ) {
+        pendingInsertions.delete(entry.id);
+        if (!removedExternallyIds.has(entry.id) || item?.status !== "Fuera de VirtualDJ") {
           newlyMissing.push(entry.id);
         }
         removedExternallyIds.add(entry.id);
-      }
-
-      for (const item of requests) {
-        if (
-          requestOutcome(item.status) ||
-          !sheetMarksVirtualDj(item) ||
-          queuedEntries.has(item.id) ||
-          suppressedQueueIds.has(item.id)
-        ) {
-          continue;
-        }
-        const actual = actualQueueEntryFromRequest(
-          item,
-          actualEntries,
-          reconciliation.claimedIndices
-        );
-        if (!actual) {
-          queuedIds.delete(item.id);
-          if (
-            !removedExternallyIds.has(item.id) ||
-            item.status !== "Fuera de VirtualDJ"
-          ) {
-            newlyMissing.push(item.id);
-          }
-          removedExternallyIds.add(item.id);
-          continue;
-        }
-        reconciliation.claimedIndices.add(actual.index);
-        const adoptedEntry = queuedEntryFromRequest(item, actual.filePath);
-        if (adoptedEntry) {
-          queuedEntries.set(item.id, adoptedEntry);
-          adopted = true;
-        }
-        queuedIds.add(item.id);
-        removedExternallyIds.delete(item.id);
-        nextPositions.set(item.id, actual.index);
-        if (actual.filePath) nextRequestFilePaths.set(item.id, actual.filePath);
-        if (
-          Number(actual.durationSeconds) > 0 &&
-          Math.abs(
-            Number(item.durationSeconds || 0) -
-            Number(actual.durationSeconds)
-          ) >= 1
-        ) {
-          item.durationSeconds = Number(actual.durationSeconds);
-          durationUpdates.add(item.id);
-        }
+        recordReconciliation({
+          requestId: entry.id,
+          virtualDJItemId: entry.virtualDJItemId,
+          previousStatus: item?.status,
+          newStatus: "Removed from VirtualDJ",
+          reason: "missing_in_multiple_consecutive_scans"
+        });
       }
 
       vdjQueuePositions = nextPositions;
       vdjRequestFilePaths = nextRequestFilePaths;
       vdjQueueHasSnapshot = true;
-      vdjQueueCount = actualEntries.length;
+      vdjQueueCount = inspectedEntries.length;
+      const linkedByIndex = new Map();
+      for (const [requestId, actual] of reconciliation.matched) {
+        linkedByIndex.set(actual.index, requestId);
+      }
+      vdjQueueEntries = inspectedEntries.map((entry) => ({
+        ...entry,
+        linkedRequestId: linkedByIndex.get(entry.index) || "",
+        sourceType: linkedByIndex.has(entry.index)
+          ? "public_request"
+          : "virtualdj_external"
+      }));
+      externalQueueEntries = vdjQueueEntries.filter(
+        (entry) => entry.sourceType === "virtualdj_external"
+      );
+      const currentExternalIds = new Set(
+        externalQueueEntries.map((entry) => entry.virtualDJItemId)
+      );
+      externalQueueEntries.forEach((entry) => {
+        knownExternalEntries.set(entry.virtualDJItemId, entry);
+        externalQueueMisses.set(entry.virtualDJItemId, 0);
+      });
+      const confirmedMissingExternalIds = [];
+      for (const [virtualDJItemId] of knownExternalEntries) {
+        if (currentExternalIds.has(virtualDJItemId)) continue;
+        const misses = (externalQueueMisses.get(virtualDJItemId) || 0) + 1;
+        externalQueueMisses.set(virtualDJItemId, misses);
+        if (misses >= 3) {
+          confirmedMissingExternalIds.push(virtualDJItemId);
+          knownExternalEntries.delete(virtualDJItemId);
+          externalQueueMisses.delete(virtualDJItemId);
+        }
+      }
       lastVdjQueueAt = new Date().toISOString();
       vdjError = "";
       if (adopted) await persistQueuedEntries();
@@ -723,7 +954,11 @@ async function reconcileVirtualDjQueue(force = false) {
             id,
             item.status,
             basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
-            { durationSeconds: item.durationSeconds }
+            {
+              durationSeconds: item.durationSeconds,
+              virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
+              syncState: "confirmed_missing"
+            }
           );
         } catch {
           // La tarjeta local conserva la pregunta y la hoja se reintentará después.
@@ -739,7 +974,13 @@ async function reconcileVirtualDjQueue(force = false) {
             id,
             item.status,
             basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
-            { durationSeconds: item.durationSeconds }
+            {
+              durationSeconds: item.durationSeconds,
+              virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
+              queuePosition: vdjQueuePositions.get(id),
+              syncState: "confirmed",
+              lastSeenAt: new Date().toISOString()
+            }
           );
         } catch {
           // La cola real de VirtualDJ sigue siendo la fuente de verdad.
@@ -755,14 +996,40 @@ async function reconcileVirtualDjQueue(force = false) {
             id,
             item.status,
             basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
-            { durationSeconds: item.durationSeconds }
+            {
+              durationSeconds: item.durationSeconds,
+              virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
+              queuePosition: vdjQueuePositions.get(id),
+              syncState: "confirmed",
+              lastSeenAt: new Date().toISOString()
+            }
           );
         } catch {
           // La duración exacta local permanece visible y se reintentará.
         }
       }
+      if (hasV4Session(config)) {
+        try {
+          await syncExternalVirtualDjEntries(
+            config,
+            externalQueueEntries.map((entry) => ({
+              virtualDJItemId: entry.virtualDJItemId,
+              index: entry.index,
+              filePath: entry.filePath,
+              singer: entry.singer,
+              song: entry.song,
+              artist: entry.artist,
+              durationSeconds: entry.durationSeconds,
+              sourceType: "virtualdj_external"
+            })),
+            confirmedMissingExternalIds
+          );
+        } catch {
+          // The real VirtualDJ queue remains authoritative; retry on the next scan.
+        }
+      }
     } catch (error) {
-      vdjError = `No se pudo comprobar la cola Karaoke: ${errorMessage(error)}`;
+      vdjError = `The Karaoke queue could not be checked: ${errorMessage(error)}`;
     }
   })();
 
@@ -818,6 +1085,17 @@ function stateView() {
     ok: true,
     version: BRIDGE_VERSION,
     config: publicConfig(config),
+    account: {
+      authenticated: identityState.authenticated && hasV4Session(config),
+      user: identityState.user,
+      selection: identityState.selection,
+      current: {
+        hotelId: config.lastHotelId,
+        venueId: config.lastVenueId,
+        activityId: config.lastActivityId
+      }
+    },
+    tenant: tenantState,
     activity: activityState,
     activitySummary,
     library: {
@@ -839,14 +1117,18 @@ function stateView() {
       queueVerified: vdjQueueHasSnapshot,
       checkingQueue: Boolean(vdjQueueCheckPromise),
       entries: vdjQueueEntries.map((entry) => ({
+        virtualDJItemId: entry.virtualDJItemId,
         position: entry.index + 1,
-        singer: entry.singer || "Sin cantante",
+        singer: entry.singer || "No singer",
         song:
-          entry.song || basename(entry.filePath || "") || "Pista sin título",
+          entry.song || basename(entry.filePath || "") || "Untitled track",
         artist: entry.artist || "",
         durationSeconds: Math.max(0, Number(entry.durationSeconds) || 0),
-        localAvailable: entry.localAvailable === true
-      }))
+        localAvailable: entry.localAvailable === true,
+        linkedRequestId: entry.linkedRequestId || "",
+        sourceType: entry.sourceType || "virtualdj_external"
+      })),
+      externalCount: externalQueueEntries.length
     },
     clipboard: clipboardState,
     hitSuggestions,
@@ -890,7 +1172,13 @@ function refreshLocalAvailability() {
   const snapshot = requests.map((item) => ({
     id: item.id,
     available: Boolean(
-      findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact ||
+      findMatches(
+        libraryFiles,
+        item.song,
+        item.artist,
+        item.languageCode || item.language,
+        1
+      )[0]?.exact ||
       vdjAvailablePaths.has(
         normalizeVdjPath(
           vdjRequestFilePaths.get(item.id) ||
@@ -1000,7 +1288,7 @@ async function scanNow() {
 }
 
 async function syncNow() {
-  if (syncing || !config.appsScriptUrl || !config.hostPin) return;
+  if (syncing || !guestStarConfigured()) return;
   syncing = true;
   sheetError = "";
   broadcastState();
@@ -1017,7 +1305,7 @@ async function syncNow() {
     if (activityChanged) clearTransientCaches();
     requests = nextRequests;
     refreshLocalAvailability();
-    applyActivityState(nextActivity);
+    applyActivityState(data);
     await reconcileTerminalRequests(nextRequests);
     lastSyncAt = new Date().toISOString();
     broadcastState();
@@ -1045,7 +1333,7 @@ async function syncNow() {
 }
 
 async function reportLocalStates() {
-  if (!config.appsScriptUrl || !config.hostPin) return;
+  if (!guestStarConfigured()) return;
   for (const item of requests) {
     if (requestOutcome(item.status)) continue;
     if (queuedIds.has(item.id) || removedExternallyIds.has(item.id)) continue;
@@ -1055,7 +1343,13 @@ async function reportLocalStates() {
     ) {
       continue;
     }
-    const top = findMatches(libraryFiles, item.song, item.artist, 1)[0];
+    const top = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.languageCode || item.language,
+      1
+    )[0];
     const verifiedQueuePath =
       vdjRequestFilePaths.get(item.id) ||
       queuedEntries.get(item.id)?.filePath ||
@@ -1088,7 +1382,7 @@ async function reportLocalStates() {
 async function assertAllowedFile(filePath) {
   const target = await realpath(String(filePath || ""));
   const info = await stat(target);
-  if (!info.isFile()) throw new Error("La pista seleccionada no es un archivo.");
+  if (!info.isFile()) throw new Error("The selected track is not a file.");
   for (const folder of config.libraryFolders) {
     try {
       const root = await realpath(folder);
@@ -1097,7 +1391,7 @@ async function assertAllowedFile(filePath) {
       // Ignore folders that disappeared after the last scan.
     }
   }
-  throw new Error("La pista no pertenece a una carpeta de karaoke configurada.");
+  throw new Error("The track is not inside a configured karaoke folder.");
 }
 
 async function firstAllowedFile(candidates) {
@@ -1110,7 +1404,7 @@ async function firstAllowedFile(candidates) {
     }
   }
   if (lastError) throw lastError;
-  throw new Error("La canción todavía no aparece en la biblioteca local.");
+  throw new Error("The song is not yet available in the local library.");
 }
 
 function removeQueuePosition(id) {
@@ -1136,19 +1430,32 @@ function appendQueuePosition(id) {
 
 async function queueRequest(id, requestedPath, options = {}) {
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
   if (requestOutcome(item.status)) {
-    throw new Error("Esta solicitud ya fue marcada como cantada o saltada.");
+    throw new Error("This request was already marked completed or skipped.");
   }
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
   const wasQueued = !suppressedQueueIds.has(id) && queuedIds.has(id);
   const wasRemovedExternally = removedExternallyIds.has(id);
   const requeue = Boolean(options.requeue) && wasQueued;
-  if (wasQueued && !requeue) return { ok: true, alreadyQueued: true };
-  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  if (wasQueued && !requeue && vdjQueueHasSnapshot) {
+    return { ok: true, alreadyQueued: true, linked: true };
+  }
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
+  pendingInsertions.set(id, {
+    phase: "adding",
+    startedAt: Date.now()
+  });
+  broadcastState();
   try {
-    const exact = findMatches(libraryFiles, item.song, item.artist, 1)[0];
+    const exact = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.languageCode || item.language,
+      1
+    )[0];
     const filePath = await firstAllowedFile([
       requestedPath,
       exact?.exact ? exact.filePath : "",
@@ -1161,24 +1468,49 @@ async function queueRequest(id, requestedPath, options = {}) {
         const removal = await removeKaraokeEntry(config.virtualDJ, tracked);
         if (removal.reason === "ambiguous") {
           throw new Error(
-            "VirtualDJ tiene más de una copia idéntica. Retira la que deseas directamente en VirtualDJ antes de reenviarla."
+            "VirtualDJ has more than one identical copy. Remove the correct one directly in VirtualDJ before sending it again."
           );
         }
         previousRemoved = removal.removed === true;
         if (previousRemoved) removeQueuePosition(id);
       }
     }
-    const script = buildKaraokeScript(filePath, item.singer);
-    const result = await executeVdj(config.virtualDJ, script);
+    pendingInsertions.set(id, {
+      phase: "confirming",
+      startedAt: pendingInsertions.get(id)?.startedAt || Date.now()
+    });
+    broadcastState();
+    const insertionEntry = {
+      ...trackingEntryFromRequest(item),
+      filePath
+    };
+    const result = await insertKaraokeEntry(
+      config.virtualDJ,
+      insertionEntry,
+      Number.MAX_SAFE_INTEGER
+    );
+    if (!result.verified || !result.entry) {
+      throw new Error(
+        "VirtualDJ received the command but did not confirm the song in the queue."
+      );
+    }
+    const actualEntry = stabilizeVirtualDjEntries(
+      [{ ...result.entry, index: result.index }],
+      vdjQueueEntries
+    )[0];
     suppressedQueueIds.delete(id);
     removedExternallyIds.delete(id);
+    transientQueueMissingIds.delete(id);
+    queuePresenceMisses.delete(id);
     queuedIds.add(id);
-    appendQueuePosition(id);
-    const queuedEntry = queuedEntryFromRequest(item, filePath);
+    vdjQueuePositions.set(id, result.index);
+    vdjQueueCount = Math.max(vdjQueueCount, result.index + 1);
+    const queuedEntry = queuedEntryFromRequest(item, filePath, actualEntry);
     if (queuedEntry) {
       queuedEntries.set(id, queuedEntry);
       await persistQueuedEntries();
     }
+    pendingInsertions.delete(id);
     vdjError = "";
     item.status = wasRemovedExternally
       ? "Reagregada a VirtualDJ"
@@ -1187,42 +1519,51 @@ async function queueRequest(id, requestedPath, options = {}) {
         : "Agregada a VirtualDJ";
     let warning = "";
     try {
-      await updateBridgeRequest(config, id, item.status, basename(filePath));
+      await updateBridgeRequest(config, id, item.status, basename(filePath), {
+        durationSeconds: item.durationSeconds,
+        virtualDJItemId: queuedEntry?.virtualDJItemId || "",
+        queuePosition: result.index,
+        syncState: "confirmed",
+        lastSeenAt: new Date().toISOString()
+      });
     } catch (error) {
-      warning = `La canción entró a VirtualDJ, pero la hoja no se actualizó: ${errorMessage(error)}`;
+      warning = `The song entered VirtualDJ, but the Sheet was not updated: ${errorMessage(error)}`;
     }
     return {
       ok: true,
       result,
-      script,
+      alreadyQueued: result.alreadyQueued === true,
+      linked: result.alreadyQueued === true,
       requeued: requeue,
       restored: wasRemovedExternally,
       previousRemoved,
       warning
     };
   } catch (error) {
+    pendingInsertions.delete(id);
     vdjError = errorMessage(error);
     throw error;
   } finally {
     queueLocks.delete(id);
+    broadcastState();
   }
 }
 
 async function removeQueuedRequest(id) {
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
-  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
   try {
     const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
     if (!entry) {
-      throw new Error("No se encontró el archivo asociado a esta solicitud.");
+      throw new Error("The file associated with this request was not found.");
     }
     const result = await removeKaraokeEntry(config.virtualDJ, entry);
     if (result.reason === "ambiguous") {
       throw new Error(
-        "VirtualDJ tiene más de una copia idéntica y no se retiró ninguna por seguridad."
+        "VirtualDJ has more than one identical copy; none were removed for safety."
       );
     }
 
@@ -1231,19 +1572,22 @@ async function removeQueuedRequest(id) {
     removeQueuePosition(id);
     queuedEntries.delete(id);
     suppressedQueueIds.add(id);
+    pendingInsertions.delete(id);
+    queuePresenceMisses.delete(id);
+    transientQueueMissingIds.delete(id);
     await persistQueuedEntries();
     vdjError = "";
     item.status = "Retirada de rotación";
     let warning =
       result.reason === "not-found"
-        ? "La canción ya no estaba en VirtualDJ; el estado local fue actualizado."
+        ? "The song was no longer in VirtualDJ; the local status was updated."
         : "";
     try {
       await updateBridgeRequest(config, id, item.status, "");
     } catch (error) {
       warning =
         warning ||
-        `La canción se retiró de VirtualDJ, pero la hoja no se actualizó: ${errorMessage(error)}`;
+        `The song was removed from VirtualDJ, but the Sheet was not updated: ${errorMessage(error)}`;
     }
     return {
       ok: true,
@@ -1265,30 +1609,33 @@ async function removeQueuedRequest(id) {
 
 async function dismissRequeue(id) {
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
   queuedIds.delete(id);
   removedExternallyIds.delete(id);
   removeQueuePosition(id);
   queuedEntries.delete(id);
   suppressedQueueIds.add(id);
+  pendingInsertions.delete(id);
+  queuePresenceMisses.delete(id);
+  transientQueueMissingIds.delete(id);
   await persistQueuedEntries();
   item.status = "Fuera de VirtualDJ";
   let warning = "";
   try {
     await updateBridgeRequest(config, id, item.status, "");
   } catch (error) {
-    warning = `La decisión quedó guardada localmente, pero la hoja no se actualizó: ${errorMessage(error)}`;
+    warning = `The decision was saved locally, but the Sheet was not updated: ${errorMessage(error)}`;
   }
   return { ok: true, warning };
 }
 
 async function setRequestOutcome(id, outcome) {
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
   if (!["completed", "skipped"].includes(outcome)) {
-    throw new Error("Resultado de canción no permitido.");
+    throw new Error("Song outcome is not allowed.");
   }
-  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
   const status = outcome === "completed" ? "Ya cantó" : "Saltado";
   try {
@@ -1303,7 +1650,7 @@ async function setRequestOutcome(id, outcome) {
         const result = await removeKaraokeEntry(config.virtualDJ, entry);
         if (result.reason === "ambiguous") {
           throw new Error(
-            "VirtualDJ tiene más de una copia idéntica. Retira la correcta manualmente antes de marcar el resultado."
+            "VirtualDJ has more than one identical copy. Remove the correct one manually before marking the outcome."
           );
         }
         if (Number.isInteger(result.index)) originalPosition = result.index;
@@ -1311,7 +1658,7 @@ async function setRequestOutcome(id, outcome) {
           result.removed === true || result.reason === "not-found";
       } catch (error) {
         throw new Error(
-          `No se pudo actualizar la cola real de VirtualDJ: ${errorMessage(error)}`
+          `The live VirtualDJ queue could not be updated: ${errorMessage(error)}`
         );
       }
     }
@@ -1331,6 +1678,9 @@ async function setRequestOutcome(id, outcome) {
     if (vdjQueuePositions.has(id)) removeQueuePosition(id);
     queuedEntries.delete(id);
     suppressedQueueIds.add(id);
+    pendingInsertions.delete(id);
+    queuePresenceMisses.delete(id);
+    transientQueueMissingIds.delete(id);
     await persistQueuedEntries();
     item.status = status;
 
@@ -1345,7 +1695,7 @@ async function setRequestOutcome(id, outcome) {
       if (data?.state) applyActivityState(data);
     } catch (error) {
       warning =
-        `El resultado quedó visible en el Bridge, pero la hoja no se actualizó: ${errorMessage(error)}`;
+        `The outcome is visible in Bridge, but the Sheet was not updated: ${errorMessage(error)}`;
     }
     return {
       ok: true,
@@ -1367,14 +1717,14 @@ async function setRequestOutcome(id, outcome) {
 
 async function undoRequestOutcome(id, placement) {
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
   if (!requestOutcome(item.status)) {
-    throw new Error("Esta solicitud ya no está marcada como cantada o saltada.");
+    throw new Error("This request is no longer marked completed or skipped.");
   }
   if (!["original", "end", "pending"].includes(placement)) {
-    throw new Error("Elige cómo deseas restaurar la canción.");
+    throw new Error("Choose how you want to restore the song.");
   }
-  if (queueLocks.has(id)) throw new Error("Esta solicitud ya se está procesando.");
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
 
   try {
@@ -1384,7 +1734,13 @@ async function undoRequestOutcome(id, placement) {
       queuedEntryFromRequest(item) ||
       queuedEntryFromRequest(
         item,
-        findMatches(libraryFiles, item.song, item.artist, 1)[0]?.filePath || ""
+        findMatches(
+          libraryFiles,
+          item.song,
+          item.artist,
+          item.languageCode || item.language,
+          1
+        )[0]?.filePath || ""
       );
     if (placement === "original" && !Number.isInteger(recovery?.originalPosition)) {
       throw new Error(
@@ -1393,7 +1749,7 @@ async function undoRequestOutcome(id, placement) {
     }
     if (placement !== "pending" && !entry) {
       throw new Error(
-        "El archivo ya no está disponible localmente. Deshaz el estado sin agregarla o vuelve a descargar la pista."
+        "The file is no longer available locally. Undo without adding it, or restore the track to the library."
       );
     }
 
@@ -1412,6 +1768,9 @@ async function undoRequestOutcome(id, placement) {
     vdjQueuePositions.delete(id);
     queuedEntries.delete(id);
     suppressedQueueIds.add(id);
+    pendingInsertions.delete(id);
+    queuePresenceMisses.delete(id);
+    transientQueueMissingIds.delete(id);
 
     let restoredPosition = null;
     if (placement !== "pending") {
@@ -1477,7 +1836,7 @@ async function findHitSuggestionYoutube(body = {}) {
       normalizeText(item.song) === normalizeText(body.song) &&
       normalizeText(item.artist) === normalizeText(body.artist)
   );
-  if (!suggestion) throw new Error("La sugerencia ya no está disponible.");
+  if (!suggestion) throw new Error("The suggestion is no longer available.");
   const key = hitSuggestionKey(suggestion);
   if (body.force === true) hitYoutubeCache.delete(key);
   if (hitYoutubeCache.has(key)) return hitYoutubeCache.get(key);
@@ -1485,7 +1844,8 @@ async function findHitSuggestionYoutube(body = {}) {
     config,
     suggestion.song,
     suggestion.artist,
-    suggestion.language
+    suggestion.language,
+    suggestion.languageCode || ""
   );
   const items = selectYoutubeOptions(
     Array.isArray(data.items) ? data.items : [],
@@ -1496,7 +1856,7 @@ async function findHitSuggestionYoutube(body = {}) {
 }
 
 async function prepareHitSuggestionYoutube() {
-  if (!config.appsScriptUrl || !config.hostPin || vdjQueueCount > 0) return;
+  if (!guestStarConfigured() || vdjQueueCount > 0) return;
   const target = selectHitSuggestions(
     requests,
     libraryFiles,
@@ -1528,9 +1888,9 @@ async function queueHitSuggestion(body = {}) {
       normalizeText(item.song) === normalizeText(song) &&
       normalizeText(item.artist) === normalizeText(artist)
   );
-  if (!suggestion) throw new Error("La sugerencia ya no está disponible.");
+  if (!suggestion) throw new Error("The suggestion is no longer available.");
   if (!suggestion.localAvailable || !suggestion.filePath) {
-    throw new Error("Ese tema sugerido todavía no está en la biblioteca local.");
+    throw new Error("That suggested song is not yet in the local library.");
   }
 
   let singer = "EMCEE";
@@ -1544,7 +1904,7 @@ async function queueHitSuggestion(body = {}) {
       )
     ];
     if (!candidates.length) {
-      throw new Error("Todavía no hay participantes registrados para elegir al azar.");
+      throw new Error("There are no registered participants to choose from yet.");
     }
     singer = candidates[Math.floor(Math.random() * candidates.length)];
   }
@@ -1576,7 +1936,13 @@ async function autoQueueExactMatches() {
     ) {
       continue;
     }
-    const top = findMatches(libraryFiles, item.song, item.artist, 1)[0];
+    const top = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.languageCode || item.language,
+      1
+    )[0];
     if (!top?.exact) continue;
     try {
       await queueRequest(item.id, top.filePath);
@@ -1589,7 +1955,7 @@ async function autoQueueExactMatches() {
 async function findYoutube(id) {
   if (youtubeSearches.has(id)) return youtubeSearches.get(id);
   const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("La solicitud ya no está disponible.");
+  if (!item) throw new Error("The request is no longer available.");
 
   const operation = (async () => {
     let results = [];
@@ -1598,7 +1964,8 @@ async function findYoutube(id) {
         config,
         item.song,
         item.artist,
-        item.language
+        item.language,
+        item.languageCode
       );
       results = Array.isArray(data.items) ? data.items : [];
     } catch {
@@ -1620,11 +1987,17 @@ async function findYoutube(id) {
 }
 
 async function prepareMissingYoutube() {
-  if (!config.appsScriptUrl || !config.hostPin) return;
+  if (!guestStarConfigured()) return;
   const missing = requests.filter(
     (item) =>
       !requestOutcome(item.status) &&
-      !findMatches(libraryFiles, item.song, item.artist, 1)[0]?.exact &&
+      !findMatches(
+        libraryFiles,
+        item.song,
+        item.artist,
+        item.languageCode || item.language,
+        1
+      )[0]?.exact &&
       !vdjAvailablePaths.has(
         normalizeVdjPath(
           vdjRequestFilePaths.get(item.id) ||
@@ -1662,9 +2035,9 @@ async function prepareMissingYoutube() {
       requestId: target.id,
       url: "",
       resultType: "",
-      notice: "No se encontró todavía un video con letra suficientemente confiable.",
+      notice: "No sufficiently reliable video with visible lyrics was found yet.",
       copiedAt: "",
-      error: "No se encontró un enlace recomendado."
+      error: "No recommended link was found."
     };
     broadcastState();
     return;
@@ -1683,10 +2056,10 @@ async function prepareMissingYoutube() {
 
 async function chooseFolder() {
   if (process.platform !== "darwin") {
-    throw new Error("El selector automático de carpetas está disponible al ejecutar el puente en Mac.");
+    throw new Error("The automatic folder picker is available when Bridge runs on Mac.");
   }
   const script =
-    'POSIX path of (choose folder with prompt "Elige tu carpeta de canciones de karaoke")';
+    'POSIX path of (choose folder with prompt "Choose your karaoke song folder")';
   const { stdout } = await execFileAsync("osascript", ["-e", script], { timeout: 120000 });
   return stdout.trim().replace(/\/$/, "");
 }
@@ -1723,6 +2096,124 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
+  if (request.method === "POST" && pathname === "/api/auth/login") {
+    const body = await readJson(request);
+    const data = await signInBridge(config, {
+      username: String(body.username || "").trim(),
+      password: String(body.password || ""),
+      rememberLogin: body.rememberLogin !== false,
+      deviceName: body.deviceName || `Guest Star Bridge on ${process.env.HOSTNAME || "Mac"}`
+    });
+    config = await saveConfig(sanitizeConfig({
+      ...config,
+      authToken: data.authToken,
+      deviceToken: data.deviceToken,
+      deviceId: data.deviceId,
+      lastUsername: String(body.username || "").trim(),
+      rememberLogin: body.rememberLogin !== false
+    }, config));
+    identityState = {
+      authenticated: true,
+      user: data.user || null,
+      selection: data.selection || { hotels: [], venues: [], activities: [] }
+    };
+    sheetError = "";
+    broadcastState();
+    json(response, 200, {
+      ok: true,
+      user: identityState.user,
+      selection: identityState.selection,
+      mustChangePassword: data.user?.mustChangePassword === true
+    });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/auth/logout") {
+    const previousDeviceId = config.deviceId;
+    try {
+      if (hasV4Session(config)) await signOutBridge(config);
+    } finally {
+      await clearBridgeSecrets(previousDeviceId);
+      config = await saveConfig(sanitizeConfig({
+        ...config,
+        authToken: "",
+        deviceToken: "",
+        lastHotelId: "",
+        lastVenueId: "",
+        lastActivityId: ""
+      }, config));
+      identityState = {
+        authenticated: false,
+        user: null,
+        selection: { hotels: [], venues: [], activities: [] }
+      };
+      tenantState = {
+        hotel: null,
+        venue: null,
+        activity: null,
+        permissions: {},
+        share: null,
+        upcomingActivities: []
+      };
+      requests = [];
+      clearTransientCaches();
+      broadcastState();
+    }
+    json(response, 200, { ok: true });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/auth/change-password") {
+    const body = await readJson(request);
+    const data = await v4AppsScriptAction(config, "changePassword", {
+      currentPassword: String(body.currentPassword || ""),
+      newPassword: String(body.newPassword || "")
+    });
+    if (identityState.user) identityState.user.mustChangePassword = false;
+    json(response, 200, data);
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/auth/me") {
+    if (!hasV4Session(config)) {
+      json(response, 200, { ok: true, authenticated: false });
+      return;
+    }
+    const data = await fetchBridgeIdentity(config);
+    identityState = {
+      authenticated: true,
+      user: data.user || null,
+      selection: data.selection || { hotels: [], venues: [], activities: [] }
+    };
+    json(response, 200, { ok: true, authenticated: true, ...identityState });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/auth/selection") {
+    const body = await readJson(request);
+    const selection = {
+      hotelId: String(body.hotelId || ""),
+      venueId: String(body.venueId || ""),
+      activityId: String(body.activityId || "")
+    };
+    const data = await selectBridgeActivity(config, selection);
+    config = await saveConfig(sanitizeConfig({
+      ...config,
+      lastHotelId: selection.hotelId,
+      lastVenueId: selection.venueId,
+      lastActivityId: selection.activityId,
+      rememberSelection: body.rememberSelection !== false
+    }, config));
+    applyActivityState(data);
+    requests = bridgeRequests(data);
+    clearTransientCaches();
+    await persistQueuedEntries(activityState.activityId);
+    await syncNow();
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/host-panel/open") {
+    const data = await createHostPanelLogin(config);
+    const openedUrl = await openMacUrl(data.url);
+    json(response, 200, { ok: true, url: openedUrl, expiresAt: data.expiresAt });
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/config") {
     const body = await readJson(request);
     let baseConfig = config;
@@ -1745,6 +2236,26 @@ async function api(request, response, url) {
     json(response, 200, { ok: true, config: publicConfig(config) });
     return;
   }
+  if (request.method === "POST" && pathname === "/api/activity/settings") {
+    const body = await readJson(request);
+    const data = await v4AppsScriptAction(config, "updateActivitySettings", {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId,
+      source: "bridge",
+      scheduledStartAt: body.scheduledStartAt,
+      defaultDurationSeconds: body.defaultDurationSeconds,
+      defaultTransitionSeconds: body.defaultTransitionSeconds,
+      acceptEarlyRequests: body.acceptEarlyRequests,
+      showCountdown: body.showCountdown,
+      autoStartEnabled: body.autoStartEnabled,
+      showPublicStatus: body.showPublicStatus
+    });
+    applyActivityState(data);
+    requests = bridgeRequests(data);
+    json(response, 200, stateView());
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/library/choose-folder") {
     json(response, 200, { ok: true, folder: await chooseFolder() });
     return;
@@ -1760,13 +2271,29 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
-  const activityMatch = pathname.match(/^\/api\/activity\/(start|open|close|reset)$/);
+  const activityMatch = pathname.match(
+    /^\/api\/activity\/(start|open|close|reset|finish|start-new|archive)$/
+  );
   if (request.method === "POST" && activityMatch) {
     const action = activityMatch[1];
-    const data = await controlActivity(config, action);
+    const context = {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId,
+      source: "bridge"
+    };
+    const data = action === "finish"
+      ? await v4AppsScriptAction(config, "finishActivityV4", context)
+      : action === "start-new"
+        ? await v4AppsScriptAction(config, "startNewActivityV4", context)
+        : action === "archive"
+          ? await v4AppsScriptAction(config, "archiveClearQueue", context)
+          : await controlActivity(config, action);
     applyActivityState(data);
-    if (action === "reset") {
-      await reconcileDeletedRequests([], activityState);
+    if (["reset", "archive", "start-new"].includes(action)) {
+      await reconcileDeletedRequests([], activityState, {
+        removeFromVirtualDJ: true
+      });
       await resetLocalActivity(activityState.activityId);
     } else if (Array.isArray(data.requests)) {
       requests = bridgeRequests(data);
@@ -1951,7 +2478,7 @@ async function api(request, response, url) {
     const data = await fetchBridgeQueue(testConfig);
     if (data.codeVersion !== BRIDGE_VERSION) {
       throw new Error(
-        `La hoja responde, pero usa Code.gs ${data.codeVersion || "anterior"}. Publica Code.gs ${BRIDGE_VERSION} como una versión nueva.`
+        `The Sheet responds, but it uses Code.gs ${data.codeVersion || "older"}. Publish Code.gs ${BRIDGE_VERSION} as a new version.`
       );
     }
     json(response, 200, {
@@ -1961,7 +2488,7 @@ async function api(request, response, url) {
     });
     return;
   }
-  json(response, 404, { ok: false, error: "Acción no encontrada." });
+  json(response, 404, { ok: false, error: "Action not found." });
 }
 
 const server = createServer(async (request, response) => {
@@ -1974,10 +2501,97 @@ const server = createServer(async (request, response) => {
   }
 });
 
+async function restoreBridgeIdentity() {
+  if (!hasV4Session(config)) return;
+  try {
+    const data = await fetchBridgeIdentity(config);
+    identityState = {
+      authenticated: true,
+      user: data.user || null,
+      selection: data.selection || { hotels: [], venues: [], activities: [] }
+    };
+  } catch (error) {
+    identityState.authenticated = false;
+    sheetError = errorMessage(error);
+  }
+}
+
+let cloudLoopRunning = false;
+let lastHeartbeatSentAt = 0;
+
+async function executeCloudCommand(command) {
+  const payload = command?.payload || {};
+  if (command.commandType === "synchronize") {
+    await syncNow();
+    await reconcileVirtualDjQueue(true);
+    return { synchronized: true };
+  }
+  if (command.commandType === "addRequest") {
+    return queueRequest(String(payload.requestId || ""), payload.filePath || "", {
+      requeue: payload.requeue === true
+    });
+  }
+  if (command.commandType === "removeRequest") {
+    return removeQueuedRequest(String(payload.requestId || ""));
+  }
+  if (command.commandType === "markSang") {
+    return setRequestOutcome(String(payload.requestId || ""), "completed");
+  }
+  if (command.commandType === "markSkipped") {
+    return setRequestOutcome(String(payload.requestId || ""), "skipped");
+  }
+  if (command.commandType === "undo") {
+    return undoRequestOutcome(
+      String(payload.requestId || ""),
+      String(payload.placement || "pending")
+    );
+  }
+  if (command.commandType === "moveRequest") {
+    return queueRequest(String(payload.requestId || ""), payload.filePath || "", {
+      requeue: true
+    });
+  }
+  throw new Error("Unsupported Bridge command.");
+}
+
+async function bridgeCloudLoop() {
+  if (cloudLoopRunning || !hasV4Session(config) || !config.lastActivityId) return;
+  cloudLoopRunning = true;
+  try {
+    if (Date.now() - lastHeartbeatSentAt >= 5000) {
+      await sendBridgeHeartbeat(config, {
+        virtualDJConnected: !vdjError && Boolean(lastVdjQueueAt)
+      });
+      lastHeartbeatSentAt = Date.now();
+    }
+    const data = await pollBridgeCommands(config);
+    for (const command of data.commands || []) {
+      try {
+        const result = await executeCloudCommand(command);
+        await completeBridgeCommand(config, command.commandId, {
+          ok: true,
+          result
+        });
+      } catch (error) {
+        await completeBridgeCommand(config, command.commandId, {
+          ok: false,
+          errorMessage: errorMessage(error)
+        });
+      }
+    }
+  } catch (error) {
+    sheetError = errorMessage(error);
+  } finally {
+    cloudLoopRunning = false;
+    broadcastState();
+  }
+}
+
 server.listen(config.bridgePort, "127.0.0.1", () => {
   console.log(`Guest Star Bridge listo: http://127.0.0.1:${config.bridgePort}`);
 });
 
+await restoreBridgeIdentity();
 startLibraryWatchers();
 await scanNow();
 await syncNow();
@@ -1994,6 +2608,9 @@ async function scanLoop() {
 
 setTimeout(requestLoop, config.requestIntervalSeconds * 1000).unref();
 setTimeout(scanLoop, config.scanIntervalSeconds * 1000).unref();
+setInterval(() => {
+  void bridgeCloudLoop();
+}, 2000).unref();
 setInterval(() => {
   for (const response of [...eventClients]) {
     try {

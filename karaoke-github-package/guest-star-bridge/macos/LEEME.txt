@@ -1,31 +1,15 @@
-GUEST STAR BRIDGE 3.0.7 UNIVERSAL PARA MAC
+GUEST STAR BRIDGE 4.0.0 UNIVERSAL PARA MAC
 
 Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
 
-1. Mueve “Guest Star Bridge.app” a Aplicaciones.
+1. Mueve Guest Star Bridge.app a Aplicaciones.
 2. La primera vez, haz clic derecho sobre la app y selecciona Abrir.
-3. Pulsa Abrir en la confirmación de macOS.
-4. Lee “INSTALACION-OTRA-MAC.txt” para la configuración completa.
+3. Inicia sesión con la cuenta Host creada por el Superhost.
+4. Selecciona el hotel, sede y actividad asignados.
+5. Lee GUIA-MAC-SOLO-BRIDGE.txt para configurar VirtualDJ y la biblioteca.
 
-La aplicación:
+No necesitas la cuenta Google, Sheets, Apps Script, Node, npm ni Terminal.
+Las credenciales del Bridge se guardan en macOS Keychain.
 
-- inicia silenciosamente y no muestra Terminal;
-- abre su interfaz dentro de una ventana independiente;
-- incluye motores nativos para Intel y Apple Silicon;
-- recibe las solicitudes de Google Sheets prácticamente al instante;
-- guarda en Sheets un solo enlace karaoke/lyrics según el idioma y la prioridad;
-- muestra hasta seis opciones en el Bridge para que el host elija;
-- permite copiar una opción y actualizar el mismo enlace en Sheets;
-- verifica la cola Karaoke real de VirtualDJ y su orden;
-- permite marcar Ya cantó o Saltado con confirmación visible;
-- permite deshacer y restaurar la pista en su turno anterior, al final o fuera;
-- mide el tiempo transcurrido y recalcula las sumas cada segundo;
-- usa la duración exacta que VirtualDJ reporta para cada pista;
-- corrige la transición de 30 segundos y suma toda la cola real de VirtualDJ;
-- permite mostrar u ocultar al público el estado, los tiempos y personas en cola;
-- conserva la carpeta de karaoke y el PIN por separado si así lo eliges.
-
-VirtualDJ debe estar abierto y Network Control debe permanecer activado.
-
-Esta compilación utiliza una firma local de integridad, no un certificado
-comercial de Apple. Por eso macOS puede pedir clic derecho → Abrir la primera vez.
+La aplicación recibe solicitudes, muestra comentarios, reconcilia la cola real
+de VirtualDJ, calcula tiempos exactos y respeta el idioma de cada canción.

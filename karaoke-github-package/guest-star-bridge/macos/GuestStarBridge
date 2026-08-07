@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 
-APP_VERSION="3.0.7"
+APP_VERSION="4.0.0"
 PANEL_URL="http://127.0.0.1:8787"
 CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE_DIR="$(cd "$CONTENTS_DIR/.." && pwd)"
@@ -42,7 +42,7 @@ is_bridge_process() {
 case "$BUNDLE_DIR" in
   /Volumes/*)
     /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
-display alert "Instala Guest Star Bridge" message "Arrastra la aplicación a la carpeta Aplicaciones y ábrela desde allí." buttons {"Entendido"} default button "Entendido"
+display alert "Install Guest Star Bridge" message "Move the application to the Applications folder and open it from there." buttons {"OK"} default button "OK"
 APPLESCRIPT
     /usr/bin/open "/Applications"
     exit 0
@@ -74,7 +74,7 @@ if [ "$installed_version" != "$APP_VERSION" ]; then
   PREVIOUS_DIR="$SUPPORT_DIR/bridge-previous"
   /bin/rm -rf "$STAGE_DIR" "$PREVIOUS_DIR"
   if ! /usr/bin/ditto "$RESOURCES_DIR/bridge" "$STAGE_DIR"; then
-    show_alert "No se pudieron preparar los archivos de la aplicación."
+    show_alert "The application files could not be prepared."
     exit 1
   fi
   /bin/rm -rf "$STAGE_DIR/data"
@@ -119,12 +119,12 @@ if [ "$bridge_updated" -eq 1 ]; then
 fi
 
 if [ -z "$RUNTIME" ] || [ ! -x "$RUNTIME" ]; then
-  show_alert "El motor compatible con esta Mac no está disponible. Descarga nuevamente el paquete Universal."
+  show_alert "The runtime for this Mac is unavailable. Download the Universal package again."
   exit 1
 fi
 
 if [ ! -f "$WINDOW_SCRIPT" ]; then
-  show_alert "La interfaz interna de Guest Star Bridge no está disponible."
+  show_alert "The Guest Star Bridge internal interface is unavailable."
   exit 1
 fi
 
@@ -174,7 +174,7 @@ while [ "$attempt" -lt 40 ]; do
     /usr/bin/osascript -l JavaScript "$WINDOW_SCRIPT" >>"$LOG_FILE" 2>&1
     window_status=$?
     if [ "$window_status" -ne 0 ]; then
-      show_alert "No se pudo abrir la ventana interna. El detalle quedó guardado en Library/Logs/Guest Star Bridge.log."
+      show_alert "The internal window could not be opened. Details were saved to Library/Logs/Guest Star Bridge.log."
     fi
     exit "$window_status"
   fi
@@ -182,5 +182,5 @@ while [ "$attempt" -lt 40 ]; do
   attempt=$((attempt + 1))
 done
 
-show_alert "No se pudo iniciar el Bridge. El detalle quedó guardado en Library/Logs/Guest Star Bridge.log."
+show_alert "Guest Star Bridge could not start. Details were saved to Library/Logs/Guest Star Bridge.log."
 exit 1

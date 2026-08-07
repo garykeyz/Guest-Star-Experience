@@ -4,6 +4,11 @@ const noticeEl = $("#notice");
 const settingsDialog = $("#settingsDialog");
 const successDialog = $("#successDialog");
 const confirmDialog = $("#confirmDialog");
+const loginDialog = $("#loginDialog");
+const selectionDialog = $("#selectionDialog");
+const passwordDialog = $("#passwordDialog");
+const shareDialog = $("#shareDialog");
+const moreDialog = $("#moreDialog");
 const folderList = $("#folderList");
 let state = null;
 let folders = [];
@@ -22,7 +27,9 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) }
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) throw new Error(data.error || "No se pudo completar.");
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || data.code || "The action could not be completed.");
+  }
   return data;
 }
 
@@ -44,7 +51,7 @@ function showSuccess(title, detail) {
 function confirmAction({
   title,
   detail,
-  confirmLabel = "Confirmar",
+  confirmLabel = "Confirm",
   danger = true
 }) {
   return new Promise((resolve) => {
@@ -86,12 +93,12 @@ function actionScope(id) {
 
 function requestLabel(id) {
   const item = state?.requests?.find((entry) => entry.id === id);
-  return item ? `${item.singer} — ${item.song}` : "La canción";
+  return item ? `${item.singer} — ${item.song}` : "The song";
 }
 
 async function runAction(scope, progress, operation, successMessage) {
   if (actionLocks.has(scope)) {
-    showNotice("Esta acción ya se está procesando. Espera la confirmación.");
+    showNotice("This action is already being processed. Wait for confirmation.");
     return null;
   }
   actionLocks.add(scope);
@@ -105,7 +112,7 @@ async function runAction(scope, progress, operation, successMessage) {
     showSuccess(success.title, success.detail);
     return data;
   } catch (error) {
-    showNotice(`No se pudo completar la acción: ${error.message}`, true);
+    showNotice(`The action could not be completed: ${error.message}`, true);
     return null;
   } finally {
     actionLocks.delete(scope);
@@ -114,11 +121,11 @@ async function runAction(scope, progress, operation, successMessage) {
 }
 
 function timeAgo(value) {
-  if (!value) return "Todavía no";
+  if (!value) return "Not yet";
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 5) return "Ahora mismo";
-  if (seconds < 60) return `Hace ${seconds} s`;
-  return `Hace ${Math.floor(seconds / 60)} min`;
+  if (seconds < 5) return "Just now";
+  if (seconds < 60) return `${seconds} sec ago`;
+  return `${Math.floor(seconds / 60)} min ago`;
 }
 
 function duration(seconds) {
@@ -140,7 +147,7 @@ function dateTime(value) {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleString("es", {
+  return parsed.toLocaleString("en", {
     dateStyle: "short",
     timeStyle: "short"
   });
@@ -149,7 +156,7 @@ function dateTime(value) {
 function clockTime(value) {
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleTimeString("es", {
+  return parsed.toLocaleTimeString("en", {
     hour: "numeric",
     minute: "2-digit"
   });
@@ -159,15 +166,19 @@ function liveActivitySummary() {
   const summary = { ...(state?.activitySummary || {}) };
   const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
   const started = Date.parse(String(state?.activity?.activityStartedAt || ""));
-  const activityRunning = Number.isFinite(started);
-  const elapsedSeconds = activityRunning
-    ? Math.max(0, Math.floor((Date.now() - started) / 1000))
+  const finished = Date.parse(String(state?.activity?.activityFinishedAt || ""));
+  const hasStarted = Number.isFinite(started);
+  const activityRunning = hasStarted &&
+    state?.activity?.activityRunning !== false &&
+    !Number.isFinite(finished);
+  const elapsedSeconds = hasStarted
+    ? Math.max(0, Math.floor(((Number.isFinite(finished) ? finished : Date.now()) - started) / 1000))
     : 0;
   summary.activityRunning = activityRunning;
   summary.elapsedSeconds = elapsedSeconds;
   summary.clockRemainingSeconds = Math.max(0, targetSeconds - elapsedSeconds);
   summary.clockOverrunSeconds = Math.max(0, elapsedSeconds - targetSeconds);
-  summary.eventEndsAt = activityRunning && targetSeconds > 0
+  summary.eventEndsAt = hasStarted && targetSeconds > 0
     ? new Date(started + targetSeconds * 1000).toISOString()
     : "";
   return summary;
@@ -181,32 +192,32 @@ function updateTimeDashboard() {
   const activityDetail = $("#activityStatus p");
   if (activityDetail) {
     activityDetail.textContent = summary.activityRunning
-      ? `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
-      : "El reloj está en 0:00:00";
+      ? `Elapsed: ${activityDuration(summary.elapsedSeconds)}`
+      : "The clock is at 0:00:00";
   }
   $("#elapsedDetail").textContent = !summary.activityRunning
-    ? "Pulsa Iniciar actividad para activar el reloj"
+    ? "Select Start Activity to activate the clock"
     : summary.clockOverrunSeconds
-      ? `La actividad superó su duración por ${activityDuration(summary.clockOverrunSeconds)}`
-      : `Quedan ${activityDuration(summary.clockRemainingSeconds)} de reloj`;
+      ? `The activity is over its duration by ${activityDuration(summary.clockOverrunSeconds)}`
+      : `${activityDuration(summary.clockRemainingSeconds)} remaining`;
   $("#confirmedTime").textContent = activityDuration(summary.confirmedSeconds);
   const queueCount = Number(summary.queueSongCount) || 0;
   $("#confirmedDetail").textContent =
-    `${queueCount} ${queueCount === 1 ? "pista real" : "pistas reales"} de VDJ · ` +
-    `${activityDuration(summary.completedSeconds)} ya cantado`;
+    `${queueCount} live VDJ ${queueCount === 1 ? "track" : "tracks"} · ` +
+    `${activityDuration(summary.completedSeconds)} already performed`;
   $("#plannedTime").textContent = activityDuration(summary.plannedSeconds);
   $("#plannedDetail").textContent = summary.skippedSeconds
-    ? `${activityDuration(summary.skippedSeconds)} restado como saltado`
-    : "Las canciones saltadas no se incluyen";
+    ? `${activityDuration(summary.skippedSeconds)} excluded as skipped`
+    : "Skipped songs are not included";
 
   if (summary.activityRunning && summary.eventEndsAt) {
     $("#eventEndTime").textContent = clockTime(summary.eventEndsAt);
     $("#eventEndDetail").textContent =
-      `EMCEE: organiza los turnos para terminar a las ${clockTime(summary.eventEndsAt)} y no sobrepasar el evento.`;
+      `EMCEE: manage the rotation to finish by ${clockTime(summary.eventEndsAt)} and respect the event end time.`;
   } else {
-    $("#eventEndTime").textContent = "Pulsa Iniciar actividad";
+    $("#eventEndTime").textContent = "Select Start Activity";
     $("#eventEndDetail").textContent =
-      "El reloj y la hora final comenzarán cuando el host inicie la actividad.";
+      "The clock and end time will begin when the host starts the activity.";
   }
 
   const card = $("#coverageCard");
@@ -214,20 +225,20 @@ function updateTimeDashboard() {
   if (summary.overrunSeconds) {
     card.classList.add("over");
     $("#coverageTime").textContent =
-      `Se pasa ${activityDuration(summary.overrunSeconds)}`;
+      `Over by ${activityDuration(summary.overrunSeconds)}`;
     $("#coverageDetail").textContent =
-      `${summary.coveragePercent || 0}% cubierto frente a ${activityDuration(target)}`;
+      `${summary.coveragePercent || 0}% covered against ${activityDuration(target)}`;
   } else if (!summary.gapSeconds) {
     card.classList.add("ok");
-    $("#coverageTime").textContent = "Tiempo cubierto";
+    $("#coverageTime").textContent = "Time covered";
     $("#coverageDetail").textContent =
-      `${summary.coveragePercent || 100}% · la rotación alcanza la actividad`;
+      `${summary.coveragePercent || 100}% · the rotation covers the activity`;
   } else {
     card.classList.add("warning");
     $("#coverageTime").textContent =
-      `Faltan ${activityDuration(summary.gapSeconds)}`;
+      `${activityDuration(summary.gapSeconds)} missing`;
     $("#coverageDetail").textContent =
-      `${summary.coveragePercent || 0}% cubierto con lo ya cantado y la cola real`;
+      `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
   }
 
   const advice = $("#coverageAdvice");
@@ -235,15 +246,15 @@ function updateTimeDashboard() {
   if (summary.suggestClose) {
     const text = document.createElement("div");
     text.innerHTML =
-      "<strong>Ya tienes suficiente tiempo confirmado.</strong><p>Las canciones ya cantadas y las que están realmente en VirtualDJ cubren la duración de la actividad.</p>";
+      "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
     advice.append(
       text,
-      button("Cerrar solicitudes ahora", "danger", () => controlActivity("close"))
+      button("Close Requests Now", "danger", () => controlActivity("close"))
     );
     advice.classList.remove("hidden");
   } else if (summary.suggestHits) {
     advice.innerHTML =
-      "<div><strong>La cola de VirtualDJ está vacía.</strong><p>Abajo tienes temas hit para el EMCEE o para elegir una persona al azar.</p></div>";
+      "<div><strong>The VirtualDJ queue is empty.</strong><p>Use the hit suggestions below for the EMCEE or a random singer.</p></div>";
     advice.classList.remove("hidden");
   } else {
     advice.classList.add("hidden");
@@ -252,17 +263,17 @@ function updateTimeDashboard() {
 
 function activityMessage(activity) {
   const action = {
-    start: "La actividad fue iniciada",
-    open: "Las solicitudes fueron abiertas",
-    close: "Las solicitudes fueron cerradas",
-    reset: "La actividad fue reiniciada"
+    start: "The activity was started",
+    open: "Requests were opened",
+    close: "Requests were closed",
+    reset: "The activity was reset"
   }[activity.lastAction];
   if (!action) return "";
   const source = {
-    web: "desde el control web",
-    sheet: "desde Google Sheets",
-    bridge: "desde este panel"
-  }[activity.lastSource] || "desde el control del host";
+    web: "from the web controls",
+    sheet: "from Google Sheets",
+    bridge: "from this panel"
+  }[activity.lastSource] || "from the host controls";
   return `${action} ${source}.`;
 }
 
@@ -280,41 +291,43 @@ function updateStatus() {
   setStatus(
     "#libraryStatus",
     library.error ? "error" : library.count ? "ok" : "",
-    library.error ? "Error al escanear" : `${library.count} pistas`,
+    library.error ? "Scan error" : `${library.count} tracks`,
     library.error ||
       (library.scanning
-        ? "Buscando cambios en la carpeta…"
+        ? "Scanning folder changes…"
         : library.realtime
-          ? `En tiempo real · actualizado ${timeAgo(library.lastScanAt).toLowerCase()}`
-          : `Última búsqueda: ${timeAgo(library.lastScanAt)}`)
+          ? `Live · updated ${timeAgo(library.lastScanAt).toLowerCase()}`
+          : `Last scan: ${timeAgo(library.lastScanAt)}`)
   );
   const sheet = state.sheet;
   setStatus(
     "#sheetStatus",
     sheet.error ? "error" : state.config.hostPinConfigured ? "ok" : "",
-    sheet.error ? "Sin conexión" : `${state.requests.length} solicitudes`,
-    sheet.error || (state.config.hostPinConfigured ? `Sincronizado: ${timeAgo(sheet.lastSyncAt)}` : "Configura el PIN")
+    sheet.error ? "Disconnected" : `${state.requests.length} requests`,
+    sheet.error || (state.config.signedIn || state.config.hostPinConfigured
+      ? `Synced: ${timeAgo(sheet.lastSyncAt)}`
+      : "Sign in to Guest Star")
   );
   const virtualDJ = state.virtualDJ || {};
   if (virtualDJ.error) {
-    setStatus("#vdjStatus", "error", "Revisar conexión", virtualDJ.error);
+    setStatus("#vdjStatus", "error", "Check connection", virtualDJ.error);
   } else if (virtualDJ.lastQueueCheckAt) {
     setStatus(
       "#vdjStatus",
       "ok",
-      `${virtualDJ.queueCount} en cola`,
+      `${virtualDJ.queueCount} in queue`,
       virtualDJ.checkingQueue
-        ? "Comprobando la rotación…"
-        : `Cola verificada: ${timeAgo(virtualDJ.lastQueueCheckAt)}`
+        ? "Checking rotation…"
+        : `Queue verified: ${timeAgo(virtualDJ.lastQueueCheckAt)}`
     );
   } else {
     setStatus(
       "#vdjStatus",
       "",
-      "Cola sin verificar",
+      "Queue not verified",
       virtualDJ.checkingQueue
-        ? "Comprobando la rotación…"
-        : "Pulsa Sincronizar para comprobar la cola real."
+        ? "Checking rotation…"
+        : "Select Synchronize to check the live queue."
     );
   }
   const activity = state.activity || {};
@@ -325,19 +338,60 @@ function updateStatus() {
     "#activityStatus",
     running ? "ok" : accepting ? "" : "error",
     running
-      ? `En curso · solicitudes ${accepting ? "abiertas" : "cerradas"}`
-      : "Lista para iniciar",
+      ? `In progress · requests ${accepting ? "open" : "closed"}`
+      : "Ready to start",
     running
-      ? `Transcurrido: ${activityDuration(summary.elapsedSeconds)}`
-      : "El reloj está en 0:00:00"
+      ? `Elapsed: ${activityDuration(summary.elapsedSeconds)}`
+      : "The clock is at 0:00:00"
   );
-  $("#openRequests").disabled = activityBusy || accepting;
-  $("#closeRequests").disabled = activityBusy || !accepting;
-  $("#startRequests").disabled = activityBusy || running;
-  $("#startRequests").textContent = running
-    ? "✓ Actividad iniciada"
-    : "▶ Iniciar actividad";
-  $("#resetRequests").disabled = activityBusy;
+  const authenticated = state.account?.authenticated === true;
+  const tenant = state.tenant || {};
+  const selectedActivity = tenant.activity || null;
+  const permissions = tenant.permissions || {};
+  const status = selectedActivity?.status || (running ? "in_progress" : "ready");
+  const can = (permission) => permissions.all === true || permissions[permission] === true;
+  $("#tenantPath").textContent = tenant.hotel
+    ? `${tenant.hotel.name} • ${tenant.venue?.name || "Venue"}`
+    : "SELECT AN ACTIVITY";
+  $("#selectedActivityName").textContent = selectedActivity?.name || "Guest Star Activity";
+  $("#activityHeadline").textContent = !authenticated
+    ? "Sign in to use this Bridge."
+    : !selectedActivity
+      ? "Choose the hotel, venue and activity assigned to this computer."
+      : status === "in_progress"
+        ? `Activity in progress · started ${clockTime(activity.activityStartedAt)}`
+        : status === "scheduled"
+          ? `Scheduled for ${dateTime(selectedActivity.scheduledStartAt)}`
+          : status === "finished"
+            ? "Activity finished · queue preserved"
+            : "Ready to start";
+  const requestsToggle = $("#requestsToggle");
+  requestsToggle.checked = accepting;
+  requestsToggle.disabled = activityBusy || !selectedActivity || !can("canOpenCloseRequests");
+  $("#requestsToggleLabel").textContent = accepting ? "Open" : "Closed";
+  const primary = $("#primaryActivity");
+  primary.textContent = status === "in_progress"
+    ? "Finish Activity"
+    : status === "finished"
+      ? "Start New Activity"
+      : "Start Activity";
+  primary.dataset.action = status === "in_progress"
+    ? "finish"
+    : status === "finished"
+      ? "start-new"
+      : "start";
+  primary.disabled = activityBusy || !selectedActivity || !(
+    status === "in_progress"
+      ? can("canFinishActivity")
+      : status === "finished"
+        ? can("canStartNewActivity")
+        : can("canStartActivity")
+  );
+  $("#shareButton").disabled = !tenant.share?.publicUrl;
+  $("#settingsButton").disabled = !selectedActivity;
+  ["#openHostPanel", "#switchActivity", "#logoutButton"].forEach((selector) => {
+    $(selector).classList.toggle("hidden", !authenticated);
+  });
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -360,12 +414,12 @@ function button(label, className, handler) {
   return element;
 }
 
-async function copyLink(url, message = "Enlace copiado.") {
+async function copyLink(url, message = "Link copied.") {
   try {
     await navigator.clipboard.writeText(url);
     showNotice(message);
   } catch {
-    window.prompt("Copia este enlace:", url);
+    window.prompt("Copy this link:", url);
   }
 }
 
@@ -377,7 +431,7 @@ async function openExternal(url) {
     });
   } catch (error) {
     showNotice(
-      `${error.message} Puedes usar “Copiar enlace” mientras lo revisamos.`,
+      `${error.message} You can use “Copy Link” in the meantime.`,
       true
     );
   }
@@ -388,7 +442,7 @@ function renderSourceLink(panel, url) {
   panel.classList.remove("hidden");
   const info = document.createElement("div");
   const label = document.createElement("small");
-  label.textContent = "ENLACE DE GOOGLE SHEETS";
+  label.textContent = "GOOGLE SHEETS LINK";
   const link = document.createElement("a");
   link.href = "#";
   link.textContent = url;
@@ -400,10 +454,10 @@ function renderSourceLink(panel, url) {
   const actions = document.createElement("div");
   actions.className = "source-actions";
   actions.append(
-    button("Copiar enlace", "primary", () =>
-      copyLink(url, "Enlace de Google Sheets copiado.")
+    button("Copy Link", "primary", () =>
+      copyLink(url, "Google Sheets link copied.")
     ),
-    button("Abrir ↗", "youtube", () => openExternal(url))
+    button("Open ↗", "youtube", () => openExternal(url))
   );
   panel.append(info, actions);
 }
@@ -412,20 +466,20 @@ async function queue(id, filePath, requeue = false) {
   const label = requestLabel(id);
   await runAction(
     actionScope(id),
-    `Enviando ${label} a VirtualDJ…`,
+    `Sending ${label} to VirtualDJ…`,
     () => api(`/api/requests/${encodeURIComponent(id)}/queue`, {
       method: "POST",
       body: JSON.stringify({ filePath, requeue })
     }),
     (data) => ({
       title: data.restored
-        ? "Canción colocada nuevamente"
+        ? "Song restored"
         : data.requeued
-          ? "Canción reenviada"
-          : "Canción agregada a VirtualDJ",
+          ? "Song requeued"
+          : "Song added to VirtualDJ",
       detail:
         data.warning ||
-        `${label} quedó confirmada en la cola Karaoke de VirtualDJ.`
+        `${label} is confirmed in the VirtualDJ Karaoke queue.`
     })
   );
 }
@@ -433,23 +487,23 @@ async function queue(id, filePath, requeue = false) {
 async function removeFromQueue(id) {
   const label = requestLabel(id);
   const confirmed = await confirmAction({
-    title: "Retirar de VirtualDJ",
-    detail: `¿Quieres retirar ${label} de la rotación de VirtualDJ?`,
-    confirmLabel: "Sí, retirar"
+    title: "Remove from VirtualDJ",
+    detail: `Remove ${label} from the VirtualDJ rotation?`,
+    confirmLabel: "Remove"
   });
   if (!confirmed) return;
   await runAction(
     actionScope(id),
-    `Retirando ${label} de VirtualDJ…`,
+    `Removing ${label} from VirtualDJ…`,
     () => api(`/api/requests/${encodeURIComponent(id)}/remove`, {
       method: "POST",
       body: "{}"
     }),
     (data) => ({
-      title: "Canción retirada de VirtualDJ",
+      title: "Song removed from VirtualDJ",
       detail:
         data.warning ||
-        `${label} fue retirada y la cola real de VirtualDJ confirmó el cambio.`
+        `${label} was removed and the live VirtualDJ queue confirmed the change.`
     })
   );
 }
@@ -458,29 +512,28 @@ async function dismissRequeue(id) {
   const label = requestLabel(id);
   await runAction(
     actionScope(id),
-    `Guardando ${label} fuera de la rotación…`,
+    `Keeping ${label} outside the rotation…`,
     () => api(
       `/api/requests/${encodeURIComponent(id)}/dismiss-requeue`,
       { method: "POST", body: "{}" }
     ),
     (data) => ({
-      title: "Canción fuera de la rotación",
+      title: "Song outside the rotation",
       detail:
         data.warning ||
-        `${label} permanecerá fuera de VirtualDJ.`
+        `${label} will remain outside VirtualDJ.`
     })
   );
 }
 
 async function markOutcome(id, outcome) {
   const songLabel = requestLabel(id);
-  const label = outcome === "completed" ? "Ya cantó" : "Saltado";
   if (
     outcome === "skipped" &&
     !(await confirmAction({
-      title: "Marcar como saltado",
-      detail: `¿Marcar ${songLabel} como saltado, retirarlo de VirtualDJ y restarlo del tiempo total?`,
-      confirmLabel: "Sí, marcar saltado"
+      title: "Mark as Skipped",
+      detail: `Mark ${songLabel} as skipped, remove it from VirtualDJ and exclude it from the total time?`,
+      confirmLabel: "Mark Skipped"
     }))
   ) {
     return;
@@ -488,8 +541,8 @@ async function markOutcome(id, outcome) {
   await runAction(
     actionScope(id),
     outcome === "completed"
-      ? `Marcando ${songLabel} como ya cantado…`
-      : `Marcando ${songLabel} como saltado…`,
+      ? `Marking ${songLabel} as completed…`
+      : `Marking ${songLabel} as skipped…`,
     () => api(
       `/api/requests/${encodeURIComponent(id)}/outcome`,
       {
@@ -498,12 +551,12 @@ async function markOutcome(id, outcome) {
       }
     ),
     (data) => ({
-      title: outcome === "completed" ? "Cantante completado" : "Canción saltada",
+      title: outcome === "completed" ? "Singer completed" : "Song skipped",
       detail:
         data.warning ||
         (outcome === "completed"
-          ? `${songLabel} quedó marcado como “Ya cantó”; permanece contado en el tiempo total y fue retirado de VirtualDJ.`
-          : `${songLabel} quedó marcado como “Saltado”; fue retirado de VirtualDJ y restado del tiempo total.`)
+          ? `${songLabel} is marked as completed; it remains included in total time and was removed from VirtualDJ.`
+          : `${songLabel} is marked as skipped; it was removed from VirtualDJ and excluded from total time.`)
     })
   );
 }
@@ -511,9 +564,9 @@ async function markOutcome(id, outcome) {
 async function undoOutcome(id, placement) {
   const songLabel = requestLabel(id);
   const actionText = {
-    original: "restaurando su turno anterior",
-    end: "enviándola al final de la rotación",
-    pending: "deshaciendo el estado sin agregarla a la cola"
+    original: "restoring its previous position",
+    end: "sending it to the end of the rotation",
+    pending: "undoing the status without adding it to the queue"
   }[placement];
   await runAction(
     actionScope(id),
@@ -526,12 +579,12 @@ async function undoOutcome(id, placement) {
       }
     ),
     (data) => ({
-      title: "Acción deshecha",
+      title: "Action undone",
       detail: data.restoredToVirtualDJ
-        ? `${songLabel} volvió a VirtualDJ${
-            data.queuePosition ? ` en el turno ${data.queuePosition}` : ""
+        ? `${songLabel} returned to VirtualDJ${
+            data.queuePosition ? ` in position ${data.queuePosition}` : ""
           }.`
-        : `${songLabel} dejó de estar marcada como cantada o saltada y permanece fuera de la cola.`
+        : `${songLabel} is no longer marked completed or skipped and remains outside the queue.`
     })
   );
 }
@@ -540,7 +593,7 @@ async function queueSuggestion(item, singerMode) {
   const scope = `suggestion:${item.song}:${item.artist}`;
   await runAction(
     scope,
-    `Agregando ${item.song} a VirtualDJ…`,
+    `Adding ${item.song} to VirtualDJ…`,
     () => api("/api/suggestions/queue", {
       method: "POST",
       body: JSON.stringify({
@@ -550,15 +603,15 @@ async function queueSuggestion(item, singerMode) {
       })
     }),
     (data) => ({
-      title: "Tema agregado a VirtualDJ",
-      detail: `${data.song} fue agregada a VirtualDJ para ${data.singer}.`
+      title: "Song added to VirtualDJ",
+      detail: `${data.song} was added to VirtualDJ for ${data.singer}.`
     })
   );
 }
 
 async function youtube(id, panel) {
   panel.classList.remove("hidden");
-  panel.innerHTML = "<p>Buscando versiones karaoke/lyrics…</p>";
+  panel.innerHTML = "<p>Searching for Karaoke/Lyrics versions…</p>";
   try {
     const data = await api(`/api/requests/${encodeURIComponent(id)}/youtube`, {
       method: "POST",
@@ -577,10 +630,10 @@ async function copyYoutubeOption(id, url) {
       body: JSON.stringify({ url })
     });
     const detail = data.sheetUpdated
-      ? "El enlace elegido fue copiado y quedó como el único enlace de esa solicitud en Google Sheets."
-      : "El enlace elegido fue copiado al portapapeles.";
+      ? "The selected link was copied and saved as the request’s only Google Sheets link."
+      : "The selected link was copied to the clipboard.";
     showNotice(detail);
-    showSuccess("Enlace karaoke seleccionado", detail);
+    showSuccess("Karaoke link selected", detail);
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -591,18 +644,18 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
   const title = document.createElement("h4");
   const text = document.createElement("p");
   if (!items?.length) {
-    title.textContent = "Buscando un video con letras";
+    title.textContent = "Searching for a video with lyrics";
     text.textContent =
       clipboard.error ||
-      "Todavía no encontramos un enlace suficientemente confiable. El Bridge seguirá buscando cuando sincronice.";
+      "No sufficiently reliable link was found yet. The Bridge will search again during synchronization.";
     panel.append(title, text);
     return;
   }
 
-  title.textContent = "Elige la versión que prefieras";
+  title.textContent = "Choose the version you prefer";
   text.textContent =
-    `Encontramos ${items.length} opcion${items.length === 1 ? "" : "es"}. ` +
-    "El Bridge no copiará nada automáticamente; pulsa Copiar en la que quieras usar.";
+    `We found ${items.length} ${items.length === 1 ? "option" : "options"}. ` +
+    "The Bridge will not copy anything automatically; select Copy on the version you want.";
   panel.append(title, text);
 
   const list = document.createElement("div");
@@ -614,12 +667,12 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
     const info = document.createElement("span");
     const optionLabel = document.createElement("small");
     optionLabel.className = "youtube-option-label";
-    optionLabel.textContent = `OPCIÓN ${index + 1}`;
+    optionLabel.textContent = `OPTION ${index + 1}`;
     const strong = document.createElement("strong");
     strong.textContent = item.title || "YouTube";
     const small = document.createElement("small");
     small.textContent = [
-      isKaraoke ? "Karaoke con letras" : "Lyrics con voces",
+      isKaraoke ? "Karaoke with lyrics" : "Lyrics with vocals",
       item.channel,
       duration(item.durationSeconds)
     ].filter(Boolean).join(" · ");
@@ -627,10 +680,10 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
     const actions = document.createElement("div");
     actions.className = "source-actions";
     actions.append(
-      button("Copiar este enlace", "primary", () =>
+      button("Copy This Link", "primary", () =>
         copyYoutubeOption(requestId, item.url)
       ),
-      button("Abrir ↗", "youtube", () => openExternal(item.url))
+      button("Open ↗", "youtube", () => openExternal(item.url))
     );
     row.append(info, actions);
     list.append(row);
@@ -645,7 +698,7 @@ function renderYoutubeForItem(item, panel) {
   } else if (item.youtubeSearching) {
     panel.classList.remove("hidden");
     panel.innerHTML =
-      "<h4>Buscando versiones Karaoke/Lyrics…</h4><p>Las opciones aparecerán aquí automáticamente.</p>";
+      "<h4>Searching for Karaoke/Lyrics versions…</h4><p>Options will appear here automatically.</p>";
   } else if (item.youtubeSearched) {
     panel.classList.remove("hidden");
     renderYoutube(
@@ -663,11 +716,11 @@ function appendMissingActions(item, match, youtubePanel, message) {
   empty.textContent = message;
   match.append(
     empty,
-    button("Buscar opciones en YouTube", "youtube", () =>
+    button("Search YouTube Options", "youtube", () =>
       youtube(item.id, youtubePanel)
     ),
     document.createTextNode(" "),
-    button("Escanear carpeta ahora", "ghost", scan)
+    button("Scan Folder Now", "ghost", scan)
   );
   renderYoutubeForItem(item, youtubePanel);
 }
@@ -681,16 +734,19 @@ function renderVdjQueue() {
   list.innerHTML = "";
   if (!entries.length) {
     summary.textContent = state?.virtualDJ?.queueVerified
-      ? "0 pistas · cola vacía"
-      : "esperando confirmación";
+      ? "0 tracks · empty queue"
+      : "awaiting confirmation";
     list.innerHTML =
-      '<p class="empty-match">La cola Karaoke está vacía o todavía no se ha podido verificar.</p>';
+      '<p class="empty-match">The Karaoke queue is empty or has not been verified yet.</p>';
     return;
   }
   const next = entries[0];
   summary.textContent =
-    `${entries.length} pista${entries.length === 1 ? "" : "s"} · ` +
-    `siguiente: ${next.singer} — ${next.song}`;
+    `${entries.length} ${entries.length === 1 ? "track" : "tracks"} · ` +
+    `next: ${next.singer} — ${next.song}` +
+    (Number(state?.virtualDJ?.externalCount) > 0
+      ? ` · ${state.virtualDJ.externalCount} external`
+      : "");
   entries.forEach((entry) => {
     const row = document.createElement("div");
     row.className = "vdj-live-row";
@@ -700,14 +756,20 @@ function renderVdjQueue() {
     const song = document.createElement("strong");
     song.textContent = entry.song;
     const detail = document.createElement("small");
-    detail.textContent = [entry.artist, `Cantante: ${entry.singer}`]
+    detail.textContent = [
+      entry.artist,
+      `Singer: ${entry.singer}`,
+      entry.sourceType === "virtualdj_external"
+        ? "Unmatched VirtualDJ item"
+        : "Linked request"
+    ]
       .filter(Boolean)
       .join(" · ");
     info.append(song, detail);
     const durationLabel = document.createElement("span");
     durationLabel.textContent = entry.localAvailable
       ? activityDuration(entry.durationSeconds)
-      : `⚠ ${activityDuration(entry.durationSeconds)} · archivo no accesible`;
+      : `⚠ ${activityDuration(entry.durationSeconds)} · file unavailable`;
     if (!entry.localAvailable) durationLabel.className = "missing-file";
     row.append(position, info, durationLabel);
     list.append(row);
@@ -754,16 +816,16 @@ function renderRequests() {
   requestsEl.innerHTML = "";
   if (!state.requests.length) {
     requestsEl.innerHTML =
-      '<div class="empty-state"><span>🎤</span><strong>No hay solicitudes activas.</strong><p>Cuando un huésped envíe una canción aparecerá aquí.</p></div>';
+      '<div class="empty-state"><span>🎤</span><strong>No active requests.</strong><p>Guest song requests will appear here.</p></div>';
     return;
   }
   const template = $("#requestTemplate");
   const timelines = requestTimelines(state.requests);
   const groups = new Map();
   [
-    ["pending", "Pendientes de entrar a la cola", "En orden de llegada"],
-    ["queued", "En la cola de VirtualDJ", "Verificada en tiempo real"],
-    ["finished", "Ya cantaron / finalizadas", "Se pueden deshacer y restaurar"]
+    ["pending", "Waiting to Enter the Queue", "In arrival order"],
+    ["queued", "In the VirtualDJ Queue", "Verified in real time"],
+    ["finished", "Completed / Finished", "Actions can be undone and restored"]
   ].forEach(([key, title, detail]) => {
     const section = document.createElement("section");
     section.className = `request-group ${key}`;
@@ -796,11 +858,11 @@ function renderRequests() {
     const requestNumber = $(".request-number", card);
     requestNumber.textContent = `#${arrival.number}`;
     requestNumber.title = item.sheetRow
-      ? `Solicitud ${arrival.number} · fila ${item.sheetRow} de Google Sheets`
-      : `Solicitud ${arrival.number} por orden de llegada`;
+      ? `Request ${arrival.number} · Google Sheets row ${item.sheetRow}`
+      : `Request ${arrival.number} by arrival order`;
     $(".singer", card).textContent = item.singer;
     $(".song", card).textContent = item.song;
-    $(".artist", card).textContent = item.artist || "Artista no indicado";
+    $(".artist", card).textContent = item.artist || "Artist not provided";
     const requestComment = String(item.comment || "").trim();
     const requestCommentEl = $(".request-comment", card);
     if (requestComment) {
@@ -815,33 +877,35 @@ function renderRequests() {
     );
     const plannedSeconds = songSeconds + transitionSeconds;
     const queueTimeline = timelines.queue.get(item.id);
-    const rowLabel = item.sheetRow ? ` · fila ${item.sheetRow}` : "";
+    const rowLabel = item.sheetRow ? ` · row ${item.sheetRow}` : "";
     $(".request-meta", card).textContent = queueTimeline
-      ? `Llegada #${arrival.number}${rowLabel} · cola acumulada ${activityDuration(queueTimeline.cumulativeSeconds)} · turno aprox. ${clockTime(queueTimeline.estimatedStartAt)}`
-      : `Llegada #${arrival.number}${rowLabel} · total solicitado al llegar ${activityDuration(arrival.cumulativeSeconds)}`;
+      ? `Arrival #${arrival.number}${rowLabel} · cumulative queue ${activityDuration(queueTimeline.cumulativeSeconds)} · estimated turn ${clockTime(queueTimeline.estimatedStartAt)}`
+      : `Arrival #${arrival.number}${rowLabel} · requested total at arrival ${activityDuration(arrival.cumulativeSeconds)}`;
     $(".request-language", card).textContent =
-      `${item.language ? `Idioma: ${item.language}` : "Idioma no indicado"} · ` +
-      `Pista ${activityDuration(songSeconds)} + ` +
-      `transición ${activityDuration(transitionSeconds)} = ` +
+      `${item.language ? `Language: ${item.language}` : "Language not provided"} · ` +
+      `Track ${activityDuration(songSeconds)} + ` +
+      `transition ${activityDuration(transitionSeconds)} = ` +
       `${activityDuration(plannedSeconds)}`;
     const badge = $(".state-badge", card);
     badge.classList.add(item.localState);
     badge.textContent = {
-      exact: "✓ Local encontrada",
-      possible: "Coincidencia posible",
-      missing: "No está local",
+      exact: "✓ Local file found",
+      possible: "Possible match",
+      missing: "Not available locally",
       queued: item.queuePosition
-        ? `✓ Turno ${item.queuePosition} en VirtualDJ`
-        : "✓ En VirtualDJ",
+        ? `✓ Position ${item.queuePosition} in VirtualDJ`
+        : "✓ In VirtualDJ",
       "queued-missing": item.queuePosition
-        ? `⚠ Turno ${item.queuePosition} · falta local`
-        : "⚠ En VDJ · falta local",
-      unverified: "? Cola de VDJ sin verificar",
-      "unverified-missing": "? VDJ sin verificar · falta local",
-      removed: "↻ Fuera de la cola",
-      "removed-missing": "↻ Fuera · falta local",
-      completed: "✓ Ya cantó",
-      skipped: "− Saltado"
+        ? `⚠ Position ${item.queuePosition} · local file missing`
+        : "⚠ In VDJ · local file missing",
+      unverified: "? VDJ queue not verified",
+      "unverified-missing": "? VDJ not verified · local file missing",
+      adding: "Adding to VirtualDJ…",
+      confirming: "Confirming in VirtualDJ…",
+      removed: "↻ Outside the queue",
+      "removed-missing": "↻ Outside · local file missing",
+      completed: "✓ Completed",
+      skipped: "− Skipped"
     }[item.localState];
 
     const match = $(".match-panel", card);
@@ -850,6 +914,8 @@ function renderRequests() {
     const isQueued =
       item.localState === "queued" || item.localState === "queued-missing";
     const isUnverified =
+      item.localState === "adding" ||
+      item.localState === "confirming" ||
       item.localState === "unverified" ||
       item.localState === "unverified-missing";
     const wasRemoved =
@@ -861,26 +927,28 @@ function renderRequests() {
     const detailsLabel = $("summary span", details);
     details.open = expandedRequestIds.has(item.id);
     detailsLabel.textContent = details.open
-      ? "Ocultar opciones y acciones"
-      : "Ver opciones y acciones";
+      ? "Hide Options and Actions"
+      : "View Options and Actions";
     details.addEventListener("toggle", () => {
       if (details.open) expandedRequestIds.add(item.id);
       else expandedRequestIds.delete(item.id);
       detailsLabel.textContent = details.open
-        ? "Ocultar opciones y acciones"
-        : "Ver opciones y acciones";
+        ? "Hide Options and Actions"
+        : "View Options and Actions";
     });
     if (isTerminal) {
       match.innerHTML = item.localState === "completed"
-        ? '<div class="outcome-summary completed"><strong>Esta persona ya cantó.</strong><p>Su duración permanece incluida en el total de la actividad.</p></div>'
-        : '<div class="outcome-summary skipped"><strong>Esta canción fue saltada.</strong><p>Su duración fue restada del total de la actividad y no se reenviará a VirtualDJ.</p></div>';
+        ? '<div class="outcome-summary completed"><strong>This person has performed.</strong><p>The song duration remains included in the activity total.</p></div>'
+        : '<div class="outcome-summary skipped"><strong>This song was skipped.</strong><p>Its duration was excluded from the activity total and it will not be resent to VirtualDJ.</p></div>';
     } else if (isUnverified) {
       match.innerHTML =
-        '<div class="requeue-prompt"><strong>Google Sheets dice que esta canción fue enviada, pero la cola real de VirtualDJ todavía no pudo verificarse.</strong><p>Comprueba la cola para confirmar si sigue ahí o mostrar la opción de volver a agregarla.</p></div>';
+        item.localState === "adding" || item.localState === "confirming"
+          ? '<div class="requeue-prompt"><strong>Guest Star is confirming the insertion against the live VirtualDJ queue.</strong><p>The song will not return to Pending or duplicate during this synchronization window.</p></div>'
+          : '<div class="requeue-prompt"><strong>The song did not appear in one temporary VirtualDJ scan.</strong><p>Guest Star keeps it linked while confirming its absence across consecutive scans.</p></div>';
       const actions = document.createElement("div");
       actions.className = "queue-actions";
       actions.append(
-        button("Comprobar cola ahora", "primary", syncRequests)
+        button("Check Queue Now", "primary", syncRequests)
       );
       match.append(actions);
       if (!item.localAvailable) {
@@ -890,18 +958,18 @@ function renderRequests() {
           item,
           recovery,
           youtubePanel,
-          "El archivo tampoco está localmente. El Bridge volvió a buscar versiones Karaoke/Lyrics para que elijas cuál copiar."
+          "The file is also unavailable locally. The Bridge searched for Karaoke/Lyrics versions so you can choose which link to copy."
         );
         match.append(recovery);
       }
     } else if (wasRemoved) {
       match.innerHTML =
-        '<div class="requeue-prompt"><strong>Esta canción ya no aparece en la cola de VirtualDJ.</strong><p>¿Quieres volver a colocarla al final de la rotación?</p></div>';
+        '<div class="requeue-prompt"><strong>This song is no longer in the VirtualDJ queue.</strong><p>Would you like to place it at the end of the rotation?</p></div>';
       const actions = document.createElement("div");
       actions.className = "queue-actions";
       if (item.localAvailable) {
         actions.append(
-          button("Sí, volver a agregar al final", "primary", () =>
+          button("Add Again at the End", "primary", () =>
             queue(
               item.id,
               item.matches.find((candidate) => candidate.exact)?.filePath ||
@@ -912,7 +980,7 @@ function renderRequests() {
         );
       }
       actions.append(
-        button("No, dejarla fuera", "ghost", () => dismissRequeue(item.id))
+        button("Keep It Outside", "ghost", () => dismissRequeue(item.id))
       );
       match.append(actions);
       if (!item.localAvailable) {
@@ -922,26 +990,26 @@ function renderRequests() {
           item,
           recovery,
           youtubePanel,
-          "Además, el archivo ya no está localmente. El Bridge volvió a buscar opciones Karaoke/Lyrics para que elijas cuál copiar."
+          "The file is also no longer available locally. The Bridge searched again for Karaoke/Lyrics options so you can choose which link to copy."
         );
         match.append(recovery);
       }
     } else if (isQueued) {
       match.innerHTML =
         item.localState === "queued"
-          ? '<p class="empty-match">Esta solicitud está marcada como enviada. Puedes moverla nuevamente al final de la rotación o retirarla.</p>'
-          : '<p class="empty-match missing-warning">El archivo que estaba asociado a esta solicitud ya no existe en la carpeta local.</p>';
+          ? '<p class="empty-match">This request is marked as sent. You can move it to the end of the rotation or remove it.</p>'
+          : '<p class="empty-match missing-warning">The file previously linked to this request no longer exists in the local folder.</p>';
       const actions = document.createElement("div");
       actions.className = "queue-actions";
       if (item.localAvailable) {
         actions.append(
-          button("Reenviar al final de la rotación", "primary", () =>
+          button("Resend to the End", "primary", () =>
             queue(item.id, item.queuedFilePath, true)
           )
         );
       }
       actions.append(
-        button("Retirar de VirtualDJ", "danger", () => removeFromQueue(item.id))
+        button("Remove from VirtualDJ", "danger", () => removeFromQueue(item.id))
       );
       match.append(actions);
       if (item.localState === "queued-missing") {
@@ -951,7 +1019,7 @@ function renderRequests() {
           item,
           recovery,
           youtubePanel,
-          "El Bridge volvió a buscar versiones con letras. Elige una opción para copiar o devuelve el archivo a la carpeta y aparecerá aquí en tiempo real."
+          "The Bridge searched again for versions with lyrics. Choose a link to copy, or restore the file to the folder and it will appear here in real time."
         );
         match.append(recovery);
       }
@@ -964,9 +1032,9 @@ function renderRequests() {
       const strong = document.createElement("strong");
       strong.textContent = top.fileName;
       const small = document.createElement("small");
-      small.textContent = `${Math.round(top.score * 100)}% de coincidencia`;
+      small.textContent = `${Math.round(top.score * 100)}% match`;
       info.append(strong, small);
-      row.append(info, button("Agregar a VirtualDJ", "primary", () => queue(item.id, top.filePath)));
+      row.append(info, button("Add to VirtualDJ", "primary", () => queue(item.id, top.filePath)));
       match.append(row);
       if (item.matches.length > 1) {
         const candidates = document.createElement("div");
@@ -978,11 +1046,11 @@ function renderRequests() {
           const name = document.createElement("strong");
           name.textContent = candidate.fileName;
           const score = document.createElement("small");
-          score.textContent = `${Math.round(candidate.score * 100)}% de coincidencia`;
+          score.textContent = `${Math.round(candidate.score * 100)}% match`;
           infoOption.append(name, score);
           option.append(
             infoOption,
-            button("Usar esta", "ghost", () => queue(item.id, candidate.filePath))
+            button("Use This File", "ghost", () => queue(item.id, candidate.filePath))
           );
           candidates.append(option);
         });
@@ -995,7 +1063,7 @@ function renderRequests() {
           item,
           recovery,
           youtubePanel,
-          "No hay una coincidencia local exacta. Puedes revisar la pista posible o elegir uno de los enlaces que volvió a buscar el Bridge."
+          "There is no exact local match. Review the possible file or choose one of the links found by the Bridge."
         );
         match.append(recovery);
       }
@@ -1004,16 +1072,16 @@ function renderRequests() {
         item,
         match,
         youtubePanel,
-        "No está local. El Bridge busca un video con letras y vigila la carpeta en tiempo real."
+        "Not available locally. The Bridge searches for a video with lyrics and monitors the folder in real time."
       );
     }
     const outcomePanel = $(".outcome-panel", card);
     if (!isTerminal) {
       outcomePanel.append(
-        button("✓ Ya cantó", "success", () =>
+        button("✓ Completed", "success", () =>
           markOutcome(item.id, "completed")
         ),
-        button("Saltado", "danger", () =>
+        button("Skipped", "danger", () =>
           markOutcome(item.id, "skipped")
         )
       );
@@ -1021,7 +1089,7 @@ function renderRequests() {
       if (item.canRestoreToQueue && item.undoOriginalPosition) {
         outcomePanel.append(
           button(
-            `Deshacer y volver al turno ${item.undoOriginalPosition}`,
+            `Undo and Restore Position ${item.undoOriginalPosition}`,
             "primary",
             () => undoOutcome(item.id, "original")
           )
@@ -1029,20 +1097,20 @@ function renderRequests() {
       }
       if (item.canRestoreToQueue) {
         outcomePanel.append(
-          button("Deshacer y enviar al final", "ghost", () =>
+          button("Undo and Send to End", "ghost", () =>
             undoOutcome(item.id, "end")
           )
         );
       }
       outcomePanel.append(
-        button("Solo deshacer · dejar fuera", "danger", () =>
+        button("Undo Only · Keep Outside", "danger", () =>
           undoOutcome(item.id, "pending")
         )
       );
     }
     if (requestPending) {
       card.classList.add("processing");
-      badge.textContent = "Procesando…";
+      badge.textContent = "Processing…";
       card.querySelectorAll("button").forEach((element) => {
         element.disabled = true;
       });
@@ -1057,7 +1125,7 @@ function renderRequests() {
     if (group.total) return;
     const empty = document.createElement("p");
     empty.className = "group-empty";
-    empty.textContent = "No hay canciones en esta sección.";
+    empty.textContent = "No songs in this section.";
     group.list.append(empty);
   });
 }
@@ -1074,7 +1142,7 @@ function renderHitSuggestions() {
   const header = document.createElement("div");
   header.className = "hit-header";
   header.innerHTML =
-    "<div><p class=\"eyebrow\">PLAN B PARA LA ROTACIÓN</p><h2>Temas hit equilibrados en español e inglés</h2><p>Usa una pista local para el EMCEE o busca el mejor enlace Karaoke cuando aún no esté en el disco.</p></div>";
+    "<div><p class=\"eyebrow\">ROTATION PLAN B</p><h2>Balanced Spanish and English Hits</h2><p>Use a local track for the EMCEE or find the best Karaoke link when it is not on disk.</p></div>";
   const grid = document.createElement("div");
   grid.className = "hit-grid";
   items.forEach((item) => {
@@ -1090,31 +1158,31 @@ function renderHitSuggestions() {
     const availability = document.createElement("em");
     availability.textContent = item.localAvailable
       ? `Local: ${item.fileName}`
-      : "No está local";
+      : "Not available locally";
     info.append(language, song, artist, availability);
     const actions = document.createElement("div");
     actions.className = "queue-actions";
     if (item.localAvailable) {
       actions.append(
-        button("Agregar para EMCEE", "primary", () =>
+        button("Add for EMCEE", "primary", () =>
           queueSuggestion(item, "emcee")
         ),
-        button("Cantante al azar", "ghost", () =>
+        button("Random Singer", "ghost", () =>
           queueSuggestion(item, "random")
         )
       );
     } else {
       actions.append(
-        button("Buscar carpeta", "ghost", scan)
+        button("Scan Folder", "ghost", scan)
       );
       const key = `${item.language}:${item.artist}:${item.song}`;
       if (item.youtube?.[0]) {
         const selected = item.youtube[0];
         actions.append(
-          button("Copiar enlace Karaoke", "primary", () =>
-            copyLink(selected.url, `Enlace Karaoke de ${item.song} copiado.`)
+          button("Copy Karaoke Link", "primary", () =>
+            copyLink(selected.url, `Karaoke link for ${item.song} copied.`)
           ),
-          button("Abrir ↗", "youtube", () => openExternal(selected.url))
+          button("Open ↗", "youtube", () => openExternal(selected.url))
         );
         const link = document.createElement("a");
         link.className = "hit-youtube-link";
@@ -1128,16 +1196,16 @@ function renderHitSuggestions() {
       } else if (item.youtubeSearched) {
         const unavailable = document.createElement("span");
         unavailable.className = "hit-youtube-empty";
-        unavailable.textContent = "No se encontró una versión Karaoke confiable todavía.";
+        unavailable.textContent = "No reliable Karaoke version was found yet.";
         info.append(unavailable);
         actions.append(
-          button("Reintentar enlace Karaoke", "youtube", () =>
+          button("Retry Karaoke Link", "youtube", () =>
             searchHitYoutube(item, key)
           )
         );
       } else {
         const searchButton = button(
-          hitSearchLocks.has(key) ? "Buscando Karaoke…" : "Buscar enlace Karaoke",
+          hitSearchLocks.has(key) ? "Searching Karaoke…" : "Find Karaoke Link",
           "youtube",
           () => searchHitYoutube(item, key)
         );
@@ -1155,7 +1223,7 @@ async function searchHitYoutube(item, key) {
   if (hitSearchLocks.has(key)) return;
   hitSearchLocks.add(key);
   renderHitSuggestions();
-  showNotice(`Buscando la mejor versión Karaoke de ${item.song}…`);
+  showNotice(`Searching for the best Karaoke version of ${item.song}…`);
   try {
     const data = await api("/api/suggestions/youtube", {
       method: "POST",
@@ -1168,8 +1236,8 @@ async function searchHitYoutube(item, key) {
     });
     await refresh();
     showNotice(data.items?.length
-      ? "Enlace Karaoke encontrado; ya puedes copiarlo."
-      : "No se encontró todavía una versión Karaoke confiable.");
+      ? "Karaoke link found; you can copy it now."
+      : "No reliable Karaoke version was found yet.");
   } catch (error) {
     showNotice(error.message, true);
   } finally {
@@ -1183,7 +1251,7 @@ function renderFolders() {
   if (!folders.length) {
     const note = document.createElement("p");
     note.className = "empty-match";
-    note.textContent = "Todavía no has elegido una carpeta.";
+    note.textContent = "No folder has been selected yet.";
     folderList.append(note);
     return;
   }
@@ -1196,7 +1264,7 @@ function renderFolders() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "×";
-    remove.setAttribute("aria-label", "Quitar carpeta");
+    remove.setAttribute("aria-label", "Remove folder");
     remove.addEventListener("click", () => {
       folders.splice(index, 1);
       renderFolders();
@@ -1214,20 +1282,32 @@ function fillSettings() {
   $("#appsScriptUrl").value = state.config.appsScriptUrl || "";
   $("#hostPin").value = "";
   $("#hostPin").placeholder = state.config.hostPinConfigured
-    ? "PIN guardado · dejar vacío para conservar"
-    : "PIN privado";
+    ? "PIN saved · leave blank to keep"
+    : "Private PIN";
   $("#rememberHostPin").checked = state.config.rememberHostPin !== false;
+  $("#legacyConnection").classList.toggle("hidden", state.config.signedIn === true);
   $("#vdjPort").value = state.config.virtualDJ.port || 80;
   $("#vdjPassword").value = "";
   $("#vdjPassword").placeholder = state.config.virtualDJ.passwordConfigured
-    ? "Contraseña guardada · dejar vacío para conservar"
-    : "Sin contraseña";
+    ? "Password saved · leave blank to keep"
+    : "No password";
   $("#autoQueueExact").checked = Boolean(state.config.autoQueueExact);
   const activity = state.activity || {};
   $("#activityHours").value = Number(activity.activityHours) || 2;
   $("#transitionSeconds").value =
     Math.max(0, Number(activity.transitionSeconds) || 0);
-  $("#acceptingRequests").checked = activity.accepting !== false;
+  const definition = state.tenant?.activity || {};
+  const scheduled = definition.scheduledStartAt
+    ? new Date(definition.scheduledStartAt)
+    : null;
+  $("#scheduledStartAt").value = scheduled && !Number.isNaN(scheduled.getTime())
+    ? new Date(scheduled.getTime() - scheduled.getTimezoneOffset() * 60000)
+      .toISOString().slice(0, 16)
+    : "";
+  $("#acceptEarlyRequests").checked = definition.acceptEarlyRequests === true;
+  $("#showCountdown").checked = definition.showCountdown !== false;
+  $("#autoStartEnabled").checked = definition.autoStartEnabled === true;
+  $("#showPublicStatus").checked = Boolean(activity.showPublicStatus);
   $("#settingsStartedAt").textContent = dateTime(activity.activityStartedAt);
   $("#settingsAccumulated").textContent =
     activityDuration(activity.accumulatedSeconds);
@@ -1242,7 +1322,7 @@ function fillSettings() {
 }
 
 function settingsPayload() {
-  return {
+  const payload = {
     libraryFolders: folders.map((item) => item.trim()).filter(Boolean),
     rememberLibraryFolders: $("#rememberLibraryFolders").checked,
     appsScriptUrl: $("#appsScriptUrl").value.trim(),
@@ -1252,15 +1332,30 @@ function settingsPayload() {
       port: Number($("#vdjPort").value) || 80,
       password: $("#vdjPassword").value
     },
-    autoQueueExact: $("#autoQueueExact").checked,
-    sheetConfig: {
+    autoQueueExact: $("#autoQueueExact").checked
+  };
+  if (!state.config.signedIn) {
+    payload.sheetConfig = {
       activityHours: Number($("#activityHours").value) || 2,
       transitionSeconds: Math.max(
         0,
         Number($("#transitionSeconds").value) || 0
-      ),
-      accepting: $("#acceptingRequests").checked
-    }
+      )
+    };
+  }
+  return payload;
+}
+
+function activitySettingsPayload() {
+  const localStart = $("#scheduledStartAt").value;
+  return {
+    scheduledStartAt: localStart ? new Date(localStart).toISOString() : "",
+    defaultDurationSeconds: Math.round((Number($("#activityHours").value) || 2) * 3600),
+    defaultTransitionSeconds: Math.max(0, Number($("#transitionSeconds").value) || 0),
+    acceptEarlyRequests: $("#acceptEarlyRequests").checked,
+    showCountdown: $("#showCountdown").checked,
+    autoStartEnabled: $("#autoStartEnabled").checked,
+    showPublicStatus: $("#showPublicStatus").checked
   };
 }
 
@@ -1274,13 +1369,13 @@ async function refresh() {
 
 async function scan() {
   if (scanBusy) {
-    showNotice("La biblioteca ya se está actualizando.");
+    showNotice("The library is already being updated.");
     return;
   }
   scanBusy = true;
   try {
     applyState(await api("/api/library/scan", { method: "POST", body: "{}" }));
-    showNotice(`Biblioteca actualizada: ${state.library.count} pistas encontradas.`);
+    showNotice(`Library updated: ${state.library.count} tracks found.`);
   } catch (error) {
     showNotice(error.message, true);
   } finally {
@@ -1290,7 +1385,7 @@ async function scan() {
 
 async function syncRequests({ quiet = false } = {}) {
   if (syncBusy) {
-    if (!quiet) showNotice("La sincronización ya está en curso.");
+    if (!quiet) showNotice("Synchronization is already in progress.");
     return;
   }
   syncBusy = true;
@@ -1300,9 +1395,15 @@ async function syncRequests({ quiet = false } = {}) {
       await api("/api/requests/sync", { method: "POST", body: "{}" })
     );
     if (!quiet) {
-      showNotice("Solicitudes y cola real de VirtualDJ sincronizadas.");
+      showNotice("Requests and the live VirtualDJ queue are synchronized.");
     }
   } catch (error) {
+    if (/QUICK_SETUP_REQUIRED|quick setup/i.test(error.message)) {
+      fillSettings();
+      if (!settingsDialog.open) settingsDialog.showModal();
+      showNotice("Complete the activity duration and transition settings before starting.", true);
+      return;
+    }
     showNotice(error.message, true);
   } finally {
     syncBusy = false;
@@ -1320,15 +1421,27 @@ function syncWhenActive() {
 
 async function controlActivity(action) {
   if (activityBusy) {
-    showNotice("Ya se está procesando un cambio de actividad.");
+    showNotice("An activity change is already in progress.");
     return;
   }
   if (
-    action === "reset" &&
+    ["reset", "archive", "finish", "start-new"].includes(action) &&
     !(await confirmAction({
-      title: "Reiniciar actividad",
-      detail: "¿Archivar todas las solicitudes y comenzar una actividad nueva?",
-      confirmLabel: "Sí, reiniciar"
+      title: action === "finish"
+        ? "Finish this activity?"
+        : action === "start-new"
+          ? "Start a new activity?"
+          : "Archive and clear the current queue?",
+      detail: action === "finish"
+        ? "New requests will close, but the current queue and history will be preserved."
+        : action === "start-new"
+          ? "The previous queue will be archived and the activity will start with an empty queue."
+          : "All current requests will move to history. The permanent link and QR will not change.",
+      confirmLabel: action === "finish"
+        ? "Finish"
+        : action === "start-new"
+          ? "Start New"
+          : "Archive and Clear"
     }))
   ) {
     return;
@@ -1340,10 +1453,13 @@ async function controlActivity(action) {
       await api(`/api/activity/${action}`, { method: "POST", body: "{}" })
     );
     showNotice({
-      start: "Actividad iniciada. El reloj y la hora final ya están corriendo.",
-      open: "Solicitudes abiertas en la web y en el Bridge.",
-      close: "Solicitudes cerradas en la web y en el Bridge.",
-      reset: "Actividad reiniciada y cola local sincronizada."
+      start: "Activity started. The timer and end time are now running.",
+      open: "Requests are now open.",
+      close: "Requests are now closed.",
+      reset: "Activity archived and local queue synchronized.",
+      archive: "Queue archived and cleared. The permanent link and QR did not change.",
+      finish: "Activity finished. The current queue and history were preserved.",
+      "start-new": "A new activity started with an empty active queue."
     }[action]);
   } catch (error) {
     showNotice(error.message, true);
@@ -1353,11 +1469,223 @@ async function controlActivity(action) {
   }
 }
 
+function option(select, value, label) {
+  const element = document.createElement("option");
+  element.value = value;
+  element.textContent = label;
+  select.append(element);
+}
+
+function fillSelection() {
+  const available = state.account?.selection || { hotels: [], venues: [], activities: [] };
+  const current = state.account?.current || {};
+  const hotelSelect = $("#hotelSelect");
+  hotelSelect.innerHTML = "";
+  option(hotelSelect, "", "Select Hotel");
+  (available.hotels || []).forEach((hotel) => option(hotelSelect, hotel.hotelId, hotel.name));
+  hotelSelect.value = current.hotelId || hotelSelect.options[1]?.value || "";
+
+  const refreshVenues = () => {
+    const venueSelect = $("#venueSelect");
+    venueSelect.innerHTML = "";
+    option(venueSelect, "", "Select Venue");
+    (available.venues || [])
+      .filter((venue) => venue.hotelId === hotelSelect.value)
+      .forEach((venue) => option(venueSelect, venue.venueId, venue.name));
+    venueSelect.value = current.venueId && [...venueSelect.options]
+      .some((entry) => entry.value === current.venueId)
+      ? current.venueId
+      : venueSelect.options[1]?.value || "";
+    refreshActivities();
+  };
+  const refreshActivities = () => {
+    const activitySelect = $("#activitySelect");
+    activitySelect.innerHTML = "";
+    option(activitySelect, "", "Select Activity");
+    (available.activities || [])
+      .filter((activity) =>
+        activity.hotelId === hotelSelect.value &&
+        activity.venueId === $("#venueSelect").value
+      )
+      .forEach((activity) => option(activitySelect, activity.activityId, activity.name));
+    activitySelect.value = current.activityId && [...activitySelect.options]
+      .some((entry) => entry.value === current.activityId)
+      ? current.activityId
+      : activitySelect.options[1]?.value || "";
+  };
+  hotelSelect.onchange = refreshVenues;
+  $("#venueSelect").onchange = refreshActivities;
+  refreshVenues();
+}
+
+function updateAuthUi() {
+  if (!state) return;
+  const authenticated = state.account?.authenticated === true;
+  if (!authenticated) {
+    $("#loginUsername").value = state.config.lastUsername || "";
+    if (!loginDialog.open) loginDialog.showModal();
+    return;
+  }
+  if (loginDialog.open) loginDialog.close();
+  if (state.account?.user?.mustChangePassword === true) {
+    if (!passwordDialog.open) passwordDialog.showModal();
+    return;
+  }
+  if (!state.account?.current?.activityId && !passwordDialog.open) {
+    fillSelection();
+    if (!selectionDialog.open) selectionDialog.showModal();
+  }
+}
+
+$("#loginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = $("#loginError");
+  error.classList.add("hidden");
+  try {
+    const data = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("#loginUsername").value.trim(),
+        password: $("#loginPassword").value,
+        rememberLogin: $("#rememberLogin").checked
+      })
+    });
+    $("#loginPassword").value = "";
+    if (loginDialog.open) loginDialog.close();
+    await refresh();
+    if (data.mustChangePassword) {
+      if (!passwordDialog.open) passwordDialog.showModal();
+    } else {
+      fillSelection();
+      if (!selectionDialog.open) selectionDialog.showModal();
+    }
+  } catch (loginError) {
+    error.textContent = loginError.message;
+    error.classList.remove("hidden");
+  }
+});
+
+loginDialog.addEventListener("cancel", (event) => event.preventDefault());
+passwordDialog.addEventListener("cancel", (event) => event.preventDefault());
+
+$("#passwordForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = $("#passwordError");
+  error.classList.add("hidden");
+  if ($("#newPassword").value !== $("#confirmPassword").value) {
+    error.textContent = "The new passwords do not match.";
+    error.classList.remove("hidden");
+    return;
+  }
+  try {
+    await api("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: $("#currentPassword").value,
+        newPassword: $("#newPassword").value
+      })
+    });
+    $("#passwordForm").reset();
+    passwordDialog.close();
+    fillSelection();
+    selectionDialog.showModal();
+  } catch (passwordError) {
+    error.textContent = passwordError.message;
+    error.classList.remove("hidden");
+  }
+});
+
+$("#selectionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = $("#selectionError");
+  error.classList.add("hidden");
+  try {
+    applyState(await api("/api/auth/selection", {
+      method: "POST",
+      body: JSON.stringify({
+        hotelId: $("#hotelSelect").value,
+        venueId: $("#venueSelect").value,
+        activityId: $("#activitySelect").value,
+        rememberSelection: $("#rememberSelection").checked
+      })
+    }));
+    selectionDialog.close();
+    showNotice("This Bridge is ready for the selected activity.");
+  } catch (selectionError) {
+    error.textContent = selectionError.message;
+    error.classList.remove("hidden");
+  }
+});
+
+$("#closeSelection").addEventListener("click", () => {
+  if (state.account?.current?.activityId) selectionDialog.close();
+});
+$("#switchActivity").addEventListener("click", () => {
+  fillSelection();
+  selectionDialog.showModal();
+});
+
+async function logout() {
+  if (!(await confirmAction({
+    title: "Log out of this Bridge?",
+    detail: "The saved session will be revoked. Local library settings will remain on this Mac.",
+    confirmLabel: "Log Out"
+  }))) return;
+  await api("/api/auth/logout", { method: "POST", body: "{}" });
+  if (moreDialog.open) moreDialog.close();
+  await refresh();
+}
+
+$("#logoutButton").addEventListener("click", logout);
+$("#menuLogout").addEventListener("click", logout);
+$("#openHostPanel").addEventListener("click", async () => {
+  try {
+    await api("/api/host-panel/open", { method: "POST", body: "{}" });
+    showNotice("The Host Panel opened in your default browser.");
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+});
+
+$("#primaryActivity").addEventListener("click", () =>
+  controlActivity($("#primaryActivity").dataset.action || "start")
+);
+$("#requestsToggle").addEventListener("change", async (event) => {
+  const nextOpen = event.target.checked;
+  await controlActivity(nextOpen ? "open" : "close");
+});
+$("#archiveQueue").addEventListener("click", async () => {
+  moreDialog.close();
+  await controlActivity("archive");
+});
+
+$("#shareButton").addEventListener("click", () => {
+  const share = state.tenant?.share || {};
+  $("#shareUrl").value = share.publicUrl || "";
+  $("#shareQr").src = share.qrViewUrl || "";
+  $("#downloadShareQr").disabled = !share.qrDownloadUrl;
+  shareDialog.showModal();
+});
+$("#closeShare").addEventListener("click", () => shareDialog.close());
+$("#copyShareLink").addEventListener("click", () =>
+  copyLink(state.tenant?.share?.publicUrl || "", "Permanent hotel link copied.")
+);
+$("#downloadShareQr").addEventListener("click", () => {
+  const url = state.tenant?.share?.qrDownloadUrl;
+  if (url) openExternal(url);
+});
+$("#printShareQr").addEventListener("click", () => window.print());
+$("#moreButton").addEventListener("click", () => moreDialog.showModal());
+$("#closeMore").addEventListener("click", () => moreDialog.close());
+$("#previewGuestPage").addEventListener("click", () => {
+  const url = state.tenant?.share?.publicUrl;
+  if (url) openExternal(url);
+});
+$("#viewPrevious").addEventListener("click", () => {
+  showNotice("Previous activity details are available in the Host Panel.");
+});
+
 $("#scanButton").addEventListener("click", scan);
-$("#startRequests").addEventListener("click", () => controlActivity("start"));
-$("#openRequests").addEventListener("click", () => controlActivity("open"));
-$("#closeRequests").addEventListener("click", () => controlActivity("close"));
-$("#resetRequests").addEventListener("click", () => controlActivity("reset"));
 $("#syncButton").addEventListener("click", syncRequests);
 $("#settingsButton").addEventListener("click", () => {
   fillSettings();
@@ -1381,16 +1709,16 @@ $("#chooseFolder").addEventListener("click", async () => {
 });
 $("#forgetHostPin").addEventListener("click", async () => {
   if (!(await confirmAction({
-    title: "Olvidar PIN",
-    detail: "¿Olvidar el PIN guardado en este Mac?",
-    confirmLabel: "Sí, olvidar"
+    title: "Forget PIN",
+    detail: "Forget the PIN saved on this Mac?",
+    confirmLabel: "Forget"
   }))) return;
   try {
     await api("/api/config", {
       method: "POST",
       body: JSON.stringify({ clearHostPin: true })
     });
-    showNotice("El PIN guardado fue retirado de la app.");
+    showNotice("The saved PIN was removed from the app.");
     await refresh();
     fillSettings();
   } catch (error) {
@@ -1399,16 +1727,16 @@ $("#forgetHostPin").addEventListener("click", async () => {
 });
 $("#forgetVdjPassword").addEventListener("click", async () => {
   if (!(await confirmAction({
-    title: "Quitar contraseña",
-    detail: "¿Quitar la contraseña guardada de VirtualDJ?",
-    confirmLabel: "Sí, quitar"
+    title: "Remove Password",
+    detail: "Remove the saved VirtualDJ password?",
+    confirmLabel: "Remove"
   }))) return;
   try {
     await api("/api/config", {
       method: "POST",
       body: JSON.stringify({ clearVdjPassword: true })
     });
-    showNotice("La contraseña guardada de VirtualDJ fue retirada.");
+    showNotice("The saved VirtualDJ password was removed.");
     await refresh();
     fillSettings();
   } catch (error) {
@@ -1420,8 +1748,14 @@ $("#settingsForm").addEventListener("submit", async (event) => {
   try {
     const payload = settingsPayload();
     await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
+    if (state.config.signedIn && state.tenant?.activity) {
+      await api("/api/activity/settings", {
+        method: "POST",
+        body: JSON.stringify(activitySettingsPayload())
+      });
+    }
     settingsDialog.close();
-    showNotice("Configuración guardada.");
+    showNotice("Settings saved.");
     await refresh();
   } catch (error) {
     showNotice(error.message, true);
@@ -1434,8 +1768,8 @@ $("#testSheet").addEventListener("click", async () => {
       body: JSON.stringify(settingsPayload())
     });
     showSuccess(
-      "Google Sheets está conectado",
-      `Todo está correcto. Code.gs ${data.codeVersion} respondió con ${data.requestCount} solicitudes activas.`
+      "Google Sheets Is Connected",
+      `Everything is working. Code.gs ${data.codeVersion} returned ${data.requestCount} active requests.`
     );
   } catch (error) {
     showNotice(error.message, true);
@@ -1450,15 +1784,15 @@ $("#testVdj").addEventListener("click", async () => {
     setStatus(
       "#vdjStatus",
       "ok",
-      `${data.queueCount} en cola`,
-      `Cola Karaoke verificada · hora ${data.clock || "disponible"}`
+      `${data.queueCount} in queue`,
+      `Karaoke queue verified · time ${data.clock || "available"}`
     );
     showSuccess(
-      "VirtualDJ y su cola están conectados",
-      `Todo está correcto. La cola Karaoke respondió con ${data.queueCount} canción${data.queueCount === 1 ? "" : "es"}${data.clock ? ` y VirtualDJ reportó la hora ${data.clock}` : ""}.`
+      "VirtualDJ and Its Queue Are Connected",
+      `Everything is working. The Karaoke queue returned ${data.queueCount} ${data.queueCount === 1 ? "song" : "songs"}${data.clock ? ` and VirtualDJ reported ${data.clock}` : ""}.`
     );
   } catch (error) {
-    setStatus("#vdjStatus", "error", "Sin conexión", error.message);
+    setStatus("#vdjStatus", "error", "Disconnected", error.message);
     showNotice(error.message, true);
   }
 });
@@ -1469,6 +1803,7 @@ function applyState(nextState) {
   renderVdjQueue();
   renderRequests();
   renderHitSuggestions();
+  updateAuthUi();
 }
 
 function connectRealtime() {

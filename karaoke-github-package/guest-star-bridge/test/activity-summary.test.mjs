@@ -89,6 +89,23 @@ test("mantiene el reloj en cero hasta iniciar y calcula la hora final exacta", (
   assert.equal(running.eventEndsAt, "2026-08-04T12:30:00.000Z");
 });
 
+test("congela el tiempo exacto cuando el Host termina la actividad", () => {
+  const finished = buildActivitySummary(
+    {
+      activityHours: 2,
+      transitionSeconds: 30,
+      activityStartedAt: "2026-08-04T10:30:00.000Z",
+      activityFinishedAt: "2026-08-04T11:22:11.000Z",
+      activityRunning: false
+    },
+    [],
+    Date.parse("2026-08-04T13:00:00.000Z")
+  );
+  assert.equal(finished.activityRunning, false);
+  assert.equal(finished.elapsedSeconds, 3131);
+  assert.equal(finished.clockRemainingSeconds, 4069);
+});
+
 test("corrige la transición corrupta de 4:40:30 usando los 30 segundos configurados", () => {
   const summary = buildActivitySummary(
     { activityHours: 2, transitionSeconds: 30, accepting: true },

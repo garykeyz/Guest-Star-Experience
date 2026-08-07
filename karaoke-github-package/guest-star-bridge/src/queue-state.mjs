@@ -11,9 +11,17 @@ function cleanEntry(value = {}) {
     filePath: String(value.filePath || "").trim(),
     singer: String(value.singer || "").trim(),
     song: String(value.song || "").trim(),
-    artist: String(value.artist || "").trim()
+    artist: String(value.artist || "").trim(),
+    durationSeconds: Math.max(0, Number(value.durationSeconds) || 0),
+    virtualDJItemId: String(value.virtualDJItemId || "").trim(),
+    fingerprint: String(value.fingerprint || "").trim(),
+    insertedAt: String(value.insertedAt || "").trim(),
+    lastSeenAt: String(value.lastSeenAt || "").trim()
   };
-  return entry.id && entry.filePath && entry.singer ? entry : null;
+  return entry.id && entry.singer &&
+    (entry.filePath || entry.virtualDJItemId || entry.song)
+    ? entry
+    : null;
 }
 
 function cleanRecovery(value = {}) {

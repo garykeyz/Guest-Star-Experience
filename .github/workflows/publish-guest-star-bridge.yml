@@ -51,7 +51,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v3.0.7.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-experience-sync-v4.0.0.zip" \
               . \
               -x "node_modules/*" ".next/*" ".wrangler/*" "*.DS_Store"
           )
@@ -59,7 +59,7 @@ jobs:
           (
             cd karaoke-github-package
             zip -q -r -FS \
-              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v3.0.7-source.zip" \
+              "$GITHUB_WORKSPACE/release-output/guest-star-bridge-v4.0.0-source.zip" \
               guest-star-bridge \
               -x "guest-star-bridge/node_modules/*" \
                  "guest-star-bridge/data/*" \
@@ -72,14 +72,30 @@ jobs:
             "$GITHUB_WORKSPACE/release-output/INSTALACION-OTRA-MAC.txt"
           cp karaoke-github-package/guest-star-bridge/macos/GUIA-MAC-SOLO-BRIDGE.txt \
             "$GITHUB_WORKSPACE/release-output/GUIA-MAC-SOLO-BRIDGE.txt"
+          zip -q -j \
+            "$GITHUB_WORKSPACE/release-output/Guest-Star-Experience-v4.0.0-Guides.zip" \
+            karaoke-github-package/MULTIUSER-SETUP.md \
+            karaoke-github-package/SUPERHOST-GUIDE.md \
+            karaoke-github-package/HOST-GUIDE.md \
+            karaoke-github-package/MIGRATION-V4.md \
+            karaoke-github-package/SECURITY.md \
+            karaoke-github-package/PUBLIC-LINK-AND-QR.md \
+            karaoke-github-package/REVIEWS-AND-GUEST-EXPERIENCE.md \
+            karaoke-github-package/ACTIVITY-SCHEDULING.md \
+            karaoke-github-package/VIRTUALDJ-SYNC.md \
+            karaoke-github-package/LANGUAGE-AWARE-SEARCH.md \
+            karaoke-github-package/QUEUE-RECONCILIATION.md \
+            karaoke-github-package/guest-star-bridge/macos/INSTALACION-OTRA-MAC.txt \
+            karaoke-github-package/guest-star-bridge/macos/GUIA-MAC-SOLO-BRIDGE.txt
 
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              Guest-Star-Bridge-Universal-v3.0.7-app.zip \
-              Guest-Star-Bridge-Universal-v3.0.7.dmg \
-              guest-star-experience-sync-v3.0.7.zip \
-              guest-star-bridge-v3.0.7-source.zip \
+              Guest-Star-Bridge-Universal-v4.0.0-app.zip \
+              Guest-Star-Bridge-Universal-v4.0.0.dmg \
+              guest-star-experience-sync-v4.0.0.zip \
+              guest-star-bridge-v4.0.0-source.zip \
+              Guest-Star-Experience-v4.0.0-Guides.zip \
               Code.gs \
               INSTALACION-OTRA-MAC.txt \
               GUIA-MAC-SOLO-BRIDGE.txt \
@@ -90,12 +106,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v3.0.7"
+          tag="v4.0.0"
           assets=(
-            "release-output/Guest-Star-Bridge-Universal-v3.0.7-app.zip"
-            "release-output/Guest-Star-Bridge-Universal-v3.0.7.dmg"
-            "release-output/guest-star-experience-sync-v3.0.7.zip"
-            "release-output/guest-star-bridge-v3.0.7-source.zip"
+            "release-output/Guest-Star-Bridge-Universal-v4.0.0-app.zip"
+            "release-output/Guest-Star-Bridge-Universal-v4.0.0.dmg"
+            "release-output/guest-star-experience-sync-v4.0.0.zip"
+            "release-output/guest-star-bridge-v4.0.0-source.zip"
+            "release-output/Guest-Star-Experience-v4.0.0-Guides.zip"
             "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/GUIA-MAC-SOLO-BRIDGE.txt"
@@ -107,6 +124,6 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Guest Star Bridge 3.0.7 Universal" \
-              --notes "Mantiene el selector inicial en inglés universal y obliga a elegir nuevamente el idioma después de Submit another song. Añade en cada tarjeta del Bridge una línea visible y resaltada con el comentario o la dedicatoria del solicitante; los mensajes largos ocupan como máximo dos líneas para conservar la vista compacta. Mantiene las prioridades Karaoke/Lyrics, tiempos, cola real, panel público y favicon. Descarga Universal para Mac Intel y Apple Silicon M1–M5; incluye APP ZIP, DMG, Code.gs e instructivo."
+              --title "Guest Star Experience 4.0.0 Universal" \
+              --notes "Guest Star 4.0 adds the central Superhost model, automatic independent hotel Sheets, host accounts and scoped permissions, persistent Bridge login, a permanent hotel link and QR, schedules and countdowns, optional reviews and consent-based reminders, language-aware Karaoke search, and stable real-time VirtualDJ reconciliation. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
           fi
