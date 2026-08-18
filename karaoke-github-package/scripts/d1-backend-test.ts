@@ -6,18 +6,27 @@ import {
   type D1DatabaseLike,
   type D1StatementLike,
   backendMode,
+  DAILY_FREE_TRANSLATION_NEURON_BUDGET,
   d1Health,
   ensureD1Schema,
   importD1Snapshot,
-  listRecords
+  listRecords,
+  reserveDailyFreeTranslationBudget
 } from "../lib/guest-star/d1-store";
 import {
   handleD1HostAction,
   handleD1PublicGet,
   handleD1PublicPost,
+  nextScheduleOccurrence,
   setD1BackendMode
 } from "../lib/guest-star/d1-actions";
 import { hmacSha256Hex } from "../lib/guest-star/crypto";
+import {
+  BRANDING_MESSAGE_FIELDS,
+  GUEST_LANGUAGE_CODES,
+  parseLocalizedMessages,
+  prepareBrandingLocalization
+} from "../lib/guest-star/translation";
 
 class TestStatement implements D1StatementLike {
   private values: unknown[] = [];
@@ -59,6 +68,10 @@ class TestD1 implements D1DatabaseLike {
 const db = new TestD1();
 await db.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
 await ensureD1Schema(db);
+assert.equal(await reserveDailyFreeTranslationBudget(db, DAILY_FREE_TRANSLATION_NEURON_BUDGET - 1), true);
+assert.equal(await reserveDailyFreeTranslationBudget(db, 2), false,
+  "concurrent-safe translation budget must reject an over-quota reservation");
+assert.equal(await reserveDailyFreeTranslationBudget(db, 1), true);
 
 const superPassword = "Superhost-Password-2026";
 const superSalt = "0123456789abcdef0123456789abcdef";
@@ -137,13 +150,18 @@ assert.ok(superToken.length >= 40);
 assert.ok(Date.parse(String(login?.expiresAt)) - Date.now() > 29 * 24 * 60 * 60 * 1000);
 
 const superAuth = { authToken: superToken };
+const migratedAdmin = await handleD1HostAction(db, { action: "adminState", ...superAuth });
+const migratedActivity = (migratedAdmin?.activities as Array<Record<string, unknown>>)
+  .find((activity) => activity.activityId === activityId);
+assert.deepEqual(migratedActivity?.allowedLanguages, [...GUEST_LANGUAGE_CODES],
+  "the one-time migration must restore all seven languages on legacy bilingual activities");
 const bridgeLogin = await handleD1HostAction(db, {
   action: "login", username: "superhost", password: superPassword,
-  clientType: "bridge", deviceName: "Test Bridge", bridgeVersion: "4.1.1",
+  clientType: "bridge", deviceName: "Test Bridge", bridgeVersion: "4.2.0",
   rememberLogin: true
 });
 assert.equal(bridgeLogin?.ok, true);
-assert.equal(bridgeLogin?.codeVersion, "4.1.1", "Bridge 4.1.1 must remain compatible with service 4.2");
+assert.equal(bridgeLogin?.codeVersion, "4.2.0", "Bridge and service must report version 4.2.0");
 const bridgeAuth = {
   authToken: String(bridgeLogin?.authToken),
   deviceToken: String(bridgeLogin?.deviceToken)
@@ -152,7 +170,7 @@ assert.equal((await handleD1HostAction(db, {
   action: "selectActivity", ...bridgeAuth, hotelId, venueId, activityId, source: "bridge"
 }))?.ok, true);
 assert.equal((await handleD1HostAction(db, {
-  action: "bridgeHeartbeat", ...bridgeAuth, virtualDJConnected: true, bridgeVersion: "4.1.1"
+  action: "bridgeHeartbeat", ...bridgeAuth, virtualDJConnected: true, bridgeVersion: "4.2.0"
 }))?.ok, true);
 const oneTimeCode = await handleD1HostAction(db, {
   action: "createOneTimeLoginCode", ...bridgeAuth
@@ -197,6 +215,38 @@ assert.equal((await handleD1HostAction(db, {
   action: "updateActivityLanguages", authToken: hostToken,
   hotelId, venueId, activityId, allowedLanguages: ["es"]
 }))?.ok, true, "assigned Host can select per-activity languages");
+
+const switchedDeviceLogin = await handleD1HostAction(db, {
+  action: "login", username: "host.one", password: hostPassword,
+  clientType: "bridge", deviceId: String(bridgeLogin?.deviceId),
+  deviceName: "Shared DJ Mac", bridgeVersion: "4.2.0", rememberLogin: true
+});
+assert.equal(switchedDeviceLogin?.ok, true, "a shared Mac must be reassigned instead of returning DEVICE_NOT_AUTHORIZED");
+assert.notEqual(switchedDeviceLogin?.deviceId, bridgeLogin?.deviceId,
+  "changing the Bridge user must revoke the previous device identity");
+assert.equal((await handleD1HostAction(db, { action: "me", ...bridgeAuth }))?.code, "UNAUTHORIZED",
+  "switching a Mac user must revoke the prior Bridge session");
+
+const secondSuperPassword = "Second-Superhost-Password-2026";
+const createdSuperhost = await handleD1HostAction(db, {
+  action: "createHost", ...superAuth, role: "superhost", username: "super.two",
+  displayName: "Second Superhost", email: "super2@example.com", password: secondSuperPassword
+});
+assert.equal((createdSuperhost?.user as Record<string, unknown>).role, "superhost");
+const secondSuperId = String((createdSuperhost?.user as Record<string, unknown>).userId);
+assert.equal((await handleD1HostAction(db, {
+  action: "login", username: "super.two", password: secondSuperPassword,
+  clientType: "web", rememberLogin: true
+}))?.ok, true, "additional Superhosts must be able to sign in");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateHost", ...superAuth, userId: secondSuperId, status: "inactive"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "updateHost", ...superAuth, userId: "superhost-1", status: "inactive"
+}))?.code, "LAST_SUPERHOST", "the last active Superhost must remain protected");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateHost", ...superAuth, userId: secondSuperId, status: "active"
+}))?.ok, true);
 
 const publicParams = new URLSearchParams({ action: "publicBootstrap", hotel: "moon-palace-public-test-code" });
 const futureSchedule = await handleD1HostAction(db, {
@@ -288,10 +338,52 @@ assert.equal(secondHotel?.ok, true);
 const otherHotelId = String((secondHotel?.hotel as Record<string, unknown>).hotelId);
 assert.equal(String((secondHotel?.venue as Record<string, unknown>).hotelId), otherHotelId,
   "new D1 hotels must include their default venue");
-assert.deepEqual((secondHotel?.activity as Record<string, unknown>).allowedLanguages, ["es", "en"],
-  "new D1 hotels must include a bilingual default activity");
+assert.deepEqual((secondHotel?.activity as Record<string, unknown>).allowedLanguages, ["es", "en", "fr", "it", "de", "ru", "pt"],
+  "new D1 hotels must include the full language catalog");
 assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId), "superhost-1",
   "new D1 hotels must assign the Superhost automatically");
+const editableActivity = secondHotel?.activity as Record<string, unknown>;
+const editableActivityId = String(editableActivity.activityId);
+const editableVenueId = String((secondHotel?.venue as Record<string, unknown>).venueId);
+const renamedActivity = await handleD1HostAction(db, {
+  action: "updateActivity", ...superAuth, activityId: editableActivityId,
+  name: "International Karaoke", defaultDurationSeconds: 5400, defaultTransitionSeconds: 45
+});
+assert.equal((renamedActivity?.activity as Record<string, unknown>).name, "International Karaoke");
+assert.equal((renamedActivity?.activity as Record<string, unknown>).defaultDurationSeconds, 5400);
+const recurringSchedule = await handleD1HostAction(db, {
+  action: "scheduleActivity", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId,
+  scheduledStartAt: "2026-08-19T20:00:00.000Z", durationSeconds: 5400,
+  recurrenceType: "biweekly", recurrenceDays: [1, 3], autoOpenRequests: false,
+  autoStartActivity: false, showCountdown: true
+});
+const recurringRecord = recurringSchedule?.schedule as Record<string, unknown>;
+assert.equal(recurringRecord.recurrenceType, "weekly");
+assert.equal(recurringRecord.recurrenceInterval, 2);
+assert.deepEqual(JSON.parse(String(recurringRecord.recurrenceDaysJson)), [1, 3]);
+assert.equal(recurringRecord.recurrenceDayOfMonth, 19);
+assert.equal(nextScheduleOccurrence({
+  scheduledStartAt: "2026-08-19T20:00:00.000Z", recurrenceType: "weekly",
+  recurrenceInterval: 2, recurrenceDaysJson: JSON.stringify([1, 3])
+}, "UTC"), "2026-08-31T20:00:00.000Z", "biweekly recurrence must skip the intervening week");
+assert.equal(nextScheduleOccurrence({
+  scheduledStartAt: "2027-01-31T20:00:00.000Z", recurrenceType: "monthly",
+  recurrenceInterval: 1, recurrenceDaysJson: "[]", recurrenceDayOfMonth: 31
+}, "UTC"), "2027-02-28T20:00:00.000Z", "monthly recurrence must clamp safely to month end");
+assert.equal(nextScheduleOccurrence({
+  scheduledStartAt: "2027-02-28T20:00:00.000Z", recurrenceType: "monthly",
+  recurrenceInterval: 1, recurrenceDaysJson: "[]", recurrenceDayOfMonth: 31
+}, "UTC"), "2027-03-31T20:00:00.000Z", "monthly recurrence must retain its original calendar day");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateActivity", ...superAuth, activityId: editableActivityId, status: "inactive"
+}))?.ok, true);
+assert.equal(String((await listRecords(db, "ActivitySchedules")).find(
+  (schedule) => schedule.scheduleId === recurringRecord.scheduleId
+)?.status), "cancelled", "deleting an activity must cancel its active schedule");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateActivity", ...superAuth, activityId: editableActivityId, status: "ready"
+}))?.ok, true, "deleted activities must remain recoverable");
 const forbidden = await handleD1HostAction(db, {
   action: "selectActivity", authToken: String((await handleD1HostAction(db, {
     action: "login", username: "host.one", password: replacement, clientType: "web", rememberLogin: true
@@ -300,7 +392,7 @@ const forbidden = await handleD1HostAction(db, {
 assert.equal(forbidden?.code, "FORBIDDEN");
 
 const outbox = await listRecords(db, "Users");
-assert.equal(outbox.length, 2);
+assert.equal(outbox.length, 3);
 const serializedOutbox = JSON.stringify(
   db.database.prepare("SELECT action, payload_json FROM guest_star_outbox").all()
 );
@@ -312,10 +404,59 @@ assert.equal(serializedOutbox.includes(String(bridgeLogin?.deviceToken)), false,
 assert.equal(serializedOutbox.includes("deviceTokenHash"), false, "Bridge token hashes must stay out of Sheets backup events");
 
 const performanceStartedAt = performance.now();
+const sessionLatencies: number[] = [];
 for (let index = 0; index < 100; index += 1) {
+  const startedAt = performance.now();
   assert.equal((await handleD1HostAction(db, { action: "me", ...superAuth }))?.ok, true);
+  sessionLatencies.push(performance.now() - startedAt);
 }
 assert.ok(performance.now() - performanceStartedAt < 1000, "100 local D1 session reads should finish within one second");
+sessionLatencies.sort((left, right) => left - right);
+const sessionP95 = sessionLatencies[Math.floor(sessionLatencies.length * 0.95)];
+assert.ok(sessionP95 < 20, `local D1 session p95 should stay under 20 ms; received ${sessionP95.toFixed(2)} ms`);
+
+const separator = "\n\n<<<94721001>>>\n\n";
+const translated = await prepareBrandingLocalization({
+  messageSourceLanguage: "en", translationMode: "auto",
+  welcomeMessage: "Welcome {hotel_name}", inProgressTitle: "Live now"
+}, {
+  async run(_model, input) {
+    assert.equal(input.text.includes("{hotel_name}"), false,
+      "placeholders must be protected before automatic translation");
+    return {
+      translated_text: input.text.split(separator)
+        .map((message) => `${input.target_lang}:${message}`).join(separator)
+    };
+  }
+});
+assert.equal(translated.branding.translationStatus, "automatic");
+const translatedMessages = parseLocalizedMessages(translated.branding.localizedMessagesJson);
+assert.equal(translatedMessages.fr.welcomeMessage, "fr:Welcome {hotel_name}");
+assert.equal(translatedMessages.pt.inProgressTitle, "pt:Live now");
+const manualTranslation = await prepareBrandingLocalization({
+  messageSourceLanguage: "es", translationMode: "manual", welcomeMessage: "Bienvenidos",
+  localizedMessagesJson: { en: { welcomeMessage: "Welcome" }, fr: { welcomeMessage: "Bienvenue" } }
+}, null);
+assert.equal(manualTranslation.branding.translationStatus, "manual");
+assert.equal(parseLocalizedMessages(manualTranslation.branding.localizedMessagesJson).es.welcomeMessage, "Bienvenidos");
+const oversizedManualInput = Object.fromEntries(GUEST_LANGUAGE_CODES.map((code) => [
+  code,
+  Object.fromEntries(BRANDING_MESSAGE_FIELDS.map((field) => [field, "x".repeat(1_000)]))
+]));
+const boundedManualTranslation = await prepareBrandingLocalization({
+  messageSourceLanguage: "en", translationMode: "manual",
+  localizedMessagesJson: oversizedManualInput
+}, null);
+const boundedManualJson = String(boundedManualTranslation.branding.localizedMessagesJson);
+assert.ok(boundedManualJson.length < 49_000, "all manual translations must fit safely in one Google Sheets cell");
+assert.equal(parseLocalizedMessages(boundedManualJson).fr.welcomeMessage.length, 300);
+const unavailableTranslation = await prepareBrandingLocalization({
+  messageSourceLanguage: "en", translationMode: "auto", welcomeMessage: "Welcome",
+  localizedMessagesJson: { es: { welcomeMessage: "Conservar" } }
+}, null);
+assert.equal(unavailableTranslation.branding.translationStatus, "manual_required");
+assert.equal("localizedMessagesJson" in unavailableTranslation.branding, false,
+  "free-quota failure must omit the field so stored manual translations are preserved");
 
 await setD1BackendMode(db, "apps_script");
 health = await d1Health(db);
@@ -325,5 +466,6 @@ assert.ok(health.backup.pending > 0);
 console.log("D1 backend tests passed", {
   users: health.counts.users,
   pendingBackupEvents: health.backup.pending,
-  publicRequestId: publicRequest.id
+  publicRequestId: publicRequest.id,
+  sessionP95Ms: Number(sessionP95.toFixed(3))
 });

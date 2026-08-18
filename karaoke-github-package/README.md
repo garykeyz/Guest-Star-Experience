@@ -17,9 +17,17 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
   réplica de respaldo aplicable para rollback.
 - Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
   se muestran en texto plano.
-- Hosts autorizados pueden elegir Español, English o ambos en su actividad.
-- Bridge 4.1.1 sigue siendo compatible con el servicio 4.2; no requiere un
-  instalador nuevo para esta migración.
+- Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
+- Bridge 4.2.0 incluye la administración, agenda recurrente, traducciones y
+  barra nativa actualizadas para esta versión.
+- Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
+  `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
+  presupuesto gratuito conservador y cambia a edición manual sin usar un
+  proveedor de pago cuando no está disponible.
+- La agenda permite días específicos, repetición semanal, quincenal y mensual;
+  las actividades pueden editarse, desactivarse y restaurarse sin borrar datos.
+- El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
+  opciones avanzadas plegadas hasta que el usuario las solicite.
 
 ## Modelo 4.1
 
@@ -48,7 +56,8 @@ asignación del Superhost.
   Superhost puede reemplazarlas revocando las sesiones anteriores;
 - el Superhost puede editar usuario, nombre, correo y revisar último acceso,
   último cambio de contraseña y auditoría;
-- cada actividad permite Español, English o ambos;
+- cada actividad permite Español, English, Français, Italiano, Deutsch,
+  Русский y Português;
 - las lecturas repetidas de Google Sheets se reutilizan durante cada solicitud.
 
 ## Primera configuración

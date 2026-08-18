@@ -66,4 +66,18 @@ This design fits Cloudflare’s free plans for a normal Guest Star installation.
 - <https://developers.cloudflare.com/d1/platform/pricing/>
 - <https://developers.cloudflare.com/workers/platform/pricing/>
 
+Automatic message translation uses the Cloudflare model only while D1 is the
+primary backend. Guest Star keeps a conservative estimated application budget
+of 7,000 neurons per UTC day, below Cloudflare's current 10,000-neuron free
+allocation. When the binding, capacity or remaining application budget is not
+available, the save still succeeds, existing translations are preserved and
+the Superhost receives the seven manual language fields. It never switches to
+a paid translation provider. Keep the Cloudflare account on **Workers Free** if
+the installation must have a hard no-billing boundary; a Paid account can bill
+other account-wide Workers AI usage above its shared free allocation.
+
+While the backend remains in `apps_script` mode, automatic translation uses
+Google Apps Script `LanguageApp` and likewise falls back to manual fields on
+failure.
+
 No MySQL server is required.

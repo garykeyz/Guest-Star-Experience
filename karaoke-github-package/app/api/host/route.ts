@@ -5,6 +5,7 @@ import {
   ensureD1Schema,
   getGuestStarD1,
   importD1Snapshot,
+  reserveDailyFreeTranslationBudget,
   type D1MigrationSnapshot,
   type JsonObject
 } from "@/lib/guest-star/d1-store";
@@ -18,6 +19,11 @@ import {
   flushD1BackupFully,
   scheduleD1Backup
 } from "@/lib/guest-star/upstream";
+import {
+  estimateBrandingTranslationNeurons,
+  getWorkersAiBinding,
+  prepareBrandingLocalization
+} from "@/lib/guest-star/translation";
 
 const SESSION_COOKIE = "guest_star_host_session";
 const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
@@ -173,6 +179,19 @@ export async function POST(request: NextRequest) {
       return safeResponse({ ok: false, code: "INVALID_D1_ACTION" }, 400);
     }
 
+    let translationWarning = "";
+    if (action === "updateHotelBranding" && db && mode === "d1_primary") {
+      const requestedMode = String((payload.branding as JsonObject | undefined)?.translationMode || "auto");
+      let ai = requestedMode === "manual" ? null : getWorkersAiBinding();
+      if (ai) {
+        const estimate = estimateBrandingTranslationNeurons(payload.branding);
+        if (!await reserveDailyFreeTranslationBudget(db, estimate)) ai = null;
+      }
+      const localized = await prepareBrandingLocalization(payload.branding, ai);
+      payload.branding = localized.branding;
+      translationWarning = localized.warning;
+    }
+
     let data: JsonObject;
     if (db && mode === "d1_primary") {
       data = await handleD1HostAction(db, payload) || {
@@ -186,6 +205,7 @@ export async function POST(request: NextRequest) {
         : DEFAULT_APPS_SCRIPT_TIMEOUT_MS;
       data = await callAppsScript(payload, timeoutMs);
     }
+    if (translationWarning && data.ok === true && !data.warning) data.warning = translationWarning;
 
     const code = String(data.code || "");
     const response = safeResponse(

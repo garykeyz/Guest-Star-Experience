@@ -9,6 +9,7 @@ const server = await readFile(resolve(root, "src/server.mjs"), "utf8");
 const config = await readFile(resolve(root, "src/config.mjs"), "utf8");
 const superhost = await readFile(resolve(root, "public/superhost.js"), "utf8");
 const app = await readFile(resolve(root, "public/app.js"), "utf8");
+const index = await readFile(resolve(root, "public/index.html"), "utf8");
 
 test("la selección responde antes de ejecutar la sincronización completa", () => {
   const body = server.slice(
@@ -37,9 +38,21 @@ test("el Superhost administra credenciales permanentes sin revelar hashes", () =
   assert.match(app, /changePasswordButton/);
 });
 
-test("Español e English se configuran por actividad", () => {
+test("los siete idiomas se configuran por actividad", () => {
   assert.match(superhost, /updateActivityLanguages/);
-  assert.match(superhost, /languageEs/);
-  assert.match(superhost, /languageEn/);
+  for (const code of ["es", "en", "fr", "it", "de", "ru", "pt"]) {
+    assert.match(superhost, new RegExp(`language_\\$\\{code\\}|\\["${code}"`));
+  }
   assert.match(app, /activityLanguageSettings/);
+});
+
+test("cada acción del menú More tiene un control único y un manejador real", () => {
+  const ids = [...index.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(new Set(ids).size, ids.length, "the Bridge HTML must not contain duplicate element ids");
+  for (const id of ["archiveQueue", "viewPrevious", "previewGuestPage", "menuLogout"]) {
+    assert.equal(ids.includes(id), true, `${id} must exist in the More menu`);
+    assert.match(app, new RegExp(`\\$\\("#${id}"\\)\\.addEventListener`));
+  }
+  assert.match(app, /superhostPanel\.openTab\("operation"\)/);
+  assert.match(app, /await openExternal\(url\)/);
 });

@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.1"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.2\.0"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -905,7 +905,7 @@ test("eliminar un hotel exige el nombre exacto, suspende dependencias y permite 
   }
 });
 
-test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", () => {
+test("crear un Host o Superhost solo registra la cuenta y nunca crea otro spreadsheet", () => {
   const body = source.slice(
     source.indexOf("function createHostUserV4_"),
     source.indexOf("function createHotelForSuperhostV4_")
@@ -914,8 +914,8 @@ test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", ()
   assert.doesNotMatch(body, /SpreadsheetApp\.create/);
   assert.doesNotMatch(body, /DriveApp\.create/);
   assert.match(body, /const password = String\(body\.password/);
-  assert.match(body, /role: "host"/);
-  assert.doesNotMatch(body, /body\.role/);
+  assert.match(body, /body\.role.*=== "superhost"/);
+  assert.match(body, /role: role/);
   assert.match(body, /mustChangePassword: false/);
   assert.doesNotMatch(body, /temporaryPassword/);
 });
@@ -950,10 +950,10 @@ test("el Superhost reemplaza una contraseña permanente sin poder leer la anteri
   assert.doesNotMatch(body, /password:\s*password/);
 });
 
-test("cada actividad limita el formulario público a Español, English o ambos", () => {
+test("cada actividad permite seleccionar cualquiera de los siete idiomas", () => {
   assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_(["es"])), ["es"]);
   assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_(["English", "Español"])), ["en", "es"]);
-  assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_([])), ["es", "en"]);
+  assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_([])), ["es", "en", "fr", "it", "de", "ru", "pt"]);
   assert.match(source, /code: "LANGUAGE_NOT_ALLOWED"/);
   assert.match(source, /allowedLanguagesJson: JSON\.stringify/);
   assert.match(source, /action: "activity\.languages\.updated"/);
@@ -1021,7 +1021,7 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 });
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.1"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.2\.0"/);
   assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.2\.0-cloudflare-d1-migration"/);
   assert.match(source, /const V4_SCHEMA_VERSION = "4\.2\.0"/);
   const dispatchBody = source.slice(
@@ -1170,4 +1170,43 @@ test("la recurrencia semanal respeta el intervalo después del último día del 
   context.Utilities = originalUtilities;
   context.Session = originalSession;
   assert.equal(next, "2026-08-17T20:00:00.000Z");
+});
+
+test("la recurrencia mensual vuelve al día original después de un mes corto", () => {
+  const originalUtilities = context.Utilities;
+  const originalSession = context.Session;
+  context.Utilities = {
+    formatDate: date => new Date(date).toISOString().slice(0, 19),
+    parseDate: text => new Date(`${text}Z`)
+  };
+  context.Session = { getScriptTimeZone: () => "UTC" };
+  const next = context.nextOccurrenceV4_({
+    scheduledStartAt: "2027-02-28T20:00:00.000Z",
+    recurrenceType: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 31,
+    recurrenceEndAt: ""
+  }, "UTC");
+  context.Utilities = originalUtilities;
+  context.Session = originalSession;
+  assert.equal(next, "2027-03-31T20:00:00.000Z");
+});
+
+test("la traducción gratuita conserva las variables de los mensajes", () => {
+  const originalLanguageApp = context.LanguageApp;
+  context.LanguageApp = {
+    translate: (message, _source, target) => {
+      assert.equal(message.includes("{hotel_name}"), false);
+      return `${target}:${message}`;
+    }
+  };
+  const result = context.translatedBrandingChangesV4_({
+    messageSourceLanguage: "en",
+    translationMode: "auto",
+    welcomeMessage: "Welcome {hotel_name}"
+  });
+  context.LanguageApp = originalLanguageApp;
+  const localized = JSON.parse(result.changes.localizedMessagesJson);
+  assert.equal(localized.fr.welcomeMessage, "fr:Welcome {hotel_name}");
+  assert.equal(result.changes.translationStatus, "automatic");
 });

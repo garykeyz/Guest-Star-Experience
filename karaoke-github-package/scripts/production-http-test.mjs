@@ -103,6 +103,21 @@ async function request(path, init = {}) {
   return fetch(`${origin}${path}`, { redirect: "manual", ...init });
 }
 
+async function measureRoute(label, samples, operation) {
+  const latencies = [];
+  for (let index = 0; index < samples; index += 1) {
+    const startedAt = performance.now();
+    const response = await operation();
+    assert.equal(response.status, 200, `${label} performance probe should succeed`);
+    await response.arrayBuffer();
+    latencies.push(performance.now() - startedAt);
+  }
+  latencies.sort((left, right) => left - right);
+  const p95 = latencies[Math.floor(latencies.length * 0.95)];
+  assert.ok(p95 < 250, `${label} local production p95 should stay under 250 ms; received ${p95.toFixed(2)} ms`);
+  return Number(p95.toFixed(2));
+}
+
 async function waitUntilReady() {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -200,6 +215,15 @@ try {
   )?.payload;
   assert.equal("authToken" in oneTimePayload, false);
 
+  const publicP95Ms = await measureRoute("public bootstrap", 30, () => request(
+    "/api/karaoke?action=publicBootstrap&hotel=production-test-hotel"
+  ));
+  const sessionP95Ms = await measureRoute("remembered Host session", 30, () => request("/api/host", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+    body: JSON.stringify({ action: "me" })
+  }));
+
   const logout = await request("/api/host", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: sessionCookie },
@@ -233,7 +257,10 @@ try {
   assert.equal(bridgeLoginPayload.clientType, "bridge");
   assert.equal(bridgeLoginPayload.deviceName, "Production Test Bridge");
 
-  console.log("Production HTTP routes and security boundaries passed.");
+  console.log("Production HTTP routes, security and local latency passed.", {
+    publicP95Ms,
+    sessionP95Ms
+  });
 } finally {
   nextServer.kill("SIGTERM");
   if (nextServer.exitCode === null) {

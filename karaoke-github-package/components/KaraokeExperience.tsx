@@ -244,7 +244,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const statusText=activityCopy[lang||"en"];
   const allowedLanguageCodes=activity.activity?.allowedLanguages?.length
     ? activity.activity.allowedLanguages
-    : (["es","en"] as Lang[]);
+    : (["es","en","fr","it","de","ru","pt"] as Lang[]);
   const availableLanguages=languages.filter(x=>allowedLanguageCodes.includes(x[0]));
   const active=availableLanguages.find(x=>x[0]===lang)||availableLanguages[0]||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
@@ -265,6 +265,12 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     (activityRunning&&targetSeconds>0&&remainingSeconds===0);
   const queuePeopleCount=Math.max(0,Math.floor(Number(activity.queuePeopleCount)||0));
   const branding=activity.branding||{};
+  const localizedMessages=(()=>{
+    const raw=branding.localizedMessagesJson;
+    if(raw&&typeof raw==="object")return raw as Record<string,Record<string,string>>;
+    try{return JSON.parse(String(raw||"{}")) as Record<string,Record<string,string>>;}catch{return {};}
+  })();
+  const brandingMessage=(field:string)=>localizedMessages[lang||"en"]?.[field]||branding[field]||"";
   const scheduledAt=Date.parse(String(activity.activity?.scheduledStartAt||""));
   const countdownSeconds=Number.isFinite(scheduledAt)
     ? Math.max(0,Math.floor((scheduledAt-synchronizedNow)/1000))
@@ -279,17 +285,18 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     .replaceAll("{activity_name}",String(activity.activity?.name||""))
     .replaceAll("{venue_name}",String(activity.venue?.name||""));
   const activityStatus=String(activity.activity?.status||"");
+  const endingSoon=activityStatus==="in_progress"&&targetSeconds>0&&remainingSeconds>0&&remainingSeconds<=900;
   const publicMessage=activityStatus==="finished"
-    ? [branding.activityFinishedTitle,branding.activityFinishedMessage||branding.activityEndingMessage]
+    ? [brandingMessage("activityFinishedTitle"),brandingMessage("activityFinishedMessage")||brandingMessage("activityEndingMessage")]
     : activityStatus==="in_progress"&&!accepting
-      ? [branding.requestsClosedTitle,branding.requestsClosedMessage]
+      ? [brandingMessage("requestsClosedTitle"),brandingMessage("requestsClosedMessage")]
       : activityStatus==="in_progress"
-        ? [branding.inProgressTitle,branding.inProgressMessage]
+        ? [brandingMessage("inProgressTitle"),endingSoon&&brandingMessage("activityEndingMessage")?brandingMessage("activityEndingMessage"):brandingMessage("inProgressMessage")]
         : activityStatus==="scheduled"&&accepting
-          ? [branding.beforeStartOpenTitle,branding.beforeStartOpenMessage]
+          ? [brandingMessage("beforeStartOpenTitle"),brandingMessage("beforeStartOpenMessage")]
           : activity.activity
-            ? [branding.beforeStartClosedTitle,branding.beforeStartClosedMessage]
-            : [branding.noActivityTitle,branding.noActivityMessage];
+            ? [brandingMessage("beforeStartClosedTitle"),brandingMessage("beforeStartClosedMessage")]
+            : [brandingMessage("noActivityTitle"),brandingMessage("noActivityMessage")];
   const nextActivity=activity.upcomingActivities?.[0];
   const calendarStamp=(value:string|undefined)=>value
     ? new Date(value).toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z")
@@ -428,6 +435,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
         {branding.showActivityDetails!==false&&<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span>}
       </div>
     </section>}
+    {brandingMessage("welcomeMessage")&&<section className="publicMessage welcomeMessage"><p>{replaceMessage(brandingMessage("welcomeMessage"))}</p></section>}
     {(publicMessage[0]||publicMessage[1])&&<section className="publicMessage">
       {publicMessage[0]&&<strong>{replaceMessage(publicMessage[0])}</strong>}
       {publicMessage[1]&&<p>{replaceMessage(publicMessage[1])}</p>}
@@ -446,13 +454,13 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
     </motion.div>
     {nextActivity&&branding.showNextActivity!==false&&<section className="publicModule nextActivity">
-      <div className="moduleIcon"><CalendarPlus/></div><div><small>NEXT ACTIVITY</small><strong>{nextActivity.activityName||"Guest Star Activity"}</strong><p>{[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString()].filter(Boolean).join(" · ")}</p></div>
+      <div className="moduleIcon"><CalendarPlus/></div><div><small>NEXT ACTIVITY</small><strong>{nextActivity.activityName||"Guest Star Activity"}</strong><p>{replaceMessage(brandingMessage("upcomingActivityMessage"))||[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString()].filter(Boolean).join(" · ")}</p></div>
       <div className="moduleActions">{branding.showAddToCalendar!==false&&calendarUrl&&<a href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus/>Add to Calendar</a>}</div>
       {branding.showRemindMe===true&&!reminderSent&&<form onSubmit={submitReminder}><label><Mail/><input type="email" value={reminderEmail} onChange={e=>setReminderEmail(e.target.value)} placeholder="Email for one reminder" required/></label><label className="consent"><input type="checkbox" checked={reminderConsent} onChange={e=>setReminderConsent(e.target.checked)}/> Yes, send me one reminder for this activity.</label><button><Bell/>Remind Me</button></form>}
       {reminderSent&&<p className="moduleSuccess">✓ Your one-time reminder is scheduled.</p>}
     </section>}
     {(activityStatus==="finished"||activityFinished)&&branding.showInternalRating===true&&<section className="publicModule reviewModule">
-      <div className="moduleIcon"><Star/></div><div><small>OPTIONAL REVIEW</small><strong>{replaceMessage(branding.reviewInvitationMessage)||"How was your Guest Star experience?"}</strong><p>No review is required to continue or to use any other option.</p></div>
+      <div className="moduleIcon"><Star/></div><div><small>OPTIONAL REVIEW</small><strong>{replaceMessage(brandingMessage("reviewInvitationMessage"))||"How was your Guest Star experience?"}</strong><p>{replaceMessage(brandingMessage("generalReviewMessage"))||"No review is required to continue or to use any other option."}</p></div>
       {!reviewSent?<form onSubmit={submitReview}><div className="rating" aria-label="Rating from one to five">{[1,2,3,4,5].map(rating=><button type="button" key={rating} className={reviewRating>=rating?"active":""} aria-label={`${rating} stars`} onClick={()=>setReviewRating(rating)}><Star/></button>)}</div><textarea value={reviewComment} onChange={e=>setReviewComment(e.target.value)} placeholder="Optional comment"/><input type="email" value={reviewEmail} onChange={e=>setReviewEmail(e.target.value)} placeholder="Email (optional)"/>{reviewEmail&&branding.offerFollowUp===true&&<label className="consent"><input type="checkbox" checked={reviewConsent} onChange={e=>setReviewConsent(e.target.checked)}/> Yes, I would like one follow-up message about my experience.</label>}<button className="reviewSubmit">Submit Optional Review</button></form>:<p className="moduleSuccess">✓ Thank you. Your review was saved.</p>}
       {externalReview?.url&&<a className="externalReview" href={externalReview.url} target="_blank" rel="noreferrer">Leave a separate {externalReview.provider||"hotel"} review <ArrowRight/></a>}
     </section>}

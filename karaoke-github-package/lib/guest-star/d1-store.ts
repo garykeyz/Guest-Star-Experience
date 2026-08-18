@@ -26,6 +26,7 @@ export interface D1DatabaseLike {
 
 export const D1_BINDING = "GUEST_STAR_DB";
 export const D1_SCHEMA_VERSION = "4.2.0";
+export const DAILY_FREE_TRANSLATION_NEURON_BUDGET = 7_000;
 
 const SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -219,6 +220,49 @@ export async function setMeta(db: D1DatabaseLike, key: string, value: string) {
     VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `).bind(key, value, nowIso()).run();
+}
+
+export async function reserveDailyFreeTranslationBudget(
+  db: D1DatabaseLike,
+  requestedNeurons: number
+) {
+  const neurons = Math.max(1, Math.ceil(Number(requestedNeurons) || 0));
+  if (neurons > DAILY_FREE_TRANSLATION_NEURON_BUDGET) return false;
+  await ensureD1Schema(db);
+
+  // Workers AI's free allocation is daily. Keep a UTC-scoped, atomic application
+  // budget below that allocation so concurrent saves cannot silently overrun it.
+  const key = `workers_ai_translation_neurons:${new Date().toISOString().slice(0, 10)}`;
+  const reservationId = `${nowIso()}#${randomToken(16)}`;
+  const result = await db.prepare(`
+    INSERT INTO guest_star_meta (key, value, updated_at)
+    SELECT ?, ?, ? WHERE ? <= ?
+    ON CONFLICT(key) DO UPDATE SET
+      value = CAST(guest_star_meta.value AS INTEGER) + ?,
+      updated_at = excluded.updated_at
+    WHERE CAST(guest_star_meta.value AS INTEGER) + ? <= ?
+  `).bind(
+    key,
+    String(neurons),
+    reservationId,
+    neurons,
+    DAILY_FREE_TRANSLATION_NEURON_BUDGET,
+    neurons,
+    neurons,
+    DAILY_FREE_TRANSLATION_NEURON_BUDGET
+  ).run();
+
+  const changes = Number(result.meta?.changes);
+  if (Number.isFinite(changes)) return changes > 0;
+
+  // Some D1 adapters omit `meta.changes`. The unique marker makes the fallback
+  // concurrency-safe: a rejected reservation can never be mistaken for a
+  // neighboring successful write. A simultaneous later success may only cause
+  // a safe false negative (manual fallback), never an unbudgeted AI request.
+  const row = await db.prepare(
+    "SELECT value, updated_at FROM guest_star_meta WHERE key = ? LIMIT 1"
+  ).bind(key).first<{ value: string; updated_at: string }>();
+  return row?.updated_at === reservationId && Number(row.value) <= DAILY_FREE_TRANSLATION_NEURON_BUDGET;
 }
 
 export async function backendMode(db: D1DatabaseLike) {

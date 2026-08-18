@@ -22,7 +22,7 @@ import {
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
 export const GUEST_STAR_D1_VERSION = "4.2.0";
-export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.1.1";
+export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
   "canStartActivity", "canFinishActivity", "canStartNewActivity",
@@ -37,6 +37,7 @@ const PERMISSIONS = [
 
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const HOST_BASE_URL = "https://host.gstarxp.com";
+export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
 
 type PermissionName = typeof PERMISSIONS[number];
 type Auth = {
@@ -143,6 +144,11 @@ function languageCode(value: unknown) {
   const language = text(value).toLowerCase();
   if (["es", "spanish", "español"].includes(language)) return "es";
   if (["en", "english", "inglés"].includes(language)) return "en";
+  if (["fr", "french", "français", "francais"].includes(language)) return "fr";
+  if (["it", "italian", "italiano"].includes(language)) return "it";
+  if (["de", "german", "deutsch", "alemán", "aleman"].includes(language)) return "de";
+  if (["ru", "russian", "русский", "ruso"].includes(language)) return "ru";
+  if (["pt", "portuguese", "português", "portugues"].includes(language)) return "pt";
   return "";
 }
 
@@ -156,7 +162,21 @@ function normalizeLanguages(value: unknown) {
   const languages = Array.isArray(requested)
     ? requested.map(languageCode).filter(Boolean)
     : [];
-  return [...new Set(languages)].length ? [...new Set(languages)] : ["es", "en"];
+  return [...new Set(languages)].length ? [...new Set(languages)] : [...GUEST_STAR_LANGUAGE_CODES];
+}
+
+async function migrateLanguageCatalog(db: D1DatabaseLike) {
+  if (await getMeta(db, "language_catalog_v42_migrated") === "true") return;
+  for (const activity of await listRecords(db, "Activities")) {
+    const languages = normalizeLanguages(activity.allowedLanguagesJson);
+    if (languages.length === 2 && languages.includes("es") && languages.includes("en")) {
+      await patchRecord(db, "Activities", text(activity.activityId), {
+        allowedLanguagesJson: JSON.stringify(GUEST_STAR_LANGUAGE_CODES),
+        updatedAt: nowIso()
+      });
+    }
+  }
+  await setMeta(db, "language_catalog_v42_migrated", "true");
 }
 
 function activityWithLanguages(activity: JsonObject | null) {
@@ -601,7 +621,25 @@ async function login(db: D1DatabaseLike, body: JsonObject) {
   if (text(body.clientType).toLowerCase() === "bridge") {
     const requestedId = text(body.deviceId);
     let device = requestedId ? await getRecord(db, "Devices", requestedId) : null;
-    if (device && text(device.userId) !== text(user.userId)) return { ok: false, code: "DEVICE_NOT_AUTHORIZED" };
+    if (device && text(device.userId) !== text(user.userId)) {
+      const previousDeviceId = text(device.deviceId);
+      const stamp = nowIso();
+      await patchRecord(db, "Devices", previousDeviceId, { status: "revoked", updatedAt: stamp });
+      for (const previousSession of await listRecords(db, "AuthSessions")) {
+        if (text(previousSession.deviceId) === previousDeviceId && !text(previousSession.revokedAt)) {
+          await patchRecord(db, "AuthSessions", text(previousSession.authSessionId), {
+            revokedAt: stamp
+          }, "master", false);
+        }
+      }
+      await audit(db, {
+        userId: user.userId,
+        deviceId: previousDeviceId,
+        action: "device.user.switched",
+        details: { previousUserId: device.userId }
+      });
+      device = null;
+    }
     deviceToken = randomToken(64);
     const stamp = nowIso();
     deviceId = text(device?.deviceId) || randomId();
@@ -642,6 +680,7 @@ async function login(db: D1DatabaseLike, body: JsonObject) {
 
 async function adminState(db: D1DatabaseLike, auth: Auth) {
   if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  await migrateLanguageCatalog(db);
   return {
     ok: true,
     codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
@@ -688,6 +727,7 @@ async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   if (password.length < 12 || password.length > 128) return { ok: false, code: "WEAK_PASSWORD" };
   const salt = randomToken(32);
   const stamp = nowIso();
+  const role = text(body.role) === "superhost" ? "superhost" : "host";
   const user = await save(db, "Users", {
     userId: randomId(),
     username,
@@ -695,7 +735,7 @@ async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     email,
     passwordHash: await hmacSha256Hex(password, salt),
     passwordSalt: salt,
-    role: "host",
+    role,
     status: "active",
     staticHostSlug: `${normalizeIdentifier(username) || "host"}-${randomToken(6)}`,
     mustChangePassword: false,
@@ -704,14 +744,14 @@ async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     lastLoginAt: "",
     passwordUpdatedAt: stamp
   });
-  await audit(db, { userId: auth.user.userId, action: "user.created", targetId: user.userId });
+  await audit(db, { userId: auth.user.userId, action: "user.created", targetId: user.userId, details: { role } });
   return { ok: true, user: publicUser(user) };
 }
 
 async function updateHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
   const user = await getRecord(db, "Users", text(body.userId));
-  if (!user || text(user.role) !== "host") return { ok: false, code: "USER_NOT_FOUND" };
+  if (!user || !["host", "superhost"].includes(text(user.role))) return { ok: false, code: "USER_NOT_FOUND" };
   const changes: JsonObject = { updatedAt: nowIso() };
   const users = await listRecords(db, "Users");
   if (body.username !== undefined) {
@@ -732,7 +772,16 @@ async function updateHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     }
     changes.email = email;
   }
-  if (body.status !== undefined) changes.status = body.status === "inactive" ? "inactive" : "active";
+  if (body.status !== undefined) {
+    const nextStatus = body.status === "inactive" ? "inactive" : "active";
+    if (text(user.role) === "superhost" && nextStatus === "inactive") {
+      const activeSuperhosts = users.filter((candidate) =>
+        text(candidate.role) === "superhost" && text(candidate.status) === "active"
+      );
+      if (activeSuperhosts.length <= 1) return { ok: false, code: "LAST_SUPERHOST" };
+    }
+    changes.status = nextStatus;
+  }
   const updated = await patchRecord(db, "Users", text(user.userId), changes) || user;
   if (changes.status === "inactive") await revokeUserAccess(db, text(user.userId));
   await audit(db, { userId: auth.user.userId, action: "user.updated", targetId: user.userId, details: changes });
@@ -742,7 +791,7 @@ async function updateHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
 async function setHostPassword(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
   const user = await getRecord(db, "Users", text(body.userId));
-  if (!user || text(user.role) !== "host") return { ok: false, code: "USER_NOT_FOUND" };
+  if (!user || !["host", "superhost"].includes(text(user.role))) return { ok: false, code: "USER_NOT_FOUND" };
   const password = String(body.password || "");
   if (password.length < 12 || password.length > 128) return { ok: false, code: "WEAK_PASSWORD" };
   const stamp = nowIso();
@@ -809,7 +858,7 @@ async function createHotel(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     showPublicStatus: false, showCountdown: true, scheduledStartAt: "",
     autoStartEnabled: false, acceptEarlyRequests: false, currentCycleId: "",
     createdAt: stamp, updatedAt: stamp,
-    allowedLanguagesJson: JSON.stringify(["es", "en"])
+    allowedLanguagesJson: JSON.stringify(GUEST_STAR_LANGUAGE_CODES)
   });
   hotel = await patchRecord(db, "Hotels", text(hotel.hotelId), {
     activePublicActivityId: activity.activityId,
@@ -904,6 +953,59 @@ async function createActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   });
   await audit(db, { userId: auth.user.userId, action: "activity.created", hotelId: context.hotel.hotelId, venueId: context.venue.venueId, activityId: activity.activityId });
   return { ok: true, activity: activityWithLanguages(activity) };
+}
+
+async function updateActivityRecord(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  const activity = await getRecord(db, "Activities", text(body.activityId));
+  if (!activity) return { ok: false, code: "ACTIVITY_NOT_FOUND" };
+  const hotel = await getRecord(db, "Hotels", text(activity.hotelId));
+  const venue = await getRecord(db, "Venues", text(activity.venueId));
+  if (!hotel || !venue) return { ok: false, code: "ACTIVITY_NOT_FOUND" };
+  const deleting = body.status === "inactive";
+  if (deleting && text(activity.status) === "in_progress") {
+    return { ok: false, code: "ACTIVITY_IN_PROGRESS", error: "Finish the activity before deleting it." };
+  }
+  const changes: JsonObject = { updatedAt: nowIso() };
+  if (body.name !== undefined) {
+    const name = text(body.name);
+    if (!name) return { ok: false, code: "ACTIVITY_NAME_REQUIRED" };
+    changes.name = name;
+  }
+  if (body.defaultDurationSeconds !== undefined) {
+    changes.defaultDurationSeconds = Math.round(bounded(body.defaultDurationSeconds, numberValue(activity.defaultDurationSeconds, 7200), 900, 604800));
+  }
+  if (body.defaultTransitionSeconds !== undefined) {
+    changes.defaultTransitionSeconds = Math.round(bounded(body.defaultTransitionSeconds, numberValue(activity.defaultTransitionSeconds, 30), 0, 900));
+  }
+  if (body.status !== undefined) changes.status = deleting ? "inactive" : "ready";
+  const updated = await patchRecord(db, "Activities", text(activity.activityId), changes) || activity;
+  if (deleting) {
+    for (const schedule of await listRecords(db, "ActivitySchedules")) {
+      if (text(schedule.activityId) === text(activity.activityId) && text(schedule.status) === "active") {
+        await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), { status: "cancelled", updatedAt: nowIso() });
+      }
+    }
+    for (const device of await listRecords(db, "Devices")) {
+      if (text(device.activityId) === text(activity.activityId)) {
+        await patchRecord(db, "Devices", text(device.deviceId), { activityId: "", updatedAt: nowIso() });
+      }
+    }
+    if (text(hotel.activePublicActivityId) === text(activity.activityId)) {
+      await patchRecord(db, "Hotels", text(hotel.hotelId), { activePublicActivityId: "", updatedAt: nowIso() });
+    }
+    const runtime = await getActivityRuntime(db, text(activity.activityId));
+    if (runtime) await upsertActivityRuntime(db, { ...runtime, accepting: false, running: false, updatedAt: nowIso() });
+  }
+  await audit(db, {
+    userId: auth.user.userId,
+    action: deleting ? "activity.deleted" : body.status !== undefined ? "activity.restored" : "activity.updated",
+    hotelId: activity.hotelId,
+    venueId: activity.venueId,
+    activityId: activity.activityId,
+    details: changes
+  });
+  return { ok: true, activity: activityWithLanguages(updated), recoverable: deleting };
 }
 
 async function updateActivityLanguages(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1212,7 +1314,23 @@ async function scheduleActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject
   const durationSeconds = Math.round(bounded(body.durationSeconds, numberValue(context.activity.defaultDurationSeconds, 7200), 900, 604800));
   const openingLead = Math.round(bounded(body.requestOpeningLeadSeconds, 3600, 0, 604800));
   const stamp = nowIso();
-  const recurrenceType = ["none", "daily", "weekly", "monthly"].includes(text(body.recurrenceType)) ? text(body.recurrenceType) : "none";
+  const requestedRecurrence = text(body.recurrenceType);
+  const recurrenceType = requestedRecurrence === "biweekly"
+    ? "weekly"
+    : ["none", "daily", "weekly", "monthly"].includes(requestedRecurrence)
+      ? requestedRecurrence
+      : "none";
+  const recurrenceInterval = requestedRecurrence === "biweekly"
+    ? 2
+    : Math.round(bounded(body.recurrenceInterval, 1, 1, 52));
+  const requestedDays = Array.isArray(body.recurrenceDays)
+    ? body.recurrenceDays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    : [];
+  const recurrenceDays = [...new Set(requestedDays)];
+  const recurrenceDayOfMonth = zonedCalendarDate(scheduledStart, context.hotel.timezone).getUTCDate();
+  if (recurrenceType === "weekly" && !recurrenceDays.length) {
+    recurrenceDays.push(zonedCalendarDate(scheduledStart, context.hotel.timezone).getUTCDay());
+  }
   const schedule = await save(db, "ActivitySchedules", {
     scheduleId: randomId(), hotelId: context.hotel.hotelId, venueId: context.venue.venueId,
     activityId: context.activity.activityId, scheduledStartAt: scheduledStart.toISOString(),
@@ -1222,8 +1340,9 @@ async function scheduleActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject
     autoStartActivity: body.autoStartActivity === true,
     showCountdown: body.showCountdown !== false,
     recurrenceType,
-    recurrenceInterval: Math.round(bounded(body.recurrenceInterval, 1, 1, 52)),
-    recurrenceDaysJson: JSON.stringify(Array.isArray(body.recurrenceDays) ? body.recurrenceDays : []),
+    recurrenceInterval,
+    recurrenceDaysJson: JSON.stringify(recurrenceDays),
+    recurrenceDayOfMonth,
     recurrenceEndAt: text(body.recurrenceEndAt), status: "active",
     createdByUserId: auth.user.userId, createdAt: stamp, updatedAt: stamp
   });
@@ -1315,7 +1434,7 @@ function localCalendarText(date: Date) {
     `T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
-function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unknown) {
+export function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unknown) {
   const start = new Date(text(schedule.scheduledStartAt));
   if (!Number.isFinite(start.getTime())) return "";
   const interval = Math.max(1, Math.round(numberValue(schedule.recurrenceInterval, 1)));
@@ -1324,7 +1443,17 @@ function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unknown) {
   if (type === "daily") {
     localCalendar.setUTCDate(localCalendar.getUTCDate() + interval);
   } else if (type === "monthly") {
-    localCalendar.setUTCMonth(localCalendar.getUTCMonth() + interval);
+    const originalDay = Math.min(31, Math.max(
+      1,
+      Math.round(numberValue(schedule.recurrenceDayOfMonth, localCalendar.getUTCDate()))
+    ));
+    const targetMonth = new Date(Date.UTC(
+      localCalendar.getUTCFullYear(), localCalendar.getUTCMonth() + interval, 1
+    ));
+    const lastTargetDay = new Date(Date.UTC(
+      targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0
+    )).getUTCDate();
+    localCalendar.setUTCFullYear(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth(), Math.min(originalDay, lastTargetDay));
   } else if (type === "weekly") {
     const allowed = recurrenceDays(schedule.recurrenceDaysJson);
     const days = (allowed.length ? allowed : [localCalendar.getUTCDay()]).sort((left, right) => left - right);
@@ -1469,7 +1598,12 @@ async function updateBranding(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
     "upcomingActivityMessage", "reviewInvitationMessage", "externalReviewProvider",
     "externalReviewUrl", "showHotelName", "showHotelLogo", "showTeamIdentity",
     "showActivityDetails", "showCountdown", "showNextActivity", "showInternalRating",
-    "showExternalReview", "showRemindMe", "showAddToCalendar", "offerFollowUp"
+    "showExternalReview", "showRemindMe", "showAddToCalendar", "offerFollowUp",
+    "activityEndingMessage", "generalReviewMessage", "beforeStartClosedTitle",
+    "beforeStartClosedMessage", "beforeStartOpenTitle", "beforeStartOpenMessage",
+    "requestsClosedTitle", "requestsClosedMessage", "activityFinishedTitle",
+    "noActivityTitle", "noActivityMessage", "messageSourceLanguage",
+    "translationMode", "localizedMessagesJson", "translationStatus", "translatedAt"
   ];
   const brandingRows = await listRecords(db, "HotelBranding");
   const existing = brandingRows.find((record) => text(record.hotelId) === text(context.hotel.hotelId));
@@ -2039,6 +2173,7 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "updateHotel") return await updateHotelAction(db, auth, body);
     if (action === "createVenue") return await createVenue(db, auth, body);
     if (action === "createActivity") return await createActivity(db, auth, body);
+    if (action === "updateActivity") return await updateActivityRecord(db, auth, body);
     if (action === "updateActivityLanguages") return await updateActivityLanguages(db, auth, body);
     if (action === "assignUser") return await assignUser(db, auth, body);
     if (action === "revokeAssignment") return await revokeAssignment(db, auth, body);
