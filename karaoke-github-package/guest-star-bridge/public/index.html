@@ -20,6 +20,7 @@
         <button class="button ghost hidden" id="openHostPanel">Superhost</button>
         <button class="button ghost hidden" id="liveEventButton">Evento en vivo</button>
         <button class="button ghost hidden" id="switchActivity">Switch Activity</button>
+        <button class="button ghost hidden" id="changePasswordButton">Change Password</button>
         <button class="button ghost hidden" id="logoutButton">Log Out</button>
         <div class="live-pill"><i></i> LOCAL BRIDGE</div>
       </div>
@@ -224,6 +225,11 @@
           <label class="toggle"><input id="showCountdown" type="checkbox" /><span></span>Show public countdown</label>
           <label class="toggle"><input id="autoStartEnabled" type="checkbox" /><span></span>Start automatically at the scheduled time</label>
           <label class="toggle"><input id="showPublicStatus" type="checkbox" /><span></span>Show activity status publicly</label>
+          <fieldset id="activityLanguageSettings" class="language-fieldset hidden">
+            <legend>Languages offered to guests for this activity</legend>
+            <label class="check-row"><input id="activityLanguageEs" type="checkbox" />Español</label>
+            <label class="check-row"><input id="activityLanguageEn" type="checkbox" />English</label>
+          </fieldset>
           <div class="sheet-state-grid">
             <div><small>Started</small><strong id="settingsStartedAt">—</strong></div>
             <div><small>Accumulated</small><strong id="settingsAccumulated">0:00:00</strong></div>
@@ -294,10 +300,12 @@
 
     <dialog id="passwordDialog" class="auth-dialog">
       <form id="passwordForm">
-        <p class="eyebrow">SECURE YOUR ACCOUNT</p>
-        <h2>Choose a new password</h2>
-        <p>Your temporary password must be replaced before operating an event.</p>
-        <label for="currentPassword">Temporary password</label>
+        <header>
+          <div><p class="eyebrow">SECURE YOUR ACCOUNT</p><h2 id="passwordDialogTitle">Change your password</h2></div>
+          <button type="button" class="close-button" id="closePassword" aria-label="Close">×</button>
+        </header>
+        <p id="passwordDialogHelp">Enter your current password and choose a new permanent password.</p>
+        <label for="currentPassword">Current password</label>
         <input id="currentPassword" type="password" autocomplete="current-password" required />
         <label for="newPassword">New password</label>
         <input id="newPassword" type="password" autocomplete="new-password" minlength="12" required />

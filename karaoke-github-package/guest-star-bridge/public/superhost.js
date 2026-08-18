@@ -34,6 +34,9 @@ const COPY = {
     activityName: "Nombre de la actividad",
     duration: "Duración (minutos)",
     transition: "Transición (segundos)",
+    activityLanguages: "Idiomas permitidos en esta actividad",
+    saveLanguages: "Guardar idiomas",
+    atLeastOneLanguage: "Selecciona al menos un idioma.",
     venues: "Lugares",
     activities: "Actividades",
     schedule: "Programar actividad",
@@ -58,7 +61,16 @@ const COPY = {
     displayName: "Nombre visible",
     username: "Usuario",
     email: "Correo opcional",
-    temporaryPassword: "Contraseña temporal — se muestra una sola vez",
+    password: "Contraseña permanente (mínimo 12 caracteres)",
+    confirmPassword: "Confirmar contraseña",
+    passwordsMismatch: "Las contraseñas no coinciden.",
+    saveHost: "Guardar usuario",
+    setPassword: "Establecer nueva contraseña permanente",
+    passwordUpdated: "Último cambio de contraseña",
+    lastLogin: "Último acceso",
+    accountStatus: "Estado",
+    showWhileTyping: "Mostrar mientras escribo",
+    passwordControlHelp: "Las contraseñas no se pueden leer. El Superhost puede establecer una nueva y todas las sesiones anteriores se cerrarán.",
     hosts: "Usuarios Host",
     activate: "Activar",
     deactivate: "Desactivar",
@@ -147,6 +159,9 @@ const COPY = {
     activityName: "Activity name",
     duration: "Duration (minutes)",
     transition: "Transition (seconds)",
+    activityLanguages: "Languages allowed for this activity",
+    saveLanguages: "Save languages",
+    atLeastOneLanguage: "Select at least one language.",
     venues: "Venues",
     activities: "Activities",
     schedule: "Schedule activity",
@@ -171,7 +186,16 @@ const COPY = {
     displayName: "Display name",
     username: "Username",
     email: "Optional email",
-    temporaryPassword: "Temporary password — shown once",
+    password: "Permanent password (12 characters minimum)",
+    confirmPassword: "Confirm password",
+    passwordsMismatch: "The passwords do not match.",
+    saveHost: "Save user",
+    setPassword: "Set a new permanent password",
+    passwordUpdated: "Last password change",
+    lastLogin: "Last sign-in",
+    accountStatus: "Status",
+    showWhileTyping: "Show while typing",
+    passwordControlHelp: "Passwords cannot be read. The Superhost can set a new one and all previous sessions will be signed out.",
     hosts: "Host users",
     activate: "Activate",
     deactivate: "Deactivate",
@@ -246,6 +270,17 @@ function checked(valueToCheck) {
   return valueToCheck === true || String(valueToCheck).toLowerCase() === "true";
 }
 
+function activityLanguages(activity) {
+  if (Array.isArray(activity?.allowedLanguages)) return activity.allowedLanguages;
+  try {
+    const parsed = JSON.parse(value(activity, "allowedLanguagesJson") || "[]");
+    if (Array.isArray(parsed) && parsed.length) return parsed;
+  } catch {
+    // Older activities have no language field and default to both languages.
+  }
+  return ["es", "en"];
+}
+
 function options(items, idField, label, selected = "") {
   return items.map((item) => {
     const id = value(item, idField);
@@ -293,7 +328,6 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   let activeTab = "hotels";
   let admin = null;
   let reviews = [];
-  let temporaryPassword = "";
   let selectedBrandingHotel = "";
   let selectedFavoriteHotel = "";
   let selectedReviewActivity = "";
@@ -342,7 +376,6 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   async function mutate(action, payload, success = text().saved) {
     try {
       const result = await requestAction(action, payload);
-      if (result.temporaryPassword) temporaryPassword = String(result.temporaryPassword);
       notify(result.warning || success);
       await load();
       window.dispatchEvent(new CustomEvent("guest-star:admin-changed"));
@@ -397,10 +430,10 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     const venueNames = new Map(venues.map((venue) => [value(venue, "venueId"), value(venue, "name")]));
     content.innerHTML = `<div class="superhost-grid three">
       <section class="superhost-card"><h3>${escapeHtml(text().createVenue)}</h3><form id="createVenueForm" class="superhost-form"><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().venueName)}<input name="name" required /></label><button class="button primary">${escapeHtml(text().createVenue)}</button></form></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().createActivity)}</h3><form id="createActivityForm" class="superhost-form"><label>${escapeHtml(text().venues)}<select name="venueId" required>${options(venues, "venueId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().activityName)}<input name="name" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="30" /></label><button class="button primary">${escapeHtml(text().createActivity)}</button></form></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().createActivity)}</h3><form id="createActivityForm" class="superhost-form"><label>${escapeHtml(text().venues)}<select name="venueId" required>${options(venues, "venueId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().activityName)}<input name="name" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="30" /></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().activityLanguages)}</legend><label class="check-row"><input name="languageEs" type="checkbox" checked />Español</label><label class="check-row"><input name="languageEn" type="checkbox" checked />English</label></fieldset><button class="button primary">${escapeHtml(text().createActivity)}</button></form></section>
       <section class="superhost-card"><h3>${escapeHtml(text().schedule)}</h3><form id="scheduleForm" class="superhost-form"><label>${escapeHtml(text().activities)}<select name="activityId" required>${options(activities, "activityId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${venueNames.get(value(item, "venueId")) || "Venue"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().scheduledStart)}<input name="scheduledLocal" type="datetime-local" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().openingLead)}<input name="openingLeadMinutes" type="number" min="0" value="60" /></label><label>${escapeHtml(text().recurrence)}<select name="recurrenceType"><option value="none">${escapeHtml(text().none)}</option><option value="daily">${escapeHtml(text().daily)}</option><option value="weekly">${escapeHtml(text().weekly)}</option><option value="monthly">${escapeHtml(text().monthly)}</option></select></label><label class="check-row"><input name="autoOpenRequests" type="checkbox" />${escapeHtml(text().autoOpen)}</label><label class="check-row"><input name="autoStartActivity" type="checkbox" />${escapeHtml(text().autoStart)}</label><label class="check-row"><input name="showCountdown" type="checkbox" checked />${escapeHtml(text().countdown)}</label><button class="button primary">${escapeHtml(text().saveSchedule)}</button></form></section>
     </div>
-    <div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().venues)}</h3><div class="superhost-list">${venues.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().activities)}</h3><div class="superhost-list">${activities.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")} · ${escapeHtml(venueNames.get(value(item, "venueId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
+    <div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().venues)}</h3><div class="superhost-list">${venues.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().activities)}</h3><div class="superhost-list">${activities.map((item) => { const languages = activityLanguages(item); return `<article class="superhost-entity activity-language-card"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")} · ${escapeHtml(venueNames.get(value(item, "venueId")) || "")}</small></div><form class="activity-language-form" data-activity-languages="${escapeHtml(value(item, "activityId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}"><span>${escapeHtml(text().activityLanguages)}</span><label class="check-row"><input name="languageEs" type="checkbox"${languages.includes("es") ? " checked" : ""} />Español</label><label class="check-row"><input name="languageEn" type="checkbox"${languages.includes("en") ? " checked" : ""} />English</label><button>${escapeHtml(text().saveLanguages)}</button></form></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
       <section class="superhost-card"><h3>${escapeHtml(text().schedules)}</h3><div class="superhost-list">${(admin.schedules || []).map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(new Date(value(item, "scheduledStartAt")).toLocaleString(language === "es" ? "es-DO" : "en-US"))}</strong><small>${escapeHtml(value(item, "recurrenceType"))} · ${escapeHtml(value(item, "status"))}</small></div>${value(item, "status") === "active" ? `<button data-action="cancel-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}" data-activity="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().cancel)}</button>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().reviews)}</h3><label>${escapeHtml(text().activities)}<select id="reviewActivity">${options(activities, "activityId", (item) => value(item, "name"), selectedReviewActivity)}</select></label><button class="button ghost" data-action="load-reviews">${escapeHtml(text().loadReviews)}</button><div class="superhost-list">${reviews.map((review) => `<article class="superhost-entity"><div><strong>${"★".repeat(Math.max(0, Number(review.rating) || 0))} ${escapeHtml(value(review, "guestName") || (language === "es" ? "Huésped" : "Guest"))}</strong><p>${escapeHtml(value(review, "comment"))}</p></div><div><button data-action="archive-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().archive)}</button><button class="danger" data-action="delete-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().delete)}</button></div></article>`).join("")}</div></section></div>`;
   }
 
@@ -410,8 +443,14 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     const assignments = admin.assignments || [];
     const hotelNames = new Map((admin.hotels || []).map((hotel) => [value(hotel, "hotelId"), value(hotel, "name")]));
     const userNames = new Map(users.map((user) => [value(user, "userId"), value(user, "displayName")]));
-    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().createHost)}</h3><form id="createHostForm" class="superhost-form"><label>${escapeHtml(text().displayName)}<input name="displayName" required /></label><label>${escapeHtml(text().username)}<input name="username" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" /></label><button class="button primary">${escapeHtml(text().createHost)}</button></form>${temporaryPassword ? `<div class="temporary-password"><strong>${escapeHtml(text().temporaryPassword)}</strong><code>${escapeHtml(temporaryPassword)}</code><button data-action="copy-password">${escapeHtml(text().copy)}</button></div>` : ""}<h3>${escapeHtml(text().hosts)}</h3><div class="superhost-list">${users.map((user) => { const inactive = value(user, "status") === "inactive"; return `<article class="superhost-entity"><div><strong>${escapeHtml(value(user, "displayName"))}</strong><small>${escapeHtml(value(user, "username"))} · ${escapeHtml(value(user, "status"))}</small></div><button data-action="toggle-host" data-id="${escapeHtml(value(user, "userId"))}" data-status="${inactive ? "active" : "inactive"}">${escapeHtml(inactive ? text().activate : text().deactivate)}</button></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
+    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().createHost)}</h3><form id="createHostForm" class="superhost-form"><label>${escapeHtml(text().displayName)}<input name="displayName" required /></label><label>${escapeHtml(text().username)}<input name="username" autocomplete="off" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" /></label><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="button primary">${escapeHtml(text().createHost)}</button></form><p class="settings-help">${escapeHtml(text().passwordControlHelp)}</p><h3>${escapeHtml(text().hosts)}</h3><div class="superhost-list">${users.map((user) => { const inactive = value(user, "status") === "inactive"; const userId = escapeHtml(value(user, "userId")); return `<article class="host-account-card"><form class="host-edit-form" data-host-edit="${userId}"><label>${escapeHtml(text().displayName)}<input name="displayName" value="${escapeHtml(value(user, "displayName"))}" required /></label><label>${escapeHtml(text().username)}<input name="username" value="${escapeHtml(value(user, "username"))}" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" value="${escapeHtml(value(user, "email"))}" /></label><small>${escapeHtml(text().accountStatus)}: ${escapeHtml(value(user, "status") || "—")} · ${escapeHtml(text().lastLogin)}: ${escapeHtml(value(user, "lastLoginAt") || "—")}</small><small>${escapeHtml(text().passwordUpdated)}: ${escapeHtml(value(user, "passwordUpdatedAt") || "—")}</small><div class="superhost-actions"><button>${escapeHtml(text().saveHost)}</button><button type="button" data-action="toggle-host" data-id="${userId}" data-status="${inactive ? "active" : "inactive"}">${escapeHtml(inactive ? text().activate : text().deactivate)}</button></div></form><form class="host-password-form" data-host-password="${userId}"><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button>${escapeHtml(text().setPassword)}</button></form></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
       <section class="superhost-card"><h3>${escapeHtml(text().assignments)}</h3><form id="assignmentForm" class="superhost-form"><label>${escapeHtml(text().user)}<select name="userId" required>${options(users.filter((user) => value(user, "status") !== "inactive"), "userId", (item) => `${value(item, "displayName")} (${value(item, "username")})`)}</select></label><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().preset)}<select name="preset"><option value="operator">${escapeHtml(text().operator)}</option><option value="manager">${escapeHtml(text().manager)}</option><option value="viewer">${escapeHtml(text().viewer)}</option></select></label><button class="button primary">${escapeHtml(text().assign)}</button></form><div class="superhost-list">${assignments.filter((item) => value(item, "status") === "active").map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(userNames.get(value(item, "userId")) || "Host")}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "Hotel")}</small></div><button data-action="revoke-assignment" data-id="${escapeHtml(value(item, "assignmentId"))}">${escapeHtml(text().revoke)}</button></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
+    content.querySelectorAll("#createHostForm, .host-password-form").forEach((form) => {
+      const label = document.createElement("label");
+      label.className = "check-row";
+      label.innerHTML = `<input type="checkbox" data-show-password />${escapeHtml(text().showWhileTyping)}`;
+      form.insertBefore(label, form.querySelector("button"));
+    });
   }
 
   function renderBranding() {
@@ -461,19 +500,59 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     event.preventDefault();
     const form = event.target;
     const data = formPayload(form);
-    if (form.id === "createHotelForm") {
+    if (form.dataset.activityLanguages) {
+      const allowedLanguages = [
+        form.elements.languageEs.checked ? "es" : "",
+        form.elements.languageEn.checked ? "en" : ""
+      ].filter(Boolean);
+      if (!allowedLanguages.length) {
+        notify(text().atLeastOneLanguage, true);
+        return;
+      }
+      await mutate("updateActivityLanguages", {
+        hotelId: form.dataset.hotel,
+        venueId: form.dataset.venue,
+        activityId: form.dataset.activityLanguages,
+        allowedLanguages
+      });
+    } else if (form.dataset.hostEdit) {
+      await mutate("updateHost", {
+        userId: form.dataset.hostEdit,
+        displayName: data.displayName,
+        username: data.username,
+        email: data.email
+      });
+    } else if (form.dataset.hostPassword) {
+      if (data.password !== data.confirmPassword) {
+        notify(text().passwordsMismatch, true);
+        return;
+      }
+      await mutate("setHostPassword", {
+        userId: form.dataset.hostPassword,
+        password: data.password
+      });
+    } else if (form.id === "createHotelForm") {
       if (await mutate("createHotel", data)) form.reset();
     } else if (form.id === "createVenueForm") {
       if (await mutate("createVenue", data)) form.reset();
     } else if (form.id === "createActivityForm") {
       const venue = (admin.venues || []).find((item) => value(item, "venueId") === data.venueId);
+      const allowedLanguages = [
+        data.languageEs === "on" ? "es" : "",
+        data.languageEn === "on" ? "en" : ""
+      ].filter(Boolean);
+      if (!allowedLanguages.length) {
+        notify(text().atLeastOneLanguage, true);
+        return;
+      }
       await mutate("createActivity", {
         hotelId: value(venue, "hotelId"),
         venueId: data.venueId,
         name: data.name,
         defaultDurationSeconds: Number(data.durationMinutes) * 60,
         defaultTransitionSeconds: Number(data.transitionSeconds),
-        showCountdown: true
+        showCountdown: true,
+        allowedLanguages
       });
     } else if (form.id === "scheduleForm") {
       const activity = (admin.activities || []).find((item) => value(item, "activityId") === data.activityId);
@@ -491,7 +570,13 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         recurrenceInterval: 1
       });
     } else if (form.id === "createHostForm") {
-      if (await mutate("createHost", data)) form.reset();
+      if (data.password !== data.confirmPassword) {
+        notify(text().passwordsMismatch, true);
+        return;
+      }
+      const payload = { ...data };
+      delete payload.confirmPassword;
+      if (await mutate("createHost", payload)) form.reset();
     } else if (form.id === "assignmentForm") {
       await mutate("assignUser", {
         userId: data.userId,
@@ -521,7 +606,12 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   });
 
   content.addEventListener("change", (event) => {
-    if (event.target.id === "brandingHotel") {
+    if (event.target.matches("[data-show-password]")) {
+      const type = event.target.checked ? "text" : "password";
+      event.target.closest("form")?.querySelectorAll(
+        'input[name="password"], input[name="confirmPassword"]'
+      ).forEach((input) => { input.type = type; });
+    } else if (event.target.id === "brandingHotel") {
       selectedBrandingHotel = event.target.value;
       renderBranding();
     } else if (event.target.id === "favoriteHotel") {
@@ -565,8 +655,6 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       if (window.confirm(text().confirmRevoke)) await mutate("revokeAssignment", { assignmentId: id });
     } else if (action === "revoke-device") {
       if (window.confirm(text().confirmRevoke)) await mutate("revokeDevice", { deviceId: id });
-    } else if (action === "copy-password") {
-      copyLink(temporaryPassword, text().saved);
     } else if (action === "cancel-schedule") {
       await mutate("cancelSchedule", {
         scheduleId: id,

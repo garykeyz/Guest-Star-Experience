@@ -18,6 +18,7 @@ let folders = [];
 let activityBusy = false;
 let scanBusy = false;
 let syncBusy = false;
+let passwordChangeRequired = false;
 let rotationItems = [];
 const actionLocks = new Set();
 const hitSearchLocks = new Set();
@@ -403,6 +404,7 @@ function updateStatus() {
   $("#openHostPanel").classList.toggle("hidden", !isSuperhost || superhostPanel.isOpen());
   $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen());
   $("#switchActivity").classList.toggle("hidden", !authenticated);
+  $("#changePasswordButton").classList.toggle("hidden", !authenticated);
   $("#logoutButton").classList.toggle("hidden", !authenticated);
   const revision = Number(activity.stateRevision) || 0;
   if (
@@ -1409,6 +1411,21 @@ function fillSettings() {
   $("#showCountdown").checked = definition.showCountdown !== false;
   $("#autoStartEnabled").checked = definition.autoStartEnabled === true;
   $("#showPublicStatus").checked = Boolean(activity.showPublicStatus);
+  let allowedLanguages = Array.isArray(definition.allowedLanguages)
+    ? definition.allowedLanguages
+    : [];
+  if (!allowedLanguages.length && definition.allowedLanguagesJson) {
+    try { allowedLanguages = JSON.parse(definition.allowedLanguagesJson); } catch { /* default below */ }
+  }
+  if (!Array.isArray(allowedLanguages) || !allowedLanguages.length) {
+    allowedLanguages = ["es", "en"];
+  }
+  $("#activityLanguageEs").checked = allowedLanguages.includes("es");
+  $("#activityLanguageEn").checked = allowedLanguages.includes("en");
+  $("#activityLanguageSettings").classList.toggle(
+    "hidden",
+    state.account?.user?.role !== "superhost"
+  );
   $("#settingsStartedAt").textContent = dateTime(activity.activityStartedAt);
   $("#settingsAccumulated").textContent =
     activityDuration(activity.accumulatedSeconds);
@@ -1449,7 +1466,7 @@ function settingsPayload() {
 
 function activitySettingsPayload() {
   const localStart = $("#scheduledStartAt").value;
-  return {
+  const payload = {
     scheduledStartAt: localStart ? new Date(localStart).toISOString() : "",
     defaultDurationSeconds: Math.round((Number($("#activityHours").value) || 2) * 3600),
     defaultTransitionSeconds: Math.max(0, Number($("#transitionSeconds").value) || 0),
@@ -1458,6 +1475,13 @@ function activitySettingsPayload() {
     autoStartEnabled: $("#autoStartEnabled").checked,
     showPublicStatus: $("#showPublicStatus").checked
   };
+  if (state.account?.user?.role === "superhost") {
+    payload.allowedLanguages = [
+      $("#activityLanguageEs").checked ? "es" : "",
+      $("#activityLanguageEn").checked ? "en" : ""
+    ].filter(Boolean);
+  }
+  return payload;
 }
 
 async function refresh() {
@@ -1619,6 +1643,18 @@ function fillSelection() {
   refreshVenues();
 }
 
+function openPasswordDialog(required = false) {
+  passwordChangeRequired = required;
+  $("#passwordDialogTitle").textContent = required
+    ? "Choose a permanent password"
+    : "Change your password";
+  $("#passwordDialogHelp").textContent = required
+    ? "Set a permanent password before operating an event."
+    : "Enter your current password and choose a new permanent password.";
+  $("#closePassword").classList.toggle("hidden", required);
+  if (!passwordDialog.open) passwordDialog.showModal();
+}
+
 function updateAuthUi() {
   if (!state) return;
   const authenticated = state.account?.authenticated === true;
@@ -1633,7 +1669,7 @@ function updateAuthUi() {
   }
   if (loginDialog.open) loginDialog.close();
   if (state.account?.user?.mustChangePassword === true) {
-    if (!passwordDialog.open) passwordDialog.showModal();
+    openPasswordDialog(true);
     return;
   }
   if (state.account?.user?.role === "superhost") return;
@@ -1660,7 +1696,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     if (loginDialog.open) loginDialog.close();
     await refresh();
     if (data.mustChangePassword) {
-      if (!passwordDialog.open) passwordDialog.showModal();
+      openPasswordDialog(true);
     } else if (data.user?.role !== "superhost") {
       fillSelection();
       if (!selectionDialog.open) selectionDialog.showModal();
@@ -1672,7 +1708,19 @@ $("#loginForm").addEventListener("submit", async (event) => {
 });
 
 loginDialog.addEventListener("cancel", (event) => event.preventDefault());
-passwordDialog.addEventListener("cancel", (event) => event.preventDefault());
+passwordDialog.addEventListener("cancel", (event) => {
+  if (passwordChangeRequired) event.preventDefault();
+});
+
+$("#closePassword").addEventListener("click", () => {
+  if (!passwordChangeRequired) passwordDialog.close();
+});
+
+$("#changePasswordButton").addEventListener("click", () => {
+  $("#passwordForm").reset();
+  $("#passwordError").classList.add("hidden");
+  openPasswordDialog(false);
+});
 
 $("#passwordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1684,6 +1732,7 @@ $("#passwordForm").addEventListener("submit", async (event) => {
     return;
   }
   try {
+    const wasRequired = passwordChangeRequired;
     await api("/api/auth/change-password", {
       method: "POST",
       body: JSON.stringify({
@@ -1692,9 +1741,14 @@ $("#passwordForm").addEventListener("submit", async (event) => {
       })
     });
     $("#passwordForm").reset();
+    passwordChangeRequired = false;
     passwordDialog.close();
-    fillSelection();
-    selectionDialog.showModal();
+    await refresh();
+    showNotice("Your password was changed.");
+    if (wasRequired && state.account?.user?.role !== "superhost" && !state.account?.current?.activityId) {
+      fillSelection();
+      selectionDialog.showModal();
+    }
   } catch (passwordError) {
     error.textContent = passwordError.message;
     error.classList.remove("hidden");
@@ -1873,11 +1927,18 @@ $("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     const payload = settingsPayload();
+    const selectedActivitySettings = state.config.signedIn && state.tenant?.activity
+      ? activitySettingsPayload()
+      : null;
+    if (selectedActivitySettings?.allowedLanguages?.length === 0) {
+      showNotice("Select Español, English, or both for this activity.", true);
+      return;
+    }
     await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
-    if (state.config.signedIn && state.tenant?.activity) {
+    if (selectedActivitySettings) {
       await api("/api/activity/settings", {
         method: "POST",
-        body: JSON.stringify(activitySettingsPayload())
+        body: JSON.stringify(selectedActivitySettings)
       });
     }
     settingsDialog.close();

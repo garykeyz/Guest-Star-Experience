@@ -6,10 +6,12 @@ por el Superhost.
 ## Primer ingreso
 
 1. Abre **Guest Star Bridge**.
-2. Inicia sesión con tu usuario y contraseña temporal.
-3. Crea una contraseña nueva de al menos 12 caracteres.
-4. Selecciona hotel, sede y actividad entre las asignaciones disponibles.
-5. Pulsa **Use This Activity**.
+2. Inicia sesión con tu usuario y contraseña permanente.
+3. Selecciona hotel, sede y actividad entre las asignaciones disponibles.
+4. Pulsa **Use This Activity**.
+
+Puedes cambiar tu propia contraseña en cualquier momento desde **Change
+Password**. Debe tener al menos 12 caracteres.
 
 ## Antes del evento
 

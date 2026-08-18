@@ -59,7 +59,8 @@ sesiones y Macs previamente autorizadas para esa cuenta.
 4. El sistema crea automáticamente la hoja del hotel, sede principal, actividad
    inicial, identidad básica, enlace público, QR y asignación del Superhost.
 5. Crea el usuario Host en **Host Users**. Esto no crea ningún archivo Google.
-6. Entrega su contraseña temporal una sola vez.
+6. Define una contraseña permanente de al menos 12 caracteres y entrégala por un
+   canal seguro. El Superhost puede reemplazarla después sin leer la anterior.
 7. Asigna el usuario al hotel y elige el perfil de permisos.
 
 No compartas la hoja maestra, las hojas de hotel ni la cuenta Google con el

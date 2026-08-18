@@ -7,7 +7,7 @@ import {
   UserPlus, Users
 } from "lucide-react";
 
-type RecordValue = string | number | boolean | null | undefined;
+type RecordValue = string | number | boolean | string[] | null | undefined;
 type Entity = Record<string, RecordValue>;
 type User = Entity & {
   userId: string;
@@ -61,6 +61,18 @@ function value(entity: Entity | undefined, field: string) {
   return String(entity?.[field] || "");
 }
 
+function activityLanguages(entity: Entity | undefined) {
+  const direct = entity?.allowedLanguages;
+  if (Array.isArray(direct) && direct.length) return direct;
+  try {
+    const parsed = JSON.parse(value(entity, "allowedLanguagesJson") || "[]");
+    if (Array.isArray(parsed) && parsed.length) return parsed as string[];
+  } catch {
+    // Activities created before 4.1.1 default to both supported languages.
+  }
+  return ["es", "en"];
+}
+
 function hotelQrPngUrl(entity: Entity) {
   const fileId = value(entity, "qrFileId");
   if (fileId) {
@@ -85,7 +97,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const [newActivityHotelId,setNewActivityHotelId]=useState("");
   const [notice,setNotice]=useState("");
   const [error,setError]=useState("");
-  const [temporaryPassword,setTemporaryPassword]=useState("");
+  const [showOwnPasswordForm,setShowOwnPasswordForm]=useState(false);
   const [reviews,setReviews]=useState<Entity[]>([]);
   const [codeVersion,setCodeVersion]=useState("");
 
@@ -169,8 +181,10 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     const form=new FormData(event.currentTarget);
     const next=String(form.get("newPassword")||"");
     if(next!==String(form.get("confirmPassword")||"")){setError("The new passwords do not match.");return;}
-    await run("Password updated.",()=>hostApi({action:"changePassword",currentPassword:form.get("currentPassword"),newPassword:next}));
+    const changed=await run("Password updated.",()=>hostApi({action:"changePassword",currentPassword:form.get("currentPassword"),newPassword:next}));
+    if(!changed)return;
     await acceptIdentity(await hostApi({action:"me"}));
+    setShowOwnPasswordForm(false);
   }
 
   async function chooseActivity(){
@@ -244,18 +258,50 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function createActivity(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
+    const allowedLanguages=[form.get("languageEs")==="on"?"es":"",form.get("languageEn")==="on"?"en":""].filter(Boolean);
+    if(!allowedLanguages.length){setError("Select Español, English, or both.");return;}
     const data=await run("Activity created.",()=>hostApi({
       action:"createActivity",hotelId:form.get("hotelId"),venueId:form.get("venueId"),name:form.get("name"),
       defaultDurationSeconds:Number(form.get("durationMinutes"))*60,
-      defaultTransitionSeconds:Number(form.get("transitionSeconds")),showCountdown:true
+      defaultTransitionSeconds:Number(form.get("transitionSeconds")),showCountdown:true,allowedLanguages
     }));
     if(data){formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
   async function createHost(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
-    const data=await run("Host user created.",()=>hostApi({action:"createHost",username:form.get("username"),displayName:form.get("displayName"),email:form.get("email")}));
-    if(data){setTemporaryPassword(String(data.temporaryPassword||""));formElement.reset();await refreshAdmin();}
+    const password=String(form.get("password")||"");
+    if(password!==String(form.get("confirmPassword")||"")){setError("The passwords do not match.");return;}
+    const data=await run("Host user created with a permanent password.",()=>hostApi({action:"createHost",username:form.get("username"),displayName:form.get("displayName"),email:form.get("email"),password}));
+    if(data){formElement.reset();await refreshAdmin();}
+  }
+
+  async function updateHost(event:FormEvent<HTMLFormElement>,userId:string){
+    event.preventDefault();const form=new FormData(event.currentTarget);
+    const data=await run("Host account updated.",()=>hostApi({
+      action:"updateHost",userId,displayName:form.get("displayName"),
+      username:form.get("username"),email:form.get("email")
+    }));
+    if(data)await refreshAdmin();
+  }
+
+  async function setHostPassword(event:FormEvent<HTMLFormElement>,userId:string){
+    event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
+    const password=String(form.get("password")||"");
+    if(password!==String(form.get("confirmPassword")||"")){setError("The passwords do not match.");return;}
+    const data=await run("The permanent password was replaced and previous sessions were signed out.",()=>hostApi({action:"setHostPassword",userId,password}));
+    if(data){formElement.reset();await refreshAdmin();}
+  }
+
+  async function updateActivityLanguages(event:FormEvent<HTMLFormElement>,activity:Entity){
+    event.preventDefault();const form=new FormData(event.currentTarget);
+    const allowedLanguages=[form.get("languageEs")==="on"?"es":"",form.get("languageEn")==="on"?"en":""].filter(Boolean);
+    if(!allowedLanguages.length){setError("Select Español, English, or both.");return;}
+    const data=await run("Activity languages updated.",()=>hostApi({
+      action:"updateActivityLanguages",hotelId:value(activity,"hotelId"),
+      venueId:value(activity,"venueId"),activityId:value(activity,"activityId"),allowedLanguages
+    }));
+    if(data){await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
   async function assignHost(event:FormEvent<HTMLFormElement>){
@@ -291,8 +337,8 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     {error&&<p className="hostError" role="alert">{error}</p>}
   </section></main>;
   if(user.mustChangePassword)return <main className="hostPage"><section className="hostLogin hostCard">
-    <div className="hostMark"><KeyRound/></div><p className="hostEyebrow">SECURITY REQUIRED</p><h1>Set Your Password</h1><p>Your temporary password must be replaced before continuing.</p>
-    <form onSubmit={changePassword}><label>Temporary password<input name="currentPassword" type="password" required/></label><label>New password<input name="newPassword" type="password" minLength={12} required/></label><label>Confirm new password<input name="confirmPassword" type="password" minLength={12} required/></label><button disabled={busy}>Update Password</button></form>{error&&<p className="hostError">{error}</p>}
+    <div className="hostMark"><KeyRound/></div><p className="hostEyebrow">SECURITY REQUIRED</p><h1>Set Your Permanent Password</h1><p>Replace the initial password before continuing.</p>
+    <form onSubmit={changePassword}><label>Current password<input name="currentPassword" type="password" required/></label><label>New permanent password<input name="newPassword" type="password" minLength={12} required/></label><label>Confirm new password<input name="confirmPassword" type="password" minLength={12} required/></label><button disabled={busy}>Update Password</button></form>{error&&<p className="hostError">{error}</p>}
   </section></main>;
 
   const selectedActivity=selected?.activity as Entity|undefined;
@@ -302,6 +348,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const adminHotels=(admin?.hotels as Entity[]|undefined)||[];
   const activeAdminHotels=adminHotels.filter(item=>value(item,"status")==="active");
   const adminVenues=(admin?.venues as Entity[]|undefined)||[];
+  const adminActivities=(admin?.activities as Entity[]|undefined)||[];
   const adminUsers=((admin?.users as User[]|undefined)||[]).filter(item=>item.role!=="superhost");
   const adminAssignments=(admin?.assignments as Entity[]|undefined)||[];
   const adminDevices=(admin?.devices as Entity[]|undefined)||[];
@@ -312,8 +359,9 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const activityVenues=adminVenues.filter(item=>value(item,"hotelId")===activityHotelId);
 
   return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.1.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><button onClick={logout}><LogOut/>Log Out</button></header>
+    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.1.1</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
+    {showOwnPasswordForm&&<section className="hostCard"><div className="sectionTitle"><KeyRound/><div><h2>Change Your Password</h2><p>Your current password is required. The new permanent password must contain at least 12 characters.</p></div></div><form className="inlineForm" onSubmit={changePassword}><input name="currentPassword" type="password" autoComplete="current-password" placeholder="Current password" required/><input name="newPassword" type="password" autoComplete="new-password" minLength={12} placeholder="New password" required/><input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} placeholder="Confirm new password" required/><button disabled={busy}>Save Password</button></form></section>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
       <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
       <button className="primaryAction" disabled={busy||!activityId} onClick={chooseActivity}>Load Activity</button>
@@ -328,10 +376,10 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
       </section>
       <div className="adminColumns">
         <section className="hostCard"><div className="sectionTitle"><MapPin/><div><h2>Venues</h2><p>Add physical locations inside a hotel.</p></div></div><form onSubmit={createVenue}><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue name<input name="name" required/></label><button disabled={busy}><Plus/>Create Venue</button></form></section>
-        <section className="hostCard"><div className="sectionTitle"><CalendarClock/><div><h2>Activities</h2><p>Create reusable activities for a venue.</p></div></div><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)}>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select name="venueId">{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><button disabled={busy||!activityVenues.length}><Plus/>Create Activity</button></form></section>
+        <section className="hostCard"><div className="sectionTitle"><CalendarClock/><div><h2>Activities</h2><p>Create an activity and choose whether guests can request songs in Español, English, or both.</p></div></div><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)}>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select name="venueId">{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><div className="hostGrid two"><label className="checkLine"><input name="languageEs" type="checkbox" defaultChecked/>Español</label><label className="checkLine"><input name="languageEn" type="checkbox" defaultChecked/>English</label></div><button disabled={busy||!activityVenues.length}><Plus/>Create Activity</button></form><div className="entityList compact">{adminActivities.filter(item=>value(item,"status")!=="inactive").map(item=>{const languages=activityLanguages(item);return <article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>{adminHotels.find(hotel=>value(hotel,"hotelId")===value(item,"hotelId"))?.name||"Hotel"}</small><form className="inlineForm" onSubmit={event=>updateActivityLanguages(event,item)}><label className="checkLine"><input name="languageEs" type="checkbox" defaultChecked={languages.includes("es")}/>Español</label><label className="checkLine"><input name="languageEn" type="checkbox" defaultChecked={languages.includes("en")}/>English</label><button disabled={busy}>Save Languages</button></form></div></article>;})}</div></section>
       </div>
       <div className="adminColumns">
-        <section className="hostCard"><div className="sectionTitle"><UserPlus/><div><h2>Host Users</h2><p>Accounts are records in the master registry, not new Google files.</p></div></div><form onSubmit={createHost}><label>Display name<input name="displayName" required/></label><label>Username<input name="username" required/></label><label>Email (optional)<input name="email" type="email"/></label><button disabled={busy}><UserPlus/>Create Host</button></form>{temporaryPassword&&<div className="temporaryPassword"><strong>Temporary password — shown once</strong><code>{temporaryPassword}</code><button onClick={()=>navigator.clipboard.writeText(temporaryPassword)}>Copy</button></div>}<div className="entityList compact">{adminUsers.map(item=><article key={item.userId}><div><strong>{item.displayName}</strong><small>{item.username} · {value(item,"status")}</small></div><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this host and revoke all sessions and devices?"))return;await run(inactive?"Host activated.":"Host deactivated.",()=>hostApi({action:"updateHost",userId:item.userId,status:inactive?"active":"inactive"}));await refreshAdmin();}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></article>)}</div></section>
+        <section className="hostCard"><div className="sectionTitle"><UserPlus/><div><h2>Host Users</h2><p>Create permanent credentials, edit usernames, or replace a password. Password values are never readable after saving.</p></div></div><form onSubmit={createHost}><label>Display name<input name="displayName" required/></label><label>Username<input name="username" required/></label><label>Email (optional)<input name="email" type="email"/></label><label>Permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}><UserPlus/>Create Host</button></form><div className="entityList compact">{adminUsers.map(item=><article key={item.userId}><div><form onSubmit={event=>updateHost(event,item.userId)}><label>Display name<input name="displayName" defaultValue={item.displayName} required/></label><label>Username<input name="username" defaultValue={item.username} required/></label><label>Email<input name="email" type="email" defaultValue={value(item,"email")}/></label><small>Status: {value(item,"status")||"—"} · Last sign-in: {value(item,"lastLoginAt")||"—"}</small><small>Password last changed: {value(item,"passwordUpdatedAt")||"—"}</small><button disabled={busy}>Save User</button></form><form onSubmit={event=>setHostPassword(event,item.userId)}><label>New permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}>Replace Password</button></form></div><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this host and revoke all sessions and devices?"))return;await run(inactive?"Host activated.":"Host deactivated.",()=>hostApi({action:"updateHost",userId:item.userId,status:inactive?"active":"inactive"}));await refreshAdmin();}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></article>)}</div></section>
         <section className="hostCard"><div className="sectionTitle"><Users/><div><h2>Assignments</h2><p>Assign a host to one hotel. Server-side isolation remains enforced.</p></div></div><form onSubmit={assignHost}><label>User<select name="userId">{adminUsers.filter(item=>value(item,"status")!=="inactive").map(item=><option key={item.userId} value={item.userId}>{item.displayName} ({item.username})</option>)}</select></label><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Permission preset<select name="permissionPreset" defaultValue="operator"><option value="operator">Activity Operator</option><option value="manager">Hotel Manager</option><option value="viewer">Read Only</option></select></label><button disabled={busy}><Building2/>Create Assignment</button></form><div className="entityList compact">{adminAssignments.filter(item=>value(item,"status")==="active").map(item=><article key={value(item,"assignmentId")}><div><strong>{adminUsers.find(userItem=>userItem.userId===value(item,"userId"))?.displayName||"Host"}</strong><small>{adminHotels.find(hotelItem=>value(hotelItem,"hotelId")===value(item,"hotelId"))?.name||"Hotel"}</small></div><button onClick={async()=>{if(!window.confirm("Revoke this assignment?"))return;await run("Assignment revoked.",()=>hostApi({action:"revokeAssignment",assignmentId:value(item,"assignmentId")}));await refreshAdmin();}}>Revoke</button></article>)}</div></section>
       </div>
       <div className="adminColumns">

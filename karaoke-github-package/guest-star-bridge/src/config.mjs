@@ -12,7 +12,7 @@ const LEGACY_DIRECT_APPS_SCRIPT_URL =
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 9,
+  configVersion: 10,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -186,6 +186,14 @@ export function configForStorage(config) {
   };
 }
 
+export function mergeLoadedSecrets(config, keychain = {}) {
+  return sanitizeConfig({
+    ...config,
+    authToken: keychain.authToken || config.authToken,
+    deviceToken: keychain.deviceToken || config.deviceToken
+  }, config);
+}
+
 export async function loadConfig() {
   await mkdir(DATA_DIR, { recursive: true });
   try {
@@ -210,9 +218,13 @@ export async function loadConfig() {
       if (parsed.favoriteSongsByHotel === undefined) parsed.favoriteSongsByHotel = {};
     }
     let clean = sanitizeConfig(parsed, DEFAULT_CONFIG);
-    if (clean.secretsInKeychain && clean.deviceId) {
+    if (
+      clean.secretsInKeychain &&
+      clean.deviceId &&
+      (!clean.authToken || !clean.deviceToken)
+    ) {
       const keychain = await loadBridgeSecrets(clean.deviceId);
-      clean = sanitizeConfig({ ...clean, ...keychain }, clean);
+      clean = mergeLoadedSecrets(clean, keychain);
     }
     if (needsMigration) await saveConfig(clean);
     return clean;
@@ -223,19 +235,16 @@ export async function loadConfig() {
   }
 }
 
-export async function saveConfig(config) {
+export async function saveConfig(config, { storeSecrets = false } = {}) {
   const clean = sanitizeConfig(config, DEFAULT_CONFIG);
-  const keychainSaved = clean.rememberLogin
+  const keychainSaved = clean.rememberLogin && storeSecrets
     ? await storeBridgeSecrets(clean)
     : false;
-  const stored = configForStorage({
+  const saved = sanitizeConfig({
     ...clean,
-    secretsInKeychain: keychainSaved
-  });
-  if (keychainSaved) {
-    stored.authToken = "";
-    stored.deviceToken = "";
-  }
+    secretsInKeychain: storeSecrets ? keychainSaved : clean.secretsInKeychain
+  }, clean);
+  const stored = configForStorage(saved);
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
   try {
@@ -243,7 +252,7 @@ export async function saveConfig(config) {
   } catch {
     // Windows and some mounted filesystems do not implement POSIX permissions.
   }
-  return clean;
+  return saved;
 }
 
 export function publicConfig(config) {
