@@ -200,6 +200,10 @@ main.superhost-mode > :not(#superhostWorkspace) { display: none !important; }
 .superhost-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .superhost-card { padding: 22px; border: 1px solid var(--line); border-radius: 20px; background: rgba(25,16,31,.76); }
 .superhost-card h3 { margin: 0 0 15px; }
+.superhost-card details { margin-top: 9px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: rgba(4,3,7,.24); }
+.superhost-card details > summary { cursor: pointer; color: var(--text); font-size: .82rem; font-weight: 800; }
+.superhost-card details[open] > summary { margin-bottom: 11px; }
+.superhost-card details details { background: rgba(255,255,255,.018); }
 .superhost-card > label, .superhost-form label { display: grid; gap: 6px; color: var(--muted); font-size: .82rem; font-weight: 700; }
 .superhost-card input, .superhost-card select { width: 100%; min-height: 43px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(5,4,8,.7); color: var(--text); }
 .superhost-form { display: grid; gap: 11px; }
@@ -214,13 +218,19 @@ main.superhost-mode > :not(#superhostWorkspace) { display: none !important; }
 .superhost-entity button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.04); color: var(--text); }
 .superhost-entity button.danger { color: var(--danger); border-color: rgba(255,107,129,.3); }
 .superhost-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.hotel-entity { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; }
+.hotel-entity { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: start; }
+.hotel-entity .superhost-actions { grid-column: 1 / -1; justify-content: flex-start; padding-top: 3px; }
+.hotel-entity code { max-width: 100%; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
 .hotel-qr-preview { width: 76px; height: 76px; padding: 5px; border-radius: 9px; background: white; image-rendering: pixelated; }
 .check-row { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px !important; color: var(--muted); }
 .check-row input { width: 18px; min-height: 18px; }
 .checkbox-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .language-fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .language-fieldset legend { padding: 0 6px; color: var(--muted); font-size: .78rem; font-weight: 750; }
+.compact-fields { margin-top: 10px; }
+.activity-manage-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.025); }
+.activity-manage-card small { display: block; margin-top: 3px; color: var(--muted); }
+.activity-manage-card .danger { margin-top: 10px; color: var(--danger); border-color: rgba(255,107,129,.3); }
 .activity-language-card { align-items: flex-start; }
 .activity-language-form { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .activity-language-form > span { width: 100%; color: var(--muted); font-size: .72rem; text-align: right; }

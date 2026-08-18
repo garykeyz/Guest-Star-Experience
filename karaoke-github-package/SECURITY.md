@@ -1,4 +1,4 @@
-# Seguridad de Guest Star 4.0
+# Seguridad de Guest Star 4.2
 
 ## Modelo de confianza
 
@@ -28,4 +28,4 @@ restringir permisos heredados.
 - Configura ambos dominios web con HTTPS.
 
 El PIN heredado se mantiene solo para compatibilidad durante la migración. Las
-instalaciones 4.0 deben utilizar cuentas y tokens de dispositivo.
+instalaciones 4.2 deben utilizar cuentas y tokens de dispositivo.

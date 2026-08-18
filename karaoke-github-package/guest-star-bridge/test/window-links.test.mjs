@@ -232,7 +232,7 @@ test("el Superhost administra todo dentro del Bridge y usa QR local", () => {
   assert.doesNotMatch(qrSource, /quickchart|drive\.google/i);
   assert.doesNotMatch(serverSource, /pathname === "\/api\/host-panel\/open"/);
   assert.match(hostApiSource, /HOTEL_PROVISIONING_TIMEOUT_MS = 120_000/);
-  assert.match(hostApiSource, /payload\.action === "createHotel"/);
+  assert.match(hostApiSource, /action === "createHotel"/);
 });
 
 test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () => {
@@ -241,8 +241,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.1\.1"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.1\.1/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.0"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.0/);
   assert.match(hostPanelSource, /Service v/);
 });
 

@@ -46,9 +46,23 @@ jobs:
         working-directory: karaoke-github-package/guest-star-bridge
         run: npm test
 
+      - name: Check Bridge browser and macOS JavaScript syntax
+        working-directory: karaoke-github-package
+        run: |
+          bash -n guest-star-bridge/macos/GuestStarBridge
+          node --check guest-star-bridge/public/app.js
+          node --check guest-star-bridge/public/superhost.js
+          node --check guest-star-bridge/macos/GuestStarWindow.js
+          node --check guest-star-bridge/src/server.mjs
+          node --check guest-star-bridge/src/apps-script.mjs
+
       - name: Check TypeScript
         working-directory: karaoke-github-package
         run: npx tsc --noEmit
+
+      - name: Exercise Cloudflare D1 authentication, scheduling and translation
+        working-directory: karaoke-github-package
+        run: npm run test:d1
 
       - name: Build production web application
         working-directory: karaoke-github-package
@@ -61,6 +75,53 @@ jobs:
       - name: Build Cloudflare production bundle
         working-directory: karaoke-github-package
         run: npx opennextjs-cloudflare build
+
+      - name: Validate Cloudflare bindings and upload bundle without deploying
+        working-directory: karaoke-github-package
+        run: npx wrangler deploy --dry-run
+
+  macos-package-check:
+    if: github.event_name == 'pull_request'
+    needs: validate
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check \
+            -r karaoke-github-package/guest-star-bridge/macos/requirements-build.txt
+
+      - name: Download Intel and Apple Silicon runtimes
+        run: |
+          curl -fsSL \
+            https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-arm64.tar.gz \
+            -o "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz"
+          curl -fsSL \
+            https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
+            -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
+
+      - name: Build and verify the Universal Mac package
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("karaoke-github-package/guest-star-bridge/package.json"))["version"])')"
+          output="$RUNNER_TEMP/guest-star-release"
+          mkdir -p "$output"
+          python3 karaoke-github-package/guest-star-bridge/macos/build_installer.py \
+            --node-arm64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" \
+            --node-x64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" \
+            --output-dir "$output"
+          test -s "$output/Guest-Star-Bridge-Universal-v${version}-app.zip"
+          test -s "$output/Guest-Star-Bridge-Universal-v${version}.dmg"
+          unzip -t "$output/Guest-Star-Bridge-Universal-v${version}-app.zip"
+          hdiutil verify "$output/Guest-Star-Bridge-Universal-v${version}.dmg"
 
   release:
     if: github.event_name != 'pull_request'
@@ -189,5 +250,5 @@ jobs:
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
               --title "Guest Star Experience ${VERSION} Universal" \
-              --notes "Guest Star ${VERSION} adds non-repeating Spanish, English and per-hotel favorite rotations; prevents duplicate VirtualDJ entries even when title and artist are reversed; generates every QR locally; and moves complete Superhost administration into Bridge with bilingual controls and recoverable hotel deletion. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, service code, source packages, checksums and guides."
+              --notes "Guest Star ${VERSION} adds seven activity languages, free automatic translation with manual fallback, weekly/biweekly/monthly scheduling, recoverable activity editing, additional Superhosts, remembered sessions, fixed Bridge actions and a native Guest Star Bridge menu bar. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, service code, source packages, checksums and guides."
           fi

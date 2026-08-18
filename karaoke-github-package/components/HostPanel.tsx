@@ -26,6 +26,33 @@ type HostResponse = Record<string, unknown> & {
 };
 
 const EMPTY_SELECTION: Selection = { hotels: [], venues: [], activities: [] };
+const GUEST_LANGUAGES = [
+  ["es","Español"], ["en","English"], ["fr","Français"],
+  ["it","Italiano"], ["de","Deutsch"], ["ru","Русский"], ["pt","Português"]
+] as const;
+const WEEKDAYS = [
+  [0,"Sunday"], [1,"Monday"], [2,"Tuesday"], [3,"Wednesday"],
+  [4,"Thursday"], [5,"Friday"], [6,"Saturday"]
+] as const;
+const BRANDING_MESSAGES = [
+  ["welcomeMessage","Welcome message"],
+  ["activityEndingMessage","Activity ending message"],
+  ["upcomingActivityMessage","Upcoming activity message"],
+  ["reviewInvitationMessage","Review invitation"],
+  ["generalReviewMessage","General review message"],
+  ["beforeStartClosedTitle","Before-start closed title"],
+  ["beforeStartClosedMessage","Before-start closed message"],
+  ["beforeStartOpenTitle","Before-start open title"],
+  ["beforeStartOpenMessage","Before-start open message"],
+  ["inProgressTitle","Live title"],
+  ["inProgressMessage","Live message"],
+  ["requestsClosedTitle","Requests-closed title"],
+  ["requestsClosedMessage","Requests-closed message"],
+  ["activityFinishedTitle","Finished activity title"],
+  ["activityFinishedMessage","Finished message"],
+  ["noActivityTitle","No-activity title"],
+  ["noActivityMessage","No-activity message"]
+] as const;
 
 function friendlyHostError(value: unknown, code = "") {
   const message = String(value || "The action could not be completed.");
@@ -68,9 +95,20 @@ function activityLanguages(entity: Entity | undefined) {
     const parsed = JSON.parse(value(entity, "allowedLanguagesJson") || "[]");
     if (Array.isArray(parsed) && parsed.length) return parsed as string[];
   } catch {
-    // Activities created before 4.1.1 default to both supported languages.
+    // Activities without a saved selection offer the complete language catalog.
   }
-  return ["es", "en"];
+  return GUEST_LANGUAGES.map(([code])=>code);
+}
+
+function selectedLanguages(form:FormData){
+  return GUEST_LANGUAGES.map(([code])=>form.get(`language_${code}`)==="on"?code:"").filter(Boolean);
+}
+
+function localizedMessages(entity:Entity){
+  try{
+    const parsed=JSON.parse(value(entity,"localizedMessagesJson")||"{}");
+    return parsed&&typeof parsed==="object"?parsed as Record<string,Record<string,string>>:{};
+  }catch{return {} as Record<string,Record<string,string>>;}
 }
 
 function hotelQrPngUrl(entity: Entity) {
@@ -100,6 +138,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const [showOwnPasswordForm,setShowOwnPasswordForm]=useState(false);
   const [reviews,setReviews]=useState<Entity[]>([]);
   const [codeVersion,setCodeVersion]=useState("");
+  const [d1Status,setD1Status]=useState<HostResponse|null>(null);
 
   const refreshAdmin=useCallback(async(currentUser:User|null=user)=>{
     if(currentUser?.role!=="superhost")return;
@@ -156,7 +195,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     try{
       const data=await operation();
       if(data.activity&&data.state)setSelected(data);
-      setNotice(label);
+      setNotice(String(data.warning||label));
       return data;
     }
     catch(actionError){setError(actionError instanceof Error?actionError.message:"The action failed.");return null;}
@@ -200,6 +239,11 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   async function scheduleActivity(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const form=new FormData(event.currentTarget);
     const local=String(form.get("scheduledStartAt")||"");
+    const recurrenceType=String(form.get("recurrenceType")||"none");
+    const recurrenceDays=WEEKDAYS.map(([day])=>form.get(`weekday_${day}`)==="on"?day:-1).filter(day=>day>=0);
+    if(["weekly","biweekly"].includes(recurrenceType)&&!recurrenceDays.length){
+      setError("Choose at least one day of the week for this recurrence.");return;
+    }
     await run("Activity schedule saved.",()=>hostApi({
       action:"scheduleActivity",...context,scheduledLocal:local,
       durationSeconds:Number(form.get("durationMinutes"))*60,
@@ -207,7 +251,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
       autoOpenRequests:form.get("autoOpenRequests")==="on",
       autoStartActivity:form.get("autoStartActivity")==="on",
       showCountdown:form.get("showCountdown")==="on",
-      recurrenceType:form.get("recurrenceType"),recurrenceInterval:Number(form.get("recurrenceInterval"))||1
+      recurrenceType,recurrenceInterval:recurrenceType==="biweekly"?2:1,recurrenceDays
     }));
     await refreshAdmin();
   }
@@ -225,13 +269,20 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function saveBranding(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const form=new FormData(event.currentTarget);
+    const messageValues=Object.fromEntries(BRANDING_MESSAGES.map(([field])=>[
+      field,String(form.get(field)||"").trim()
+    ]));
+    const manualLocalized=Object.fromEntries(GUEST_LANGUAGES.map(([code])=>[
+      code,
+      Object.fromEntries(BRANDING_MESSAGES.map(([field])=>[field,String(form.get(`manual_${code}_${field}`)||"").trim()]).filter(([,message])=>message))
+    ]));
     const branding={
       teamDisplayName:form.get("teamDisplayName"),teamType:form.get("teamType"),tagline:form.get("tagline"),
       hotelLogoUrl:form.get("hotelLogoUrl"),teamLogoUrl:form.get("teamLogoUrl"),
       primaryColor:form.get("primaryColor"),secondaryColor:form.get("secondaryColor"),accentColor:form.get("accentColor"),
-      welcomeMessage:form.get("welcomeMessage"),inProgressTitle:form.get("inProgressTitle"),
-      inProgressMessage:form.get("inProgressMessage"),activityFinishedMessage:form.get("activityFinishedMessage"),
-      upcomingActivityMessage:form.get("upcomingActivityMessage"),reviewInvitationMessage:form.get("reviewInvitationMessage"),
+      ...messageValues,
+      messageSourceLanguage:form.get("messageSourceLanguage"),translationMode:form.get("translationMode"),
+      localizedMessagesJson:manualLocalized,
       externalReviewProvider:form.get("externalReviewProvider"),externalReviewUrl:form.get("externalReviewUrl"),
       showHotelName:form.get("showHotelName")==="on",showHotelLogo:form.get("showHotelLogo")==="on",
       showTeamIdentity:form.get("showTeamIdentity")==="on",
@@ -246,7 +297,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function createHotel(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
-    const data=await run("Hotel created. Its independent Google Sheet and permanent link are ready.",()=>hostApi({action:"createHotel",name:form.get("name"),timezone:form.get("timezone")}));
+    const data=await run("Hotel created. Its permanent public link is ready.",()=>hostApi({action:"createHotel",name:form.get("name"),timezone:form.get("timezone")}));
     if(data){if(data.warning)setNotice(String(data.warning));formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
@@ -258,8 +309,8 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function createActivity(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
-    const allowedLanguages=[form.get("languageEs")==="on"?"es":"",form.get("languageEn")==="on"?"en":""].filter(Boolean);
-    if(!allowedLanguages.length){setError("Select Español, English, or both.");return;}
+    const allowedLanguages=selectedLanguages(form);
+    if(!allowedLanguages.length){setError("Select at least one guest language.");return;}
     const data=await run("Activity created.",()=>hostApi({
       action:"createActivity",hotelId:form.get("hotelId"),venueId:form.get("venueId"),name:form.get("name"),
       defaultDurationSeconds:Number(form.get("durationMinutes"))*60,
@@ -268,11 +319,30 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     if(data){formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
+  async function updateActivityRecord(event:FormEvent<HTMLFormElement>,activity:Entity){
+    event.preventDefault();const form=new FormData(event.currentTarget);
+    const data=await run("Activity updated.",()=>hostApi({
+      action:"updateActivity",activityId:value(activity,"activityId"),
+      name:form.get("name"),defaultDurationSeconds:Number(form.get("durationMinutes"))*60,
+      defaultTransitionSeconds:Number(form.get("transitionSeconds"))
+    }));
+    if(data){await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
+  }
+
+  async function setActivityStatus(activity:Entity,status:"inactive"|"active"){
+    if(status==="inactive"&&!window.confirm(`Delete ${value(activity,"name")}? It can be restored later.`))return;
+    const data=await run(status==="inactive"?"Activity deleted and recoverable.":"Activity restored.",()=>hostApi({
+      action:"updateActivity",activityId:value(activity,"activityId"),status
+    }));
+    if(data){await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
+  }
+
   async function createHost(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
     const password=String(form.get("password")||"");
     if(password!==String(form.get("confirmPassword")||"")){setError("The passwords do not match.");return;}
-    const data=await run("Host user created with a permanent password.",()=>hostApi({action:"createHost",username:form.get("username"),displayName:form.get("displayName"),email:form.get("email"),password}));
+    const role=form.get("role")==="superhost"?"superhost":"host";
+    const data=await run(`${role==="superhost"?"Superhost":"Host"} user created with a permanent password.`,()=>hostApi({action:"createHost",role,username:form.get("username"),displayName:form.get("displayName"),email:form.get("email"),password}));
     if(data){formElement.reset();await refreshAdmin();}
   }
 
@@ -295,8 +365,8 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function updateActivityLanguages(event:FormEvent<HTMLFormElement>,activity:Entity){
     event.preventDefault();const form=new FormData(event.currentTarget);
-    const allowedLanguages=[form.get("languageEs")==="on"?"es":"",form.get("languageEn")==="on"?"en":""].filter(Boolean);
-    if(!allowedLanguages.length){setError("Select Español, English, or both.");return;}
+    const allowedLanguages=selectedLanguages(form);
+    if(!allowedLanguages.length){setError("Select at least one guest language.");return;}
     const data=await run("Activity languages updated.",()=>hostApi({
       action:"updateActivityLanguages",hotelId:value(activity,"hotelId"),
       venueId:value(activity,"venueId"),activityId:value(activity,"activityId"),allowedLanguages
@@ -328,9 +398,21 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     setUser(null);setSelection(EMPTY_SELECTION);setSelected(null);setAdmin(null);
   }
 
+  async function migrationAction(action:"d1Status"|"d1Prepare"|"d1Activate"|"d1BackupNow"|"d1Rollback",label:string){
+    if(action==="d1Activate"&&!window.confirm("Activate Cloudflare D1 as the primary backend now?"))return;
+    if(action==="d1Rollback"&&!window.confirm("Return to Apps Script? You will need to sign in again."))return;
+    const data=await run(label,()=>hostApi({action}));
+    if(!data)return;
+    setD1Status((data.health as HostResponse|undefined)||data);
+    if(action==="d1Activate")await acceptIdentity(await hostApi({action:"me"}));
+    if(action==="d1Rollback"){
+      setUser(null);setSelection(EMPTY_SELECTION);setSelected(null);setAdmin(null);
+    }
+  }
+
   if(loading)return <main className="hostPage"><section className="hostCard loadingCard"><RefreshCw className="spin"/>Loading secure Host Panel…</section></main>;
   if(!user)return <main className="hostPage"><section className="hostLogin hostCard">
-    <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.1</p><h1>Host Panel</h1>
+    <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.2</p><h1>Host Panel</h1>
     <p>Sign in with the account created by your Superhost.</p>
     <form onSubmit={login}><label>Username or email<input name="username" autoComplete="username" required/></label><label>Password<input name="password" type="password" autoComplete="current-password" required/></label><button disabled={busy}><KeyRound/>Sign In</button></form>
     <p className="hostSetupHelp">Forgot your username or password, or having trouble signing in? <strong>Contact your Superhost.</strong></p>
@@ -349,41 +431,55 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const activeAdminHotels=adminHotels.filter(item=>value(item,"status")==="active");
   const adminVenues=(admin?.venues as Entity[]|undefined)||[];
   const adminActivities=(admin?.activities as Entity[]|undefined)||[];
-  const adminUsers=((admin?.users as User[]|undefined)||[]).filter(item=>item.role!=="superhost");
+  const adminUsers=(admin?.users as User[]|undefined)||[];
+  const assignableUsers=adminUsers.filter(item=>item.role==="host"&&value(item,"status")!=="inactive");
   const adminAssignments=(admin?.assignments as Entity[]|undefined)||[];
   const adminDevices=(admin?.devices as Entity[]|undefined)||[];
   const auditEntries=((admin?.auditLog as Entity[]|undefined)||[]).slice(-25).reverse();
   const brandingRecords=(admin?.branding as Entity[]|undefined)||[];
   const currentBranding=brandingRecords.find(item=>value(item,"hotelId")===hotelId)||{};
+  const currentLocalizedMessages=localizedMessages(currentBranding);
   const activityHotelId=newActivityHotelId||value(activeAdminHotels[0],"hotelId");
   const activityVenues=adminVenues.filter(item=>value(item,"hotelId")===activityHotelId);
+  const d1Mode=String(d1Status?.mode||"not checked");
+  const d1Migration=String(d1Status?.migrationStatus||"not checked");
+  const d1Backup=(d1Status?.backup as Entity|undefined)||{};
 
   return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.1.1</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
+    <header className="hostTop"><div><p className="hostEyebrow">GUEST STAR EXPERIENCE 4.2.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
     {showOwnPasswordForm&&<section className="hostCard"><div className="sectionTitle"><KeyRound/><div><h2>Change Your Password</h2><p>Your current password is required. The new permanent password must contain at least 12 characters.</p></div></div><form className="inlineForm" onSubmit={changePassword}><input name="currentPassword" type="password" autoComplete="current-password" placeholder="Current password" required/><input name="newPassword" type="password" autoComplete="new-password" minLength={12} placeholder="New password" required/><input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} placeholder="Confirm new password" required/><button disabled={busy}>Save Password</button></form></section>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
       <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
       <button className="primaryAction" disabled={busy||!activityId} onClick={chooseActivity}>Load Activity</button>
       {selected&&<><div className="activityStrip"><div><small>ACTIVITY</small><strong>{value(selectedActivity,"name")}</strong></div><div><small>STATUS</small><strong>{value(selectedActivity,"status")||"ready"}</strong></div><div><small>REQUESTS</small><strong>{accepting?"Open":"Closed"}</strong></div></div><div className="activityButtons"><button onClick={()=>activityAction("startActivityV4","Activity started.")}><Play/>Start</button><button onClick={()=>{if(window.confirm("Finish this activity and close new requests?"))void activityAction("finishActivityV4","Activity finished.");}}><Square/>Finish</button><button onClick={()=>{if(window.confirm("Archive the previous cycle and start a new empty activity?"))void activityAction("startNewActivityV4","New activity cycle started.");}}><RefreshCw/>Start New</button><button onClick={()=>activityAction("toggleRequests",accepting?"Requests closed.":"Requests opened.",{open:!accepting})}>{accepting?"Close Requests":"Open Requests"}</button><button onClick={()=>activityAction("updateActivitySettings",publicStatusVisible?"Public activity status hidden.":"Public activity status visible.",{showPublicStatus:!publicStatusVisible})}>{publicStatusVisible?"Hide Public Status":"Show Public Status"}</button><button onClick={()=>{if(window.confirm("Archive and clear the active request queue?"))void activityAction("archiveClearQueue","Queue archived and cleared.");}}>Archive & Clear</button>{Boolean(selected.share)&&<a href={value(selected.share as Entity,"publicUrl")} target="_blank" rel="noreferrer"><Link2/>Public Link</a>}</div></>}
-      {selected&&<div className="hostDetailsGrid"><details><summary>Schedule and Recurrence</summary><form onSubmit={scheduleActivity}><label>Scheduled start<input name="scheduledStartAt" type="datetime-local" required/></label><div className="hostGrid three"><label>Duration minutes<input name="durationMinutes" type="number" min="15" defaultValue="120"/></label><label>Open requests minutes early<input name="openingLeadMinutes" type="number" min="0" defaultValue="60"/></label><label>Repeat<select name="recurrenceType" defaultValue="none"><option value="none">Do not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label></div><label>Repeat every<input name="recurrenceInterval" type="number" min="1" max="52" defaultValue="1"/></label><label className="checkLine"><input name="autoOpenRequests" type="checkbox"/>Open requests automatically before start</label><label className="checkLine"><input name="autoStartActivity" type="checkbox"/>Start activity automatically at the scheduled time</label><label className="checkLine"><input name="showCountdown" type="checkbox" defaultChecked/>Show public countdown</label><button disabled={busy}><CalendarClock/>Save Schedule</button></form></details><details><summary>Reviews</summary><button onClick={loadReviews}>Refresh Reviews</button><div className="reviewList">{reviews.map(review=><article key={value(review,"reviewId")}><strong>{"★".repeat(Number(review.rating)||0)} {value(review,"guestName")||"Anonymous guest"}</strong><p>{value(review,"comment")||"No comment"}</p><small>{value(review,"createdAt")}</small><div><button onClick={()=>reviewAction(value(review,"reviewId"),"archive")}>Archive</button><button onClick={()=>reviewAction(value(review,"reviewId"),"delete")}>Delete</button></div></article>)}</div></details></div>}
+      {selected&&<div className="hostDetailsGrid">
+        <details><summary>Request Languages</summary><form key={`${value(selectedActivity,"activityId")}-${value(selectedActivity,"updatedAt")}`} onSubmit={event=>updateActivityLanguages(event,selectedActivity||{})}><p>Choose any of the seven guest languages.</p><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={activityLanguages(selectedActivity).includes(code)}/>{label}</label>)}</div><button disabled={busy}>Save Languages</button></form></details>
+        <details><summary>Schedule and Recurrence</summary><form onSubmit={scheduleActivity}><label>Scheduled start<input name="scheduledStartAt" type="datetime-local" required/></label><div className="hostGrid three"><label>Duration minutes<input name="durationMinutes" type="number" min="15" defaultValue="120"/></label><label>Open requests minutes early<input name="openingLeadMinutes" type="number" min="0" defaultValue="60"/></label><label>Repeat<select name="recurrenceType" defaultValue="none"><option value="none">Do not repeat</option><option value="daily">Daily</option><option value="weekly">Every week</option><option value="biweekly">Every two weeks</option><option value="monthly">Every month</option></select></label></div><fieldset><legend>Days of the week (weekly or biweekly)</legend><div className="hostGrid weekdayChoices">{WEEKDAYS.map(([day,label])=><label className="checkLine" key={day}><input name={`weekday_${day}`} type="checkbox"/>{label}</label>)}</div></fieldset><label className="checkLine"><input name="autoOpenRequests" type="checkbox"/>Open requests automatically before start</label><label className="checkLine"><input name="autoStartActivity" type="checkbox"/>Start activity automatically at the scheduled time</label><label className="checkLine"><input name="showCountdown" type="checkbox" defaultChecked/>Show public countdown</label><button disabled={busy}><CalendarClock/>Save Schedule</button></form></details>
+        <details><summary>Reviews</summary><button onClick={loadReviews}>Refresh Reviews</button><div className="reviewList">{reviews.map(review=><article key={value(review,"reviewId")}><strong>{"★".repeat(Number(review.rating)||0)} {value(review,"guestName")||"Anonymous guest"}</strong><p>{value(review,"comment")||"No comment"}</p><small>{value(review,"createdAt")}</small><div><button onClick={()=>reviewAction(value(review,"reviewId"),"archive")}>Archive</button><button onClick={()=>reviewAction(value(review,"reviewId"),"delete")}>Delete</button></div></article>)}</div></details>
+      </div>}
     </section>
 
     {user.role==="superhost"&&<section className="adminStack">
-      <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Independent Sheets</h2><p>Creating a hotel automatically creates its own spreadsheet in the Superhost’s Google Drive. Creating a user never creates a spreadsheet.</p></div></div>
-        <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel + Sheet</button></form>
-        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a><a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";let confirmHotelName="";if(!inactive){confirmHotelName=window.prompt(`Type ${value(item,"name")} exactly to delete this hotel:`,"")||"";if(confirmHotelName!==value(item,"name"))return;}await run(inactive?"Hotel restored.":"Hotel deleted and recoverable.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive",confirmHotelName}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Restore":"Delete"}</button></div></article>)}</div>
+      <section className="hostCard"><div className="sectionTitle"><ShieldCheck/><div><h2>Fast Backend · Cloudflare D1</h2><p>Import and validate first. Activation switches the live app only after the data is ready; rollback first synchronizes every pending change to the Sheets standby.</p></div></div><div className="activityStrip"><div><small>MODE</small><strong>{d1Mode}</strong></div><div><small>MIGRATION</small><strong>{d1Migration}</strong></div><div><small>BACKUP PENDING</small><strong>{value(d1Backup,"pending")||"0"}</strong></div></div><div className="activityButtons"><button disabled={busy} onClick={()=>migrationAction("d1Status","D1 status refreshed.")}>Check Status</button><button disabled={busy||d1Mode==="d1_primary"} onClick={()=>migrationAction("d1Prepare","Existing data imported and validated in D1.")}>Import & Validate</button><button disabled={busy||d1Migration!=="ready"||d1Mode==="d1_primary"} onClick={()=>migrationAction("d1Activate","D1 is now the primary backend.")}>Activate D1</button><button disabled={busy||d1Mode!=="d1_primary"} onClick={()=>migrationAction("d1BackupNow","Backup synchronized.")}>Backup Now</button><button disabled={busy||d1Mode!=="d1_primary"} onClick={()=>migrationAction("d1Rollback","Returned to Apps Script.")}>Rollback</button></div></section>
+      <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Permanent Links</h2><p>D1 stores live data for instant response. Existing Google Sheets remain available and receive the asynchronous backup log.</p></div></div>
+        <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel</button></form>
+        <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a>{value(item,"dataSheetId")&&<a href={`https://docs.google.com/spreadsheets/d/${value(item,"dataSheetId")}/edit`} target="_blank" rel="noreferrer"><ExternalLink/>Hotel Sheet</a>}{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";let confirmHotelName="";if(!inactive){confirmHotelName=window.prompt(`Type ${value(item,"name")} exactly to delete this hotel:`,"")||"";if(confirmHotelName!==value(item,"name"))return;}await run(inactive?"Hotel restored.":"Hotel deleted and recoverable.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive",confirmHotelName}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Restore":"Delete"}</button></div></article>)}</div>
       </section>
       <div className="adminColumns">
         <section className="hostCard"><div className="sectionTitle"><MapPin/><div><h2>Venues</h2><p>Add physical locations inside a hotel.</p></div></div><form onSubmit={createVenue}><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue name<input name="name" required/></label><button disabled={busy}><Plus/>Create Venue</button></form></section>
-        <section className="hostCard"><div className="sectionTitle"><CalendarClock/><div><h2>Activities</h2><p>Create an activity and choose whether guests can request songs in Español, English, or both.</p></div></div><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)}>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select name="venueId">{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><div className="hostGrid two"><label className="checkLine"><input name="languageEs" type="checkbox" defaultChecked/>Español</label><label className="checkLine"><input name="languageEn" type="checkbox" defaultChecked/>English</label></div><button disabled={busy||!activityVenues.length}><Plus/>Create Activity</button></form><div className="entityList compact">{adminActivities.filter(item=>value(item,"status")!=="inactive").map(item=>{const languages=activityLanguages(item);return <article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>{adminHotels.find(hotel=>value(hotel,"hotelId")===value(item,"hotelId"))?.name||"Hotel"}</small><form className="inlineForm" onSubmit={event=>updateActivityLanguages(event,item)}><label className="checkLine"><input name="languageEs" type="checkbox" defaultChecked={languages.includes("es")}/>Español</label><label className="checkLine"><input name="languageEn" type="checkbox" defaultChecked={languages.includes("en")}/>English</label><button disabled={busy}>Save Languages</button></form></div></article>;})}</div></section>
+        <section className="hostCard"><div className="sectionTitle"><CalendarClock/><div><h2>Activities</h2><p>Create, edit or recover activities. Advanced options stay folded until needed.</p></div></div>
+          <details><summary>Create activity</summary><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)}>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select name="venueId">{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><fieldset><legend>Guest languages</legend><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked/>{label}</label>)}</div></fieldset><button disabled={busy||!activityVenues.length}><Plus/>Create Activity</button></form></details>
+          <div className="entityList compact">{adminActivities.filter(item=>value(item,"status")!=="inactive").map(item=>{const languages=activityLanguages(item);return <article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>{adminHotels.find(hotel=>value(hotel,"hotelId")===value(item,"hotelId"))?.name||"Hotel"} · {languages.length} languages</small><details><summary>Edit</summary><form onSubmit={event=>updateActivityRecord(event,item)}><label>Name<input name="name" defaultValue={value(item,"name")} required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" min="15" defaultValue={Math.max(15,Number(item.defaultDurationSeconds||7200)/60)}/></label><label>Transition seconds<input name="transitionSeconds" type="number" min="0" max="900" defaultValue={Number(item.defaultTransitionSeconds??30)}/></label></div><button disabled={busy}>Save Activity</button></form><form onSubmit={event=>updateActivityLanguages(event,item)}><fieldset><legend>Guest languages</legend><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={languages.includes(code)}/>{label}</label>)}</div></fieldset><button disabled={busy}>Save Languages</button></form><button className="dangerAction" disabled={busy} onClick={()=>void setActivityStatus(item,"inactive")}>Delete Activity</button></details></div></article>;})}</div>
+          {adminActivities.some(item=>value(item,"status")==="inactive")&&<details><summary>Deleted activities</summary><div className="entityList compact">{adminActivities.filter(item=>value(item,"status")==="inactive").map(item=><article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>Inactive · recoverable</small></div><button disabled={busy} onClick={()=>void setActivityStatus(item,"active")}>Restore</button></article>)}</div></details>}
+        </section>
       </div>
       <div className="adminColumns">
-        <section className="hostCard"><div className="sectionTitle"><UserPlus/><div><h2>Host Users</h2><p>Create permanent credentials, edit usernames, or replace a password. Password values are never readable after saving.</p></div></div><form onSubmit={createHost}><label>Display name<input name="displayName" required/></label><label>Username<input name="username" required/></label><label>Email (optional)<input name="email" type="email"/></label><label>Permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}><UserPlus/>Create Host</button></form><div className="entityList compact">{adminUsers.map(item=><article key={item.userId}><div><form onSubmit={event=>updateHost(event,item.userId)}><label>Display name<input name="displayName" defaultValue={item.displayName} required/></label><label>Username<input name="username" defaultValue={item.username} required/></label><label>Email<input name="email" type="email" defaultValue={value(item,"email")}/></label><small>Status: {value(item,"status")||"—"} · Last sign-in: {value(item,"lastLoginAt")||"—"}</small><small>Password last changed: {value(item,"passwordUpdatedAt")||"—"}</small><button disabled={busy}>Save User</button></form><form onSubmit={event=>setHostPassword(event,item.userId)}><label>New permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}>Replace Password</button></form></div><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm("Deactivate this host and revoke all sessions and devices?"))return;await run(inactive?"Host activated.":"Host deactivated.",()=>hostApi({action:"updateHost",userId:item.userId,status:inactive?"active":"inactive"}));await refreshAdmin();}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></article>)}</div></section>
-        <section className="hostCard"><div className="sectionTitle"><Users/><div><h2>Assignments</h2><p>Assign a host to one hotel. Server-side isolation remains enforced.</p></div></div><form onSubmit={assignHost}><label>User<select name="userId">{adminUsers.filter(item=>value(item,"status")!=="inactive").map(item=><option key={item.userId} value={item.userId}>{item.displayName} ({item.username})</option>)}</select></label><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Permission preset<select name="permissionPreset" defaultValue="operator"><option value="operator">Activity Operator</option><option value="manager">Hotel Manager</option><option value="viewer">Read Only</option></select></label><button disabled={busy}><Building2/>Create Assignment</button></form><div className="entityList compact">{adminAssignments.filter(item=>value(item,"status")==="active").map(item=><article key={value(item,"assignmentId")}><div><strong>{adminUsers.find(userItem=>userItem.userId===value(item,"userId"))?.displayName||"Host"}</strong><small>{adminHotels.find(hotelItem=>value(hotelItem,"hotelId")===value(item,"hotelId"))?.name||"Hotel"}</small></div><button onClick={async()=>{if(!window.confirm("Revoke this assignment?"))return;await run("Assignment revoked.",()=>hostApi({action:"revokeAssignment",assignmentId:value(item,"assignmentId")}));await refreshAdmin();}}>Revoke</button></article>)}</div></section>
+        <section className="hostCard"><div className="sectionTitle"><UserPlus/><div><h2>Users and Superhosts</h2><p>Create permanent Host or Superhost accounts. Stored passwords remain one-way hashed.</p></div></div><details><summary>Create user</summary><form onSubmit={createHost}><label>Role<select name="role" defaultValue="host"><option value="host">Host</option><option value="superhost">Superhost</option></select></label><label>Display name<input name="displayName" required/></label><label>Username<input name="username" required/></label><label>Email (optional)<input name="email" type="email"/></label><label>Permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}><UserPlus/>Create User</button></form></details><div className="entityList compact">{adminUsers.map(item=><article key={item.userId}><div><strong>{item.displayName}</strong><small>{item.role} · {value(item,"status")||"—"} · Last sign-in: {value(item,"lastLoginAt")||"—"}</small><details><summary>Manage account</summary><form onSubmit={event=>updateHost(event,item.userId)}><label>Display name<input name="displayName" defaultValue={item.displayName} required/></label><label>Username<input name="username" defaultValue={item.username} required/></label><label>Email<input name="email" type="email" defaultValue={value(item,"email")}/></label><small>Password last changed: {value(item,"passwordUpdatedAt")||"—"}</small><button disabled={busy}>Save User</button></form><form onSubmit={event=>setHostPassword(event,item.userId)}><label>New permanent password<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required/></label><button disabled={busy}>Replace Password</button></form><button onClick={async()=>{const inactive=value(item,"status")==="inactive";if(!inactive&&!window.confirm(`Deactivate this ${item.role} and revoke all sessions and devices?`))return;await run(inactive?"User activated.":"User deactivated.",()=>hostApi({action:"updateHost",userId:item.userId,status:inactive?"active":"inactive"}));await refreshAdmin();}}>{value(item,"status")==="inactive"?"Activate":"Deactivate"}</button></details></div></article>)}</div></section>
+        <section className="hostCard"><div className="sectionTitle"><Users/><div><h2>Assignments</h2><p>Assignments apply only to Host accounts; Superhosts already have global access.</p></div></div><details><summary>Create assignment</summary><form onSubmit={assignHost}><label>User<select name="userId">{assignableUsers.map(item=><option key={item.userId} value={item.userId}>{item.displayName} ({item.username})</option>)}</select></label><label>Hotel<select name="hotelId">{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Permission preset<select name="permissionPreset" defaultValue="operator"><option value="operator">Activity Operator</option><option value="manager">Hotel Manager</option><option value="viewer">Read Only</option></select></label><button disabled={busy||!assignableUsers.length}><Building2/>Create Assignment</button></form></details><div className="entityList compact">{adminAssignments.filter(item=>value(item,"status")==="active").map(item=><article key={value(item,"assignmentId")}><div><strong>{adminUsers.find(userItem=>userItem.userId===value(item,"userId"))?.displayName||"Host"}</strong><small>{adminHotels.find(hotelItem=>value(hotelItem,"hotelId")===value(item,"hotelId"))?.name||"Hotel"}</small></div><button onClick={async()=>{if(!window.confirm("Revoke this assignment?"))return;await run("Assignment revoked.",()=>hostApi({action:"revokeAssignment",assignmentId:value(item,"assignmentId")}));await refreshAdmin();}}>Revoke</button></article>)}</div></section>
       </div>
       <div className="adminColumns">
-        <section className="hostCard"><div className="sectionTitle"><ShieldCheck/><div><h2>Hotel Branding and Public Experience</h2><p>Optional modules stay disabled unless you enable them here.</p></div></div><form key={`${hotelId}-${value(currentBranding,"updatedAt")}`} onSubmit={saveBranding}><div className="hostGrid two"><label>Team display name<input name="teamDisplayName" defaultValue={value(currentBranding,"teamDisplayName")}/></label><label>Team type<input name="teamType" defaultValue={value(currentBranding,"teamType")}/></label></div><label>Tagline<input name="tagline" defaultValue={value(currentBranding,"tagline")}/></label><div className="hostGrid two"><label>Hotel logo URL<input name="hotelLogoUrl" type="url" defaultValue={value(currentBranding,"hotelLogoUrl")}/></label><label>Team logo URL<input name="teamLogoUrl" type="url" defaultValue={value(currentBranding,"teamLogoUrl")}/></label></div><div className="hostGrid three"><label>Primary color<input name="primaryColor" type="color" defaultValue={value(currentBranding,"primaryColor")||"#ff2d95"}/></label><label>Secondary color<input name="secondaryColor" type="color" defaultValue={value(currentBranding,"secondaryColor")||"#8b3dff"}/></label><label>Accent color<input name="accentColor" type="color" defaultValue={value(currentBranding,"accentColor")||"#00c8ff"}/></label></div><label>Welcome message<input name="welcomeMessage" defaultValue={value(currentBranding,"welcomeMessage")}/></label><label>Live title<input name="inProgressTitle" defaultValue={value(currentBranding,"inProgressTitle")}/></label><label>Live message<input name="inProgressMessage" defaultValue={value(currentBranding,"inProgressMessage")}/></label><label>Finished message<input name="activityFinishedMessage" defaultValue={value(currentBranding,"activityFinishedMessage")}/></label><label>Upcoming activity message<input name="upcomingActivityMessage" defaultValue={value(currentBranding,"upcomingActivityMessage")}/></label><label>Review invitation<input name="reviewInvitationMessage" defaultValue={value(currentBranding,"reviewInvitationMessage")}/></label><div className="hostGrid two"><label>External review provider<input name="externalReviewProvider" defaultValue={value(currentBranding,"externalReviewProvider")}/></label><label>External review URL<input name="externalReviewUrl" type="url" defaultValue={value(currentBranding,"externalReviewUrl")}/></label></div>{[["showHotelName","Show hotel name"],["showHotelLogo","Show hotel logo"],["showTeamIdentity","Show team identity"],["showActivityDetails","Show activity details"],["showCountdown","Show countdown"],["showNextActivity","Show next activity"],["showAddToCalendar","Show Add to Calendar"],["showInternalRating","Offer internal review"],["showExternalReview","Show external review link"],["showRemindMe","Offer Remind Me"],["offerFollowUp","Offer one review follow-up"]].map(([name,label])=><label className="checkLine" key={name}><input name={name} type="checkbox" defaultChecked={currentBranding[name]===true||String(currentBranding[name])==="true"}/>{label}</label>)}<button disabled={busy}>Save Guest Experience</button></form></section>
+        <section className="hostCard"><div className="sectionTitle"><ShieldCheck/><div><h2>Hotel Branding and Public Experience</h2><p>Messages translate once when saved and load instantly for guests.</p></div></div><form key={`${hotelId}-${value(currentBranding,"updatedAt")}`} onSubmit={saveBranding}><div className="hostGrid two"><label>Team display name<input name="teamDisplayName" defaultValue={value(currentBranding,"teamDisplayName")}/></label><label>Team type<input name="teamType" defaultValue={value(currentBranding,"teamType")}/></label></div><label>Tagline<input name="tagline" defaultValue={value(currentBranding,"tagline")}/></label><details><summary>Logos and colors</summary><div className="hostGrid two"><label>Hotel logo URL<input name="hotelLogoUrl" type="url" defaultValue={value(currentBranding,"hotelLogoUrl")}/></label><label>Team logo URL<input name="teamLogoUrl" type="url" defaultValue={value(currentBranding,"teamLogoUrl")}/></label></div><div className="hostGrid three"><label>Primary color<input name="primaryColor" type="color" defaultValue={value(currentBranding,"primaryColor")||"#ff2d95"}/></label><label>Secondary color<input name="secondaryColor" type="color" defaultValue={value(currentBranding,"secondaryColor")||"#8b3dff"}/></label><label>Accent color<input name="accentColor" type="color" defaultValue={value(currentBranding,"accentColor")||"#00c8ff"}/></label></div></details><div className="hostGrid two"><label>Original message language<select name="messageSourceLanguage" defaultValue={value(currentBranding,"messageSourceLanguage")||"en"}>{GUEST_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}</select></label><label>Translation<select name="translationMode" defaultValue={value(currentBranding,"translationMode")||"auto"}><option value="auto">Automatic · free quota only</option><option value="manual">Manual by language</option></select></label></div><small>Translation status: {value(currentBranding,"translationStatus")||"not generated"}. No paid fallback is enabled.</small>{BRANDING_MESSAGES.map(([field,label])=><label key={field}>{label}<input name={field} maxLength={300} defaultValue={value(currentBranding,field)}/></label>)}<details><summary>Manual translations by language</summary><p>Use these fields only when you select manual translation or want to override a language.</p>{GUEST_LANGUAGES.map(([code,label])=><details key={code}><summary>{label}</summary>{BRANDING_MESSAGES.map(([field,messageLabel])=><label key={field}>{messageLabel}<input name={`manual_${code}_${field}`} maxLength={300} defaultValue={currentLocalizedMessages[code]?.[field]||""}/></label>)}</details>)}</details><details><summary>Reviews and optional modules</summary><div className="hostGrid two"><label>External review provider<input name="externalReviewProvider" defaultValue={value(currentBranding,"externalReviewProvider")}/></label><label>External review URL<input name="externalReviewUrl" type="url" defaultValue={value(currentBranding,"externalReviewUrl")}/></label></div>{[["showHotelName","Show hotel name"],["showHotelLogo","Show hotel logo"],["showTeamIdentity","Show team identity"],["showActivityDetails","Show activity details"],["showCountdown","Show countdown"],["showNextActivity","Show next activity"],["showAddToCalendar","Show Add to Calendar"],["showInternalRating","Offer internal review"],["showExternalReview","Show external review link"],["showRemindMe","Offer Remind Me"],["offerFollowUp","Offer one review follow-up"]].map(([name,label])=><label className="checkLine" key={name}><input name={name} type="checkbox" defaultChecked={currentBranding[name]===true||String(currentBranding[name])==="true"}/>{label}</label>)}</details><button disabled={busy}>Save Guest Experience</button></form></section>
         <section className="hostCard"><div className="sectionTitle"><Radio/><div><h2>Bridge Devices</h2><p>Live status is reported by each authorized Bridge.</p></div></div><div className="entityList compact">{adminDevices.map(device=><article key={value(device,"deviceId")}><div><strong>{value(device,"deviceName")}</strong><small>{value(device,"status")} · Bridge {value(device,"bridgeVersion")} · VDJ {String(device.virtualDJConnected)==="true"?"online":"offline"}</small><small>Last heartbeat: {value(device,"lastHeartbeatAt")||"never"}</small></div>{value(device,"status")==="active"&&<button onClick={async()=>{await run("Device revoked.",()=>hostApi({action:"revokeDevice",deviceId:value(device,"deviceId")}));await refreshAdmin();}}>Revoke</button>}</article>)}</div><h3>Recent Audit Log</h3><div className="auditList">{auditEntries.map(entry=><div key={value(entry,"logId")}><strong>{value(entry,"action")}</strong><span>{value(entry,"createdAt")}</span></div>)}</div></section>
       </div>
     </section>}

@@ -1,21 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { backendMode, ensureD1Schema, getGuestStarD1, type JsonObject } from "@/lib/guest-star/d1-store";
+import { handleD1HostAction } from "@/lib/guest-star/d1-actions";
+import { callAppsScript, scheduleD1Backup } from "@/lib/guest-star/upstream";
 
-const APPS_SCRIPT_ENDPOINT =
-  process.env.KARAOKE_APPS_SCRIPT_URL ||
-  "https://script.google.com/macros/s/AKfycbxpUugPQJ1N3yb8uezB6fpd84CELAKtbuB2maE3HberOBGo5ObABGtN3ZfCI3UvKbLkzg/exec";
 const MAX_BODY_BYTES = 512 * 1024;
 const APPS_SCRIPT_TIMEOUT_MS = 60_000;
 
 export const dynamic = "force-dynamic";
-
-type JsonObject = Record<string, unknown>;
 
 function response(data: JsonObject, status = 200) {
   return NextResponse.json(data, {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.1.1"
+      "X-Guest-Star-Bridge-Proxy": "4.2.0"
     }
   });
 }
@@ -36,32 +34,22 @@ export async function POST(request: NextRequest) {
     return response({ ok: false, code: "ACTION_REQUIRED" }, 400);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), APPS_SCRIPT_TIMEOUT_MS);
   try {
-    const upstream = await fetch(APPS_SCRIPT_ENDPOINT, {
-      method: "POST",
-      cache: "no-store",
-      redirect: "follow",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    const text = await upstream.text();
-    if (!upstream.ok) {
-      return response({
-        ok: false,
-        error: `The Guest Star service returned ${upstream.status}. Contact the Superhost if this continues.`
-      }, 502);
+    const db = getGuestStarD1();
+    if (db) {
+      await ensureD1Schema(db);
+      if (await backendMode(db) === "d1_primary") {
+        const data = await handleD1HostAction(db, payload) || {
+          ok: false,
+          code: "D1_ACTION_NOT_IMPLEMENTED"
+        };
+        if (!["me", "activityState", "pollBridgeCommands"].includes(String(payload.action))) {
+          scheduleD1Backup(db);
+        }
+        return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);
+      }
     }
-    try {
-      return response(JSON.parse(text) as JsonObject);
-    } catch {
-      return response({
-        ok: false,
-        error: "The Guest Star service returned an invalid response. Contact the Superhost."
-      }, 502);
-    }
+    return response(await callAppsScript(payload, APPS_SCRIPT_TIMEOUT_MS));
   } catch (error) {
     return response({
       ok: false,
@@ -69,7 +57,5 @@ export async function POST(request: NextRequest) {
         ? "Guest Star took longer than 60 seconds to respond. Try again."
         : "Bridge could not reach Guest Star. Contact the Superhost if this continues."
     }, 502);
-  } finally {
-    clearTimeout(timeout);
   }
 }

@@ -2,6 +2,12 @@ import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
 import { initSuperhostPanel } from "./superhost.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
+const ACTIVITY_LANGUAGES = [
+  ["es", "#activityLanguageEs"], ["en", "#activityLanguageEn"],
+  ["fr", "#activityLanguageFr"], ["it", "#activityLanguageIt"],
+  ["de", "#activityLanguageDe"], ["ru", "#activityLanguageRu"],
+  ["pt", "#activityLanguagePt"]
+];
 const requestsEl = $("#requests");
 const noticeEl = $("#notice");
 const settingsDialog = $("#settingsDialog");
@@ -406,6 +412,10 @@ function updateStatus() {
   $("#switchActivity").classList.toggle("hidden", !authenticated);
   $("#changePasswordButton").classList.toggle("hidden", !authenticated);
   $("#logoutButton").classList.toggle("hidden", !authenticated);
+  $("#archiveQueue").disabled = !selectedActivity || !can("canArchiveQueue");
+  $("#viewPrevious").classList.toggle("hidden", !isSuperhost);
+  $("#previewGuestPage").disabled = !tenant.share?.publicUrl;
+  $("#menuLogout").classList.toggle("hidden", !authenticated);
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -1418,13 +1428,17 @@ function fillSettings() {
     try { allowedLanguages = JSON.parse(definition.allowedLanguagesJson); } catch { /* default below */ }
   }
   if (!Array.isArray(allowedLanguages) || !allowedLanguages.length) {
-    allowedLanguages = ["es", "en"];
+    allowedLanguages = ACTIVITY_LANGUAGES.map(([code]) => code);
   }
-  $("#activityLanguageEs").checked = allowedLanguages.includes("es");
-  $("#activityLanguageEn").checked = allowedLanguages.includes("en");
+  ACTIVITY_LANGUAGES.forEach(([code, selector]) => {
+    $(selector).checked = allowedLanguages.includes(code);
+  });
+  const activityPermissions = state.tenant?.permissions || {};
+  const canManageActivityLanguages = state.account?.user?.role === "superhost" ||
+    activityPermissions.all === true || activityPermissions.canChangeSchedule === true;
   $("#activityLanguageSettings").classList.toggle(
     "hidden",
-    state.account?.user?.role !== "superhost"
+    !canManageActivityLanguages
   );
   $("#settingsStartedAt").textContent = dateTime(activity.activityStartedAt);
   $("#settingsAccumulated").textContent =
@@ -1475,11 +1489,10 @@ function activitySettingsPayload() {
     autoStartEnabled: $("#autoStartEnabled").checked,
     showPublicStatus: $("#showPublicStatus").checked
   };
-  if (state.account?.user?.role === "superhost") {
-    payload.allowedLanguages = [
-      $("#activityLanguageEs").checked ? "es" : "",
-      $("#activityLanguageEn").checked ? "en" : ""
-    ].filter(Boolean);
+  const activityPermissions = state.tenant?.permissions || {};
+  if (state.account?.user?.role === "superhost" || activityPermissions.all === true || activityPermissions.canChangeSchedule === true) {
+    payload.allowedLanguages = ACTIVITY_LANGUAGES.map(([code, selector]) => $(selector).checked ? code : "")
+      .filter(Boolean);
   }
   return payload;
 }
@@ -1786,13 +1799,13 @@ $("#switchActivity").addEventListener("click", () => {
 });
 
 async function logout() {
+  if (moreDialog.open) moreDialog.close();
   if (!(await confirmAction({
     title: "Log out of this Bridge?",
     detail: "The saved session will be revoked. Local library settings will remain on this Mac.",
     confirmLabel: "Log Out"
   }))) return;
   await api("/api/auth/logout", { method: "POST", body: "{}" });
-  if (moreDialog.open) moreDialog.close();
   await refresh();
 }
 
@@ -1857,12 +1870,20 @@ window.addEventListener("guest-star:show-qr", (event) => {
 });
 $("#moreButton").addEventListener("click", () => moreDialog.showModal());
 $("#closeMore").addEventListener("click", () => moreDialog.close());
-$("#previewGuestPage").addEventListener("click", () => {
+$("#previewGuestPage").addEventListener("click", async () => {
+  moreDialog.close();
   const url = state.tenant?.share?.publicUrl;
-  if (url) openExternal(url);
+  if (url) await openExternal(url);
+  else showNotice("The public hotel page is not available yet.", true);
 });
 $("#viewPrevious").addEventListener("click", () => {
-  showNotice("Previous activity details are available from the administration view.");
+  moreDialog.close();
+  if (state.account?.user?.role === "superhost") {
+    superhostPanel.openTab("operation");
+    updateStatus();
+  } else {
+    showNotice("Activity administration is available to a Superhost.", true);
+  }
 });
 
 $("#scanButton").addEventListener("click", scan);
@@ -1931,7 +1952,7 @@ $("#settingsForm").addEventListener("submit", async (event) => {
       ? activitySettingsPayload()
       : null;
     if (selectedActivitySettings?.allowedLanguages?.length === 0) {
-      showNotice("Select Español, English, or both for this activity.", true);
+      showNotice("Select at least one guest language for this activity.", true);
       return;
     }
     await api("/api/config", { method: "POST", body: JSON.stringify(payload) });

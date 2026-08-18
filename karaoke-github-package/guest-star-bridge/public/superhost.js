@@ -1,5 +1,27 @@
 import { setLocalQrImage } from "./qr-ui.js";
 
+const GUEST_LANGUAGES = [
+  ["es", "Español"], ["en", "English"], ["fr", "Français"],
+  ["it", "Italiano"], ["de", "Deutsch"], ["ru", "Русский"], ["pt", "Português"]
+];
+const WEEKDAYS = [
+  [0, "Domingo", "Sunday"], [1, "Lunes", "Monday"],
+  [2, "Martes", "Tuesday"], [3, "Miércoles", "Wednesday"],
+  [4, "Jueves", "Thursday"], [5, "Viernes", "Friday"],
+  [6, "Sábado", "Saturday"]
+];
+const BRANDING_MESSAGES = [
+  ["welcomeMessage", "welcome"], ["activityEndingMessage", "activityEndingMessage"],
+  ["upcomingActivityMessage", "upcomingMessage"], ["reviewInvitationMessage", "reviewInvitation"],
+  ["generalReviewMessage", "generalReviewMessage"], ["beforeStartClosedTitle", "beforeStartClosedTitle"],
+  ["beforeStartClosedMessage", "beforeStartClosedMessage"], ["beforeStartOpenTitle", "beforeStartOpenTitle"],
+  ["beforeStartOpenMessage", "beforeStartOpenMessage"], ["inProgressTitle", "liveTitle"],
+  ["inProgressMessage", "liveMessage"], ["requestsClosedTitle", "requestsClosedTitle"],
+  ["requestsClosedMessage", "requestsClosedMessage"], ["activityFinishedTitle", "activityFinishedTitle"],
+  ["activityFinishedMessage", "finishedMessage"], ["noActivityTitle", "noActivityTitle"],
+  ["noActivityMessage", "noActivityMessage"]
+];
+
 const COPY = {
   es: {
     title: "Panel Superhost",
@@ -46,7 +68,9 @@ const COPY = {
     none: "No repetir",
     daily: "Diaria",
     weekly: "Semanal",
+    biweekly: "Quincenal",
     monthly: "Mensual",
+    weekdayHelp: "Días de la semana (para semanal o quincenal)",
     autoOpen: "Abrir solicitudes automáticamente",
     autoStart: "Iniciar actividad automáticamente",
     countdown: "Mostrar cuenta regresiva",
@@ -57,7 +81,10 @@ const COPY = {
     loadReviews: "Cargar reseñas",
     archive: "Archivar",
     delete: "Eliminar",
-    createHost: "Crear Host",
+    createHost: "Crear usuario",
+    role: "Rol",
+    hostRole: "Host",
+    superhostRole: "Superhost",
     displayName: "Nombre visible",
     username: "Usuario",
     email: "Correo opcional",
@@ -71,7 +98,7 @@ const COPY = {
     accountStatus: "Estado",
     showWhileTyping: "Mostrar mientras escribo",
     passwordControlHelp: "Las contraseñas no se pueden leer. El Superhost puede establecer una nueva y todas las sesiones anteriores se cerrarán.",
-    hosts: "Usuarios Host",
+    hosts: "Usuarios y Superhosts",
     activate: "Activar",
     deactivate: "Desactivar",
     assignments: "Asignaciones y permisos",
@@ -95,6 +122,17 @@ const COPY = {
     finishedMessage: "Mensaje al finalizar",
     upcomingMessage: "Mensaje de próxima actividad",
     reviewInvitation: "Invitación a reseña",
+    activityEndingMessage: "Mensaje de actividad por finalizar",
+    generalReviewMessage: "Mensaje general de reseña",
+    beforeStartClosedTitle: "Título antes de iniciar (cerrado)",
+    beforeStartClosedMessage: "Mensaje antes de iniciar (cerrado)",
+    beforeStartOpenTitle: "Título antes de iniciar (abierto)",
+    beforeStartOpenMessage: "Mensaje antes de iniciar (abierto)",
+    requestsClosedTitle: "Título de solicitudes cerradas",
+    requestsClosedMessage: "Mensaje de solicitudes cerradas",
+    activityFinishedTitle: "Título de actividad finalizada",
+    noActivityTitle: "Título sin actividad",
+    noActivityMessage: "Mensaje sin actividad",
     externalProvider: "Proveedor de reseñas externo",
     externalUrl: "Enlace de reseñas externo",
     primaryColor: "Color principal",
@@ -112,6 +150,22 @@ const COPY = {
     showRemindMe: "Ofrecer Recordarme",
     offerFollowUp: "Ofrecer seguimiento de reseña",
     saveBranding: "Guardar experiencia pública",
+    originalLanguage: "Idioma original de los mensajes",
+    translationMode: "Traducción",
+    automaticFree: "Automática · solo cuota gratuita",
+    manualByLanguage: "Manual por idioma",
+    manualTranslations: "Traducciones manuales por idioma",
+    translationHelp: "No se habilitarán cargos. Si la cuota gratuita falla, conserva las traducciones y permite editarlas aquí.",
+    translationStatus: "Estado de traducción",
+    identityOptions: "Identidad, logos y colores",
+    sourceMessages: "Mensajes originales",
+    publicOptions: "Reseñas y opciones públicas",
+    createCompact: "Crear",
+    editActivity: "Editar actividad",
+    saveActivity: "Guardar actividad",
+    deleteActivity: "Eliminar actividad",
+    restoreActivity: "Restaurar actividad",
+    deletedActivities: "Actividades eliminadas",
     addFavorite: "Agregar favorito",
     song: "Canción",
     artist: "Artista",
@@ -122,9 +176,10 @@ const COPY = {
     lastHeartbeat: "Última señal",
     audit: "Auditoría reciente",
     saved: "Cambio guardado correctamente.",
-    confirmDeactivate: "¿Desactivar este Host y revocar sus sesiones?",
+    confirmDeactivate: "¿Desactivar este usuario y revocar sus sesiones?",
     confirmRevoke: "¿Revocar este acceso?",
-    confirmDeleteReview: "¿Eliminar esta reseña? La acción quedará auditada."
+    confirmDeleteReview: "¿Eliminar esta reseña? La acción quedará auditada.",
+    confirmDeleteActivity: "¿Eliminar esta actividad? Se cancelará su agenda y podrá restaurarse después."
   },
   en: {
     title: "Superhost Panel",
@@ -171,7 +226,9 @@ const COPY = {
     none: "Do not repeat",
     daily: "Daily",
     weekly: "Weekly",
+    biweekly: "Every two weeks",
     monthly: "Monthly",
+    weekdayHelp: "Days of the week (for weekly or biweekly)",
     autoOpen: "Open requests automatically",
     autoStart: "Start activity automatically",
     countdown: "Show countdown",
@@ -182,7 +239,10 @@ const COPY = {
     loadReviews: "Load reviews",
     archive: "Archive",
     delete: "Delete",
-    createHost: "Create Host",
+    createHost: "Create user",
+    role: "Role",
+    hostRole: "Host",
+    superhostRole: "Superhost",
     displayName: "Display name",
     username: "Username",
     email: "Optional email",
@@ -196,7 +256,7 @@ const COPY = {
     accountStatus: "Status",
     showWhileTyping: "Show while typing",
     passwordControlHelp: "Passwords cannot be read. The Superhost can set a new one and all previous sessions will be signed out.",
-    hosts: "Host users",
+    hosts: "Users and Superhosts",
     activate: "Activate",
     deactivate: "Deactivate",
     assignments: "Assignments and permissions",
@@ -220,6 +280,17 @@ const COPY = {
     finishedMessage: "Finished message",
     upcomingMessage: "Upcoming activity message",
     reviewInvitation: "Review invitation",
+    activityEndingMessage: "Activity ending message",
+    generalReviewMessage: "General review message",
+    beforeStartClosedTitle: "Before-start closed title",
+    beforeStartClosedMessage: "Before-start closed message",
+    beforeStartOpenTitle: "Before-start open title",
+    beforeStartOpenMessage: "Before-start open message",
+    requestsClosedTitle: "Requests-closed title",
+    requestsClosedMessage: "Requests-closed message",
+    activityFinishedTitle: "Finished activity title",
+    noActivityTitle: "No-activity title",
+    noActivityMessage: "No-activity message",
     externalProvider: "External review provider",
     externalUrl: "External review URL",
     primaryColor: "Primary color",
@@ -237,6 +308,22 @@ const COPY = {
     showRemindMe: "Offer Remind Me",
     offerFollowUp: "Offer review follow-up",
     saveBranding: "Save public experience",
+    originalLanguage: "Original message language",
+    translationMode: "Translation",
+    automaticFree: "Automatic · free quota only",
+    manualByLanguage: "Manual by language",
+    manualTranslations: "Manual translations by language",
+    translationHelp: "No charges are enabled. If the free quota fails, existing translations remain editable here.",
+    translationStatus: "Translation status",
+    identityOptions: "Identity, logos and colors",
+    sourceMessages: "Original messages",
+    publicOptions: "Reviews and public options",
+    createCompact: "Create",
+    editActivity: "Edit activity",
+    saveActivity: "Save activity",
+    deleteActivity: "Delete activity",
+    restoreActivity: "Restore activity",
+    deletedActivities: "Deleted activities",
     addFavorite: "Add favorite",
     song: "Song",
     artist: "Artist",
@@ -247,9 +334,10 @@ const COPY = {
     lastHeartbeat: "Last heartbeat",
     audit: "Recent audit log",
     saved: "The change was saved successfully.",
-    confirmDeactivate: "Deactivate this Host and revoke their sessions?",
+    confirmDeactivate: "Deactivate this user and revoke their sessions?",
     confirmRevoke: "Revoke this access?",
-    confirmDeleteReview: "Delete this review? The action will be audited."
+    confirmDeleteReview: "Delete this review? The action will be audited.",
+    confirmDeleteActivity: "Delete this activity? Its schedule will be cancelled and the activity can be restored later."
   }
 };
 
@@ -276,9 +364,28 @@ function activityLanguages(activity) {
     const parsed = JSON.parse(value(activity, "allowedLanguagesJson") || "[]");
     if (Array.isArray(parsed) && parsed.length) return parsed;
   } catch {
-    // Older activities have no language field and default to both languages.
+    // Older activities have no language field and default to the full catalog.
   }
-  return ["es", "en"];
+  return GUEST_LANGUAGES.map(([code]) => code);
+}
+
+function languageCheckboxes(selected = GUEST_LANGUAGES.map(([code]) => code)) {
+  return GUEST_LANGUAGES.map(([code, label]) =>
+    `<label class="check-row"><input name="language_${code}" type="checkbox"${selected.includes(code) ? " checked" : ""} />${escapeHtml(label)}</label>`
+  ).join("");
+}
+
+function selectedFormLanguages(form) {
+  return GUEST_LANGUAGES.map(([code]) => form.elements[`language_${code}`]?.checked ? code : "").filter(Boolean);
+}
+
+function parsedLocalizedMessages(branding) {
+  try {
+    const parsed = JSON.parse(value(branding, "localizedMessagesJson") || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function options(items, idField, label, selected = "") {
@@ -426,25 +533,39 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     const hotels = (admin.hotels || []).filter((hotel) => value(hotel, "status") === "active");
     const venues = (admin.venues || []).filter((venue) => value(venue, "status") === "active");
     const activities = (admin.activities || []).filter((activity) => value(activity, "status") !== "inactive");
+    const deletedActivities = (admin.activities || []).filter((activity) => value(activity, "status") === "inactive");
     const hotelNames = new Map(hotels.map((hotel) => [value(hotel, "hotelId"), value(hotel, "name")]));
     const venueNames = new Map(venues.map((venue) => [value(venue, "venueId"), value(venue, "name")]));
     content.innerHTML = `<div class="superhost-grid three">
-      <section class="superhost-card"><h3>${escapeHtml(text().createVenue)}</h3><form id="createVenueForm" class="superhost-form"><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().venueName)}<input name="name" required /></label><button class="button primary">${escapeHtml(text().createVenue)}</button></form></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().createActivity)}</h3><form id="createActivityForm" class="superhost-form"><label>${escapeHtml(text().venues)}<select name="venueId" required>${options(venues, "venueId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().activityName)}<input name="name" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="30" /></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().activityLanguages)}</legend><label class="check-row"><input name="languageEs" type="checkbox" checked />Español</label><label class="check-row"><input name="languageEn" type="checkbox" checked />English</label></fieldset><button class="button primary">${escapeHtml(text().createActivity)}</button></form></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().schedule)}</h3><form id="scheduleForm" class="superhost-form"><label>${escapeHtml(text().activities)}<select name="activityId" required>${options(activities, "activityId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${venueNames.get(value(item, "venueId")) || "Venue"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().scheduledStart)}<input name="scheduledLocal" type="datetime-local" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().openingLead)}<input name="openingLeadMinutes" type="number" min="0" value="60" /></label><label>${escapeHtml(text().recurrence)}<select name="recurrenceType"><option value="none">${escapeHtml(text().none)}</option><option value="daily">${escapeHtml(text().daily)}</option><option value="weekly">${escapeHtml(text().weekly)}</option><option value="monthly">${escapeHtml(text().monthly)}</option></select></label><label class="check-row"><input name="autoOpenRequests" type="checkbox" />${escapeHtml(text().autoOpen)}</label><label class="check-row"><input name="autoStartActivity" type="checkbox" />${escapeHtml(text().autoStart)}</label><label class="check-row"><input name="showCountdown" type="checkbox" checked />${escapeHtml(text().countdown)}</label><button class="button primary">${escapeHtml(text().saveSchedule)}</button></form></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().createVenue)}</h3><details><summary>${escapeHtml(text().createCompact)}</summary><form id="createVenueForm" class="superhost-form"><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().venueName)}<input name="name" required /></label><button class="button primary">${escapeHtml(text().createVenue)}</button></form></details></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().createActivity)}</h3><details><summary>${escapeHtml(text().createCompact)}</summary><form id="createActivityForm" class="superhost-form"><label>${escapeHtml(text().venues)}<select name="venueId" required>${options(venues, "venueId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().activityName)}<input name="name" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="30" /></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().activityLanguages)}</legend>${languageCheckboxes()}</fieldset><button class="button primary">${escapeHtml(text().createActivity)}</button></form></details></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().schedule)}</h3><details><summary>${escapeHtml(text().saveSchedule)}</summary><form id="scheduleForm" class="superhost-form"><label>${escapeHtml(text().activities)}<select name="activityId" required>${options(activities, "activityId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${venueNames.get(value(item, "venueId")) || "Venue"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().scheduledStart)}<input name="scheduledLocal" type="datetime-local" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().openingLead)}<input name="openingLeadMinutes" type="number" min="0" value="60" /></label><label>${escapeHtml(text().recurrence)}<select name="recurrenceType"><option value="none">${escapeHtml(text().none)}</option><option value="daily">${escapeHtml(text().daily)}</option><option value="weekly">${escapeHtml(text().weekly)}</option><option value="biweekly">${escapeHtml(text().biweekly)}</option><option value="monthly">${escapeHtml(text().monthly)}</option></select></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().weekdayHelp)}</legend>${WEEKDAYS.map(([day, es, en]) => `<label class="check-row"><input name="weekday_${day}" type="checkbox" />${escapeHtml(language === "es" ? es : en)}</label>`).join("")}</fieldset><label class="check-row"><input name="autoOpenRequests" type="checkbox" />${escapeHtml(text().autoOpen)}</label><label class="check-row"><input name="autoStartActivity" type="checkbox" />${escapeHtml(text().autoStart)}</label><label class="check-row"><input name="showCountdown" type="checkbox" checked />${escapeHtml(text().countdown)}</label><button class="button primary">${escapeHtml(text().saveSchedule)}</button></form></details></section>
     </div>
-    <div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().venues)}</h3><div class="superhost-list">${venues.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().activities)}</h3><div class="superhost-list">${activities.map((item) => { const languages = activityLanguages(item); return `<article class="superhost-entity activity-language-card"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")} · ${escapeHtml(venueNames.get(value(item, "venueId")) || "")}</small></div><form class="activity-language-form" data-activity-languages="${escapeHtml(value(item, "activityId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}"><span>${escapeHtml(text().activityLanguages)}</span><label class="check-row"><input name="languageEs" type="checkbox"${languages.includes("es") ? " checked" : ""} />Español</label><label class="check-row"><input name="languageEn" type="checkbox"${languages.includes("en") ? " checked" : ""} />English</label><button>${escapeHtml(text().saveLanguages)}</button></form></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().schedules)}</h3><div class="superhost-list">${(admin.schedules || []).map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(new Date(value(item, "scheduledStartAt")).toLocaleString(language === "es" ? "es-DO" : "en-US"))}</strong><small>${escapeHtml(value(item, "recurrenceType"))} · ${escapeHtml(value(item, "status"))}</small></div>${value(item, "status") === "active" ? `<button data-action="cancel-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}" data-activity="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().cancel)}</button>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().reviews)}</h3><label>${escapeHtml(text().activities)}<select id="reviewActivity">${options(activities, "activityId", (item) => value(item, "name"), selectedReviewActivity)}</select></label><button class="button ghost" data-action="load-reviews">${escapeHtml(text().loadReviews)}</button><div class="superhost-list">${reviews.map((review) => `<article class="superhost-entity"><div><strong>${"★".repeat(Math.max(0, Number(review.rating) || 0))} ${escapeHtml(value(review, "guestName") || (language === "es" ? "Huésped" : "Guest"))}</strong><p>${escapeHtml(value(review, "comment"))}</p></div><div><button data-action="archive-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().archive)}</button><button class="danger" data-action="delete-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().delete)}</button></div></article>`).join("")}</div></section></div>`;
+    <div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().venues)}</h3><div class="superhost-list">${venues.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().activities)}</h3><div class="superhost-list">${activities.map((item) => { const languages = activityLanguages(item); const activityId = escapeHtml(value(item, "activityId")); const transition = Number(item.defaultTransitionSeconds); return `<article class="activity-manage-card"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")} · ${escapeHtml(venueNames.get(value(item, "venueId")) || "")} · ${languages.length} ${escapeHtml(text().language)}</small></div><details><summary>${escapeHtml(text().editActivity)}</summary><form class="superhost-form" data-activity-edit="${activityId}"><label>${escapeHtml(text().activityName)}<input name="name" value="${escapeHtml(value(item, "name"))}" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="${Math.max(15, (Number(item.defaultDurationSeconds) || 7200) / 60)}" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="${Number.isFinite(transition) ? transition : 30}" /></label><button>${escapeHtml(text().saveActivity)}</button></form><form class="activity-language-form" data-activity-languages="${activityId}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}"><span>${escapeHtml(text().activityLanguages)}</span>${languageCheckboxes(languages)}<button>${escapeHtml(text().saveLanguages)}</button></form><button class="button danger" data-action="delete-activity" data-id="${activityId}">${escapeHtml(text().deleteActivity)}</button></details></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div>${deletedActivities.length ? `<details><summary>${escapeHtml(text().deletedActivities)}</summary><div class="superhost-list">${deletedActivities.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(text().deletedActivities)}</small></div><button data-action="restore-activity" data-id="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().restoreActivity)}</button></article>`).join("")}</div></details>` : ""}</section>
+      <section class="superhost-card">
+        <h3>${escapeHtml(text().schedules)}</h3>
+        <div class="superhost-list">
+          ${(admin.schedules || []).map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(new Date(value(item, "scheduledStartAt")).toLocaleString(language === "es" ? "es-DO" : "en-US"))}</strong><small>${escapeHtml(value(item, "recurrenceType"))} · ${escapeHtml(value(item, "status"))}</small></div>${value(item, "status") === "active" ? `<button data-action="cancel-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}" data-activity="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().cancel)}</button>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}
+        </div>
+        <h3>${escapeHtml(text().reviews)}</h3>
+        <label>${escapeHtml(text().activities)}<select id="reviewActivity">${options(activities, "activityId", (item) => value(item, "name"), selectedReviewActivity)}</select></label>
+        <button class="button ghost" data-action="load-reviews">${escapeHtml(text().loadReviews)}</button>
+        <div class="superhost-list">
+          ${reviews.map((review) => `<article class="superhost-entity"><div><strong>${"★".repeat(Math.max(0, Number(review.rating) || 0))} ${escapeHtml(value(review, "guestName") || (language === "es" ? "Huésped" : "Guest"))}</strong><p>${escapeHtml(value(review, "comment"))}</p></div><div><button data-action="archive-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().archive)}</button><button class="danger" data-action="delete-review" data-id="${escapeHtml(value(review, "reviewId"))}">${escapeHtml(text().delete)}</button></div></article>`).join("")}
+        </div>
+      </section>
+    </div>`;
   }
 
   function renderUsers() {
     const hotels = (admin.hotels || []).filter((hotel) => value(hotel, "status") === "active");
-    const users = (admin.users || []).filter((user) => value(user, "role") !== "superhost");
+    const users = admin.users || [];
+    const assignableUsers = users.filter((user) => value(user, "role") === "host" && value(user, "status") !== "inactive");
     const assignments = admin.assignments || [];
     const hotelNames = new Map((admin.hotels || []).map((hotel) => [value(hotel, "hotelId"), value(hotel, "name")]));
     const userNames = new Map(users.map((user) => [value(user, "userId"), value(user, "displayName")]));
-    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().createHost)}</h3><form id="createHostForm" class="superhost-form"><label>${escapeHtml(text().displayName)}<input name="displayName" required /></label><label>${escapeHtml(text().username)}<input name="username" autocomplete="off" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" /></label><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="button primary">${escapeHtml(text().createHost)}</button></form><p class="settings-help">${escapeHtml(text().passwordControlHelp)}</p><h3>${escapeHtml(text().hosts)}</h3><div class="superhost-list">${users.map((user) => { const inactive = value(user, "status") === "inactive"; const userId = escapeHtml(value(user, "userId")); return `<article class="host-account-card"><form class="host-edit-form" data-host-edit="${userId}"><label>${escapeHtml(text().displayName)}<input name="displayName" value="${escapeHtml(value(user, "displayName"))}" required /></label><label>${escapeHtml(text().username)}<input name="username" value="${escapeHtml(value(user, "username"))}" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" value="${escapeHtml(value(user, "email"))}" /></label><small>${escapeHtml(text().accountStatus)}: ${escapeHtml(value(user, "status") || "—")} · ${escapeHtml(text().lastLogin)}: ${escapeHtml(value(user, "lastLoginAt") || "—")}</small><small>${escapeHtml(text().passwordUpdated)}: ${escapeHtml(value(user, "passwordUpdatedAt") || "—")}</small><div class="superhost-actions"><button>${escapeHtml(text().saveHost)}</button><button type="button" data-action="toggle-host" data-id="${userId}" data-status="${inactive ? "active" : "inactive"}">${escapeHtml(inactive ? text().activate : text().deactivate)}</button></div></form><form class="host-password-form" data-host-password="${userId}"><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button>${escapeHtml(text().setPassword)}</button></form></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().assignments)}</h3><form id="assignmentForm" class="superhost-form"><label>${escapeHtml(text().user)}<select name="userId" required>${options(users.filter((user) => value(user, "status") !== "inactive"), "userId", (item) => `${value(item, "displayName")} (${value(item, "username")})`)}</select></label><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().preset)}<select name="preset"><option value="operator">${escapeHtml(text().operator)}</option><option value="manager">${escapeHtml(text().manager)}</option><option value="viewer">${escapeHtml(text().viewer)}</option></select></label><button class="button primary">${escapeHtml(text().assign)}</button></form><div class="superhost-list">${assignments.filter((item) => value(item, "status") === "active").map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(userNames.get(value(item, "userId")) || "Host")}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "Hotel")}</small></div><button data-action="revoke-assignment" data-id="${escapeHtml(value(item, "assignmentId"))}">${escapeHtml(text().revoke)}</button></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
+    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().hosts)}</h3><details><summary>${escapeHtml(text().createHost)}</summary><form id="createHostForm" class="superhost-form"><label>${escapeHtml(text().role)}<select name="role"><option value="host">${escapeHtml(text().hostRole)}</option><option value="superhost">${escapeHtml(text().superhostRole)}</option></select></label><label>${escapeHtml(text().displayName)}<input name="displayName" required /></label><label>${escapeHtml(text().username)}<input name="username" autocomplete="off" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" /></label><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button class="button primary">${escapeHtml(text().createHost)}</button></form></details><p class="settings-help">${escapeHtml(text().passwordControlHelp)}</p><div class="superhost-list">${users.map((user) => { const inactive = value(user, "status") === "inactive"; const userId = escapeHtml(value(user, "userId")); return `<article class="host-account-card"><div><strong>${escapeHtml(value(user, "displayName"))}</strong><small>${escapeHtml(value(user, "role"))} · ${escapeHtml(value(user, "status") || "—")} · ${escapeHtml(text().lastLogin)}: ${escapeHtml(value(user, "lastLoginAt") || "—")}</small></div><details><summary>${escapeHtml(text().edit)}</summary><form class="host-edit-form" data-host-edit="${userId}"><label>${escapeHtml(text().displayName)}<input name="displayName" value="${escapeHtml(value(user, "displayName"))}" required /></label><label>${escapeHtml(text().username)}<input name="username" value="${escapeHtml(value(user, "username"))}" required /></label><label>${escapeHtml(text().email)}<input name="email" type="email" value="${escapeHtml(value(user, "email"))}" /></label><small>${escapeHtml(text().passwordUpdated)}: ${escapeHtml(value(user, "passwordUpdatedAt") || "—")}</small><div class="superhost-actions"><button>${escapeHtml(text().saveHost)}</button><button type="button" data-action="toggle-host" data-id="${userId}" data-status="${inactive ? "active" : "inactive"}">${escapeHtml(inactive ? text().activate : text().deactivate)}</button></div></form><form class="host-password-form" data-host-password="${userId}"><label>${escapeHtml(text().password)}<input name="password" type="password" autocomplete="new-password" minlength="12" required /></label><label>${escapeHtml(text().confirmPassword)}<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required /></label><button>${escapeHtml(text().setPassword)}</button></form></details></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().assignments)}</h3><details><summary>${escapeHtml(text().assign)}</summary><form id="assignmentForm" class="superhost-form"><label>${escapeHtml(text().user)}<select name="userId" required>${options(assignableUsers, "userId", (item) => `${value(item, "displayName")} (${value(item, "username")})`)}</select></label><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().preset)}<select name="preset"><option value="operator">${escapeHtml(text().operator)}</option><option value="manager">${escapeHtml(text().manager)}</option><option value="viewer">${escapeHtml(text().viewer)}</option></select></label><button class="button primary"${assignableUsers.length ? "" : " disabled"}>${escapeHtml(text().assign)}</button></form></details><div class="superhost-list">${assignments.filter((item) => value(item, "status") === "active").map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(userNames.get(value(item, "userId")) || "Host")}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "Hotel")}</small></div><button data-action="revoke-assignment" data-id="${escapeHtml(value(item, "assignmentId"))}">${escapeHtml(text().revoke)}</button></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
     content.querySelectorAll("#createHostForm, .host-password-form").forEach((form) => {
       const label = document.createElement("label");
       label.className = "check-row";
@@ -464,7 +585,21 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       "showCountdown", "showNextActivity", "showAddToCalendar", "showInternalRating",
       "showExternalReview", "showRemindMe", "offerFollowUp"
     ];
-    content.innerHTML = `<section class="superhost-card"><h3>${escapeHtml(text().branding)}</h3><label>${escapeHtml(text().hotel)}<select id="brandingHotel">${options(hotels, "hotelId", (item) => value(item, "name"), selectedBrandingHotel)}</select></label><form id="brandingForm" class="superhost-form wide"><div class="superhost-grid two"><label>${escapeHtml(text().teamName)}<input name="teamDisplayName" value="${escapeHtml(value(branding, "teamDisplayName"))}" /></label><label>${escapeHtml(text().teamType)}<input name="teamType" value="${escapeHtml(value(branding, "teamType"))}" /></label></div><label>${escapeHtml(text().tagline)}<input name="tagline" value="${escapeHtml(value(branding, "tagline"))}" /></label><div class="superhost-grid two"><label>${escapeHtml(text().hotelLogo)}<input name="hotelLogoUrl" type="url" value="${escapeHtml(value(branding, "hotelLogoUrl"))}" /></label><label>${escapeHtml(text().teamLogo)}<input name="teamLogoUrl" type="url" value="${escapeHtml(value(branding, "teamLogoUrl"))}" /></label></div><div class="superhost-grid three"><label>${escapeHtml(text().primaryColor)}<input name="primaryColor" type="color" value="${escapeHtml(value(branding, "primaryColor") || "#ff2d95")}" /></label><label>${escapeHtml(text().secondaryColor)}<input name="secondaryColor" type="color" value="${escapeHtml(value(branding, "secondaryColor") || "#8b3dff")}" /></label><label>${escapeHtml(text().accentColor)}<input name="accentColor" type="color" value="${escapeHtml(value(branding, "accentColor") || "#00c8ff")}" /></label></div><label>${escapeHtml(text().welcome)}<input name="welcomeMessage" value="${escapeHtml(value(branding, "welcomeMessage"))}" /></label><label>${escapeHtml(text().liveTitle)}<input name="inProgressTitle" value="${escapeHtml(value(branding, "inProgressTitle"))}" /></label><label>${escapeHtml(text().liveMessage)}<input name="inProgressMessage" value="${escapeHtml(value(branding, "inProgressMessage"))}" /></label><label>${escapeHtml(text().finishedMessage)}<input name="activityFinishedMessage" value="${escapeHtml(value(branding, "activityFinishedMessage"))}" /></label><label>${escapeHtml(text().upcomingMessage)}<input name="upcomingActivityMessage" value="${escapeHtml(value(branding, "upcomingActivityMessage"))}" /></label><label>${escapeHtml(text().reviewInvitation)}<input name="reviewInvitationMessage" value="${escapeHtml(value(branding, "reviewInvitationMessage"))}" /></label><div class="superhost-grid two"><label>${escapeHtml(text().externalProvider)}<input name="externalReviewProvider" value="${escapeHtml(value(branding, "externalReviewProvider"))}" /></label><label>${escapeHtml(text().externalUrl)}<input name="externalReviewUrl" type="url" value="${escapeHtml(value(branding, "externalReviewUrl"))}" /></label></div><div class="checkbox-grid">${checkboxes.map((name) => `<label class="check-row"><input name="${name}" type="checkbox"${checked(branding[name]) ? " checked" : ""} />${escapeHtml(text()[name])}</label>`).join("")}</div><button class="button primary">${escapeHtml(text().saveBranding)}</button></form></section>`;
+    const localized = parsedLocalizedMessages(branding);
+    const messageFields = BRANDING_MESSAGES.map(([field, label]) =>
+      `<label>${escapeHtml(text()[label])}<input name="${field}" maxlength="300" value="${escapeHtml(value(branding, field))}" /></label>`
+    ).join("");
+    const manualFields = GUEST_LANGUAGES.map(([code, languageLabel]) =>
+      `<details><summary>${escapeHtml(languageLabel)}</summary><div class="superhost-form compact-fields">${BRANDING_MESSAGES.map(([field, label]) => `<label>${escapeHtml(text()[label])}<input name="manual_${code}_${field}" maxlength="300" value="${escapeHtml(localized[code]?.[field] || "")}" /></label>`).join("")}</div></details>`
+    ).join("");
+    content.innerHTML = `<section class="superhost-card"><h3>${escapeHtml(text().branding)}</h3><label>${escapeHtml(text().hotel)}<select id="brandingHotel">${options(hotels, "hotelId", (item) => value(item, "name"), selectedBrandingHotel)}</select></label><form id="brandingForm" class="superhost-form wide">
+      <details><summary>${escapeHtml(text().identityOptions)}</summary><div class="superhost-form compact-fields"><div class="superhost-grid two"><label>${escapeHtml(text().teamName)}<input name="teamDisplayName" value="${escapeHtml(value(branding, "teamDisplayName"))}" /></label><label>${escapeHtml(text().teamType)}<input name="teamType" value="${escapeHtml(value(branding, "teamType"))}" /></label></div><label>${escapeHtml(text().tagline)}<input name="tagline" value="${escapeHtml(value(branding, "tagline"))}" /></label><div class="superhost-grid two"><label>${escapeHtml(text().hotelLogo)}<input name="hotelLogoUrl" type="url" value="${escapeHtml(value(branding, "hotelLogoUrl"))}" /></label><label>${escapeHtml(text().teamLogo)}<input name="teamLogoUrl" type="url" value="${escapeHtml(value(branding, "teamLogoUrl"))}" /></label></div><div class="superhost-grid three"><label>${escapeHtml(text().primaryColor)}<input name="primaryColor" type="color" value="${escapeHtml(value(branding, "primaryColor") || "#ff2d95")}" /></label><label>${escapeHtml(text().secondaryColor)}<input name="secondaryColor" type="color" value="${escapeHtml(value(branding, "secondaryColor") || "#8b3dff")}" /></label><label>${escapeHtml(text().accentColor)}<input name="accentColor" type="color" value="${escapeHtml(value(branding, "accentColor") || "#00c8ff")}" /></label></div></div></details>
+      <div class="superhost-grid two"><label>${escapeHtml(text().originalLanguage)}<select name="messageSourceLanguage">${GUEST_LANGUAGES.map(([code, label]) => `<option value="${code}"${value(branding, "messageSourceLanguage") === code || (!value(branding, "messageSourceLanguage") && code === "en") ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label><label>${escapeHtml(text().translationMode)}<select name="translationMode"><option value="auto"${value(branding, "translationMode") !== "manual" ? " selected" : ""}>${escapeHtml(text().automaticFree)}</option><option value="manual"${value(branding, "translationMode") === "manual" ? " selected" : ""}>${escapeHtml(text().manualByLanguage)}</option></select></label></div>
+      <small>${escapeHtml(text().translationStatus)}: ${escapeHtml(value(branding, "translationStatus") || "—")}. ${escapeHtml(text().translationHelp)}</small>
+      <details open><summary>${escapeHtml(text().sourceMessages)}</summary><div class="superhost-form compact-fields">${messageFields}</div></details>
+      <details><summary>${escapeHtml(text().manualTranslations)}</summary><p class="settings-help">${escapeHtml(text().translationHelp)}</p>${manualFields}</details>
+      <details><summary>${escapeHtml(text().publicOptions)}</summary><div class="superhost-form compact-fields"><div class="superhost-grid two"><label>${escapeHtml(text().externalProvider)}<input name="externalReviewProvider" value="${escapeHtml(value(branding, "externalReviewProvider"))}" /></label><label>${escapeHtml(text().externalUrl)}<input name="externalReviewUrl" type="url" value="${escapeHtml(value(branding, "externalReviewUrl"))}" /></label></div><div class="checkbox-grid">${checkboxes.map((name) => `<label class="check-row"><input name="${name}" type="checkbox"${checked(branding[name]) ? " checked" : ""} />${escapeHtml(text()[name])}</label>`).join("")}</div></div></details>
+      <button class="button primary">${escapeHtml(text().saveBranding)}</button></form></section>`;
   }
 
   function renderFavorites() {
@@ -473,7 +608,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       selectedFavoriteHotel = value(hotels[0], "hotelId");
     }
     const favorites = admin.localFavoritesByHotel?.[selectedFavoriteHotel] || [];
-    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().addFavorite)}</h3><label>${escapeHtml(text().hotel)}<select id="favoriteHotel">${options(hotels, "hotelId", (item) => value(item, "name"), selectedFavoriteHotel)}</select></label><form id="favoriteForm" class="superhost-form"><label>${escapeHtml(text().song)}<input name="song" required /></label><label>${escapeHtml(text().artist)}<input name="artist" required /></label><label>${escapeHtml(text().language)}<select name="language"><option value="Español">Español</option><option value="English">English</option></select></label><button class="button primary">${escapeHtml(text().addFavorite)}</button></form></section><section class="superhost-card"><h3>${escapeHtml(text().favoriteList)}</h3><div class="superhost-list">${favorites.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(item.song)}</strong><small>${escapeHtml(item.artist)} · ${escapeHtml(item.language)}</small></div><div><button data-action="edit-favorite" data-id="${escapeHtml(item.favoriteId)}">${escapeHtml(text().edit)}</button><button class="danger" data-action="delete-favorite" data-id="${escapeHtml(item.favoriteId)}">${escapeHtml(text().delete)}</button></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
+    content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().addFavorite)}</h3><label>${escapeHtml(text().hotel)}<select id="favoriteHotel">${options(hotels, "hotelId", (item) => value(item, "name"), selectedFavoriteHotel)}</select></label><form id="favoriteForm" class="superhost-form"><label>${escapeHtml(text().song)}<input name="song" required /></label><label>${escapeHtml(text().artist)}<input name="artist" required /></label><label>${escapeHtml(text().language)}<select name="language">${GUEST_LANGUAGES.map(([, label]) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join("")}</select></label><button class="button primary">${escapeHtml(text().addFavorite)}</button></form></section><section class="superhost-card"><h3>${escapeHtml(text().favoriteList)}</h3><div class="superhost-list">${favorites.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(item.song)}</strong><small>${escapeHtml(item.artist)} · ${escapeHtml(item.language)}</small></div><div><button data-action="edit-favorite" data-id="${escapeHtml(item.favoriteId)}">${escapeHtml(text().edit)}</button><button class="danger" data-action="delete-favorite" data-id="${escapeHtml(item.favoriteId)}">${escapeHtml(text().delete)}</button></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
   }
 
   function renderDevices() {
@@ -501,10 +636,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     const form = event.target;
     const data = formPayload(form);
     if (form.dataset.activityLanguages) {
-      const allowedLanguages = [
-        form.elements.languageEs.checked ? "es" : "",
-        form.elements.languageEn.checked ? "en" : ""
-      ].filter(Boolean);
+      const allowedLanguages = selectedFormLanguages(form);
       if (!allowedLanguages.length) {
         notify(text().atLeastOneLanguage, true);
         return;
@@ -514,6 +646,13 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         venueId: form.dataset.venue,
         activityId: form.dataset.activityLanguages,
         allowedLanguages
+      });
+    } else if (form.dataset.activityEdit) {
+      await mutate("updateActivity", {
+        activityId: form.dataset.activityEdit,
+        name: data.name,
+        defaultDurationSeconds: Number(data.durationMinutes) * 60,
+        defaultTransitionSeconds: Number(data.transitionSeconds)
       });
     } else if (form.dataset.hostEdit) {
       await mutate("updateHost", {
@@ -537,10 +676,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       if (await mutate("createVenue", data)) form.reset();
     } else if (form.id === "createActivityForm") {
       const venue = (admin.venues || []).find((item) => value(item, "venueId") === data.venueId);
-      const allowedLanguages = [
-        data.languageEs === "on" ? "es" : "",
-        data.languageEn === "on" ? "en" : ""
-      ].filter(Boolean);
+      const allowedLanguages = selectedFormLanguages(form);
       if (!allowedLanguages.length) {
         notify(text().atLeastOneLanguage, true);
         return;
@@ -556,6 +692,12 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       });
     } else if (form.id === "scheduleForm") {
       const activity = (admin.activities || []).find((item) => value(item, "activityId") === data.activityId);
+      const recurrenceDays = WEEKDAYS.map(([day]) => data[`weekday_${day}`] === "on" ? day : null)
+        .filter((day) => day !== null);
+      if (["weekly", "biweekly"].includes(data.recurrenceType) && !recurrenceDays.length) {
+        notify(text().weekdayHelp, true);
+        return;
+      }
       await mutate("scheduleActivity", {
         hotelId: value(activity, "hotelId"),
         venueId: value(activity, "venueId"),
@@ -567,7 +709,8 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         autoStartActivity: data.autoStartActivity === "on",
         showCountdown: data.showCountdown === "on",
         recurrenceType: data.recurrenceType,
-        recurrenceInterval: 1
+        recurrenceInterval: data.recurrenceType === "biweekly" ? 2 : 1,
+        recurrenceDays
       });
     } else if (form.id === "createHostForm") {
       if (data.password !== data.confirmPassword) {
@@ -585,6 +728,17 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       });
     } else if (form.id === "brandingForm") {
       const branding = { ...data };
+      const manualLocalized = Object.fromEntries(GUEST_LANGUAGES.map(([code]) => [
+        code,
+        Object.fromEntries(BRANDING_MESSAGES.map(([field]) => [
+          field,
+          String(data[`manual_${code}_${field}`] || "").trim()
+        ]).filter(([, message]) => message))
+      ]));
+      Object.keys(branding).filter((name) => name.startsWith("manual_")).forEach((name) => {
+        delete branding[name];
+      });
+      branding.localizedMessagesJson = manualLocalized;
       form.querySelectorAll("input[type=checkbox]").forEach((input) => {
         branding[input.name] = input.checked;
       });
@@ -648,6 +802,11 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
       });
     } else if (action === "restore-hotel") {
       await mutate("updateHotel", { hotelId: id, status: "active" });
+    } else if (action === "delete-activity") {
+      if (!window.confirm(text().confirmDeleteActivity)) return;
+      await mutate("updateActivity", { activityId: id, status: "inactive" });
+    } else if (action === "restore-activity") {
+      await mutate("updateActivity", { activityId: id, status: "ready" });
     } else if (action === "toggle-host") {
       if (button.dataset.status === "inactive" && !window.confirm(text().confirmDeactivate)) return;
       await mutate("updateHost", { userId: id, status: button.dataset.status });
@@ -695,14 +854,13 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         if (song === null) return;
         const artist = window.prompt(text().artist, favorite.artist);
         if (artist === null) return;
-        const languageAnswer = window.prompt(
-          `${text().language} (Español / English)`,
-          favorite.language
-        );
+        const languageAnswer = window.prompt(`${text().language} (${GUEST_LANGUAGES.map(([, label]) => label).join(" / ")})`, favorite.language);
         if (languageAnswer === null) return;
-        const favoriteLanguage = /^english$/i.test(languageAnswer.trim())
-          ? "English"
-          : "Español";
+        const normalized = languageAnswer.trim().toLocaleLowerCase();
+        const match = GUEST_LANGUAGES.find(([code, label]) =>
+          code === normalized || label.toLocaleLowerCase() === normalized
+        );
+        const favoriteLanguage = match?.[1] || favorite.language || "Español";
         payload = { operation: "update", favoriteId: id, hotelId: selectedFavoriteHotel, song, artist, language: favoriteLanguage };
       }
       try {
@@ -743,6 +901,12 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     }
   }
 
+  function openTab(tab = "hotels") {
+    activeTab = Object.prototype.hasOwnProperty.call(text().tabs, tab) ? tab : "hotels";
+    open();
+    if (admin) render();
+  }
+
   function close() {
     opened = false;
     main.classList.remove("superhost-mode");
@@ -764,5 +928,5 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     }
   }
 
-  return { open, close, sync, isOpen: () => opened, reload: load };
+  return { open, openTab, close, sync, isOpen: () => opened, reload: load };
 }

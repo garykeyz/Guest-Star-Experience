@@ -1,7 +1,33 @@
-# Guest Star Experience 4.1.1
+# Guest Star Experience 4.2.0
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
+
+La versión 4.2 incorpora un backend Cloudflare D1 con importación validada,
+activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
+[D1-MIGRATION.md](D1-MIGRATION.md) antes de desplegar o activar la migración.
+
+## Modelo 4.2
+
+- D1 atiende login, sesiones, administración, actividad, solicitudes públicas
+  y Bridge sin esperar a Apps Script/Sheets en cada operación.
+- El despliegue inicia en modo `apps_script`; el tráfico solo cambia después de
+  **Import & Validate** y **Activate D1**.
+- Google Sheets conserva el snapshot original, el log `D1BackupEvents` y una
+  réplica de respaldo aplicable para rollback.
+- Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
+  se muestran en texto plano.
+- Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
+- Bridge 4.2.0 incluye la administración, agenda recurrente, traducciones y
+  barra nativa actualizadas para esta versión.
+- Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
+  `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
+  presupuesto gratuito conservador y cambia a edición manual sin usar un
+  proveedor de pago cuando no está disponible.
+- La agenda permite días específicos, repetición semanal, quincenal y mensual;
+  las actividades pueden editarse, desactivarse y restaurarse sin borrar datos.
+- El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
+  opciones avanzadas plegadas hasta que el usuario las solicite.
 
 ## Modelo 4.1
 
@@ -30,7 +56,8 @@ asignación del Superhost.
   Superhost puede reemplazarlas revocando las sesiones anteriores;
 - el Superhost puede editar usuario, nombre, correo y revisar último acceso,
   último cambio de contraseña y auditoría;
-- cada actividad permite Español, English o ambos;
+- cada actividad permite Español, English, Français, Italiano, Deutsch,
+  Русский y Português;
 - las lecturas repetidas de Google Sheets se reutilizan durante cada solicitud.
 
 ## Primera configuración

@@ -21,10 +21,19 @@ test("web, Host and Bridge proxy use the Superhost Apps Script deployment", asyn
 
   for (const path of routePaths) {
     const source = await readFile(resolve(PACKAGE_ROOT, path), "utf8");
-    assert.match(source, /process\.env\.KARAOKE_APPS_SCRIPT_URL/);
-    assert.ok(source.includes(CANONICAL_APPS_SCRIPT_URL), `${path} must use the canonical deployment`);
     assert.ok(!source.includes(RETIRED_APPS_SCRIPT_URL), `${path} must not use the retired deployment`);
+    if (path === "app/api/karaoke/route.ts") {
+      assert.match(source, /process\.env\.KARAOKE_APPS_SCRIPT_URL/);
+      assert.ok(source.includes(CANONICAL_APPS_SCRIPT_URL), `${path} must use the canonical deployment`);
+    } else {
+      assert.match(source, /from "@\/lib\/guest-star\/upstream"/);
+    }
   }
+
+  const upstream = await readFile(resolve(PACKAGE_ROOT, "lib/guest-star/upstream.ts"), "utf8");
+  assert.match(upstream, /process\.env\.KARAOKE_APPS_SCRIPT_URL/);
+  assert.ok(upstream.includes(CANONICAL_APPS_SCRIPT_URL));
+  assert.ok(!upstream.includes(RETIRED_APPS_SCRIPT_URL));
 
   const wrangler = JSON.parse(
     await readFile(resolve(PACKAGE_ROOT, "wrangler.jsonc"), "utf8")

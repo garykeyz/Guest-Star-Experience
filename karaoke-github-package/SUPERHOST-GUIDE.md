@@ -3,7 +3,7 @@
 El Superhost administra toda la instalación sin entregar su cuenta de Google a
 los hoteles ni a los DJs.
 
-En 4.1.1, al iniciar sesión como Superhost en **Guest Star Bridge**, el panel de
+En 4.2.0, al iniciar sesión como Superhost en **Guest Star Bridge**, el panel de
 administración se abre dentro de la misma app. Usa **Español / English** para
 cambiar el idioma y **Evento en vivo** para volver a la operación de karaoke.
 
@@ -35,20 +35,22 @@ Hotel + Sheet** hasta autorizar Drive y actualizar la implementación web
 existente. La comprobación se realiza antes de crear archivos para evitar hojas
 huérfanas.
 
-## Crear y asignar un Host
+## Crear y asignar un Host o Superhost
 
-1. En **Hosts y permisos**, crea nombre, usuario, correo opcional y una contraseña
-   permanente de al menos 12 caracteres.
+1. En **Hosts y permisos**, elige `Host` o `Superhost` y crea nombre, usuario,
+   correo opcional y una contraseña permanente de al menos 12 caracteres.
 2. Entrega esa contraseña al operador por un canal seguro. Guest Star conserva
    únicamente su hash. Puedes usar **Mostrar mientras escribo** antes de
    guardarla, pero el valor guardado no puede volver a mostrarse.
-3. En **Assignments**, elige usuario, hotel y perfil:
+3. Para un Host, en **Assignments** elige usuario, hotel y perfil:
    - `Activity Operator`: operación normal del evento.
    - `Hotel Manager`: administración completa dentro del hotel.
    - `Read Only`: consulta sin cambios.
 4. Entrega al operador el instalador de Bridge, su usuario y la contraseña permanente.
 
-Crear o asignar un usuario nunca crea otra hoja de cálculo.
+Un Superhost administra toda la instalación y no necesita una asignación por
+hotel. El sistema siempre conserva al menos un Superhost activo. Crear o asignar
+un usuario nunca crea otra hoja de cálculo.
 
 ## Favoritos y eliminación recuperable
 

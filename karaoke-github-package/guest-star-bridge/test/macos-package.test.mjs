@@ -6,11 +6,12 @@ import test from "node:test";
 
 const bridgeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(bridgeRoot, "../..");
-const [buildSource, shellSource, launcherSource, workflowSource, guideSource] =
+const [buildSource, shellSource, launcherSource, windowSource, workflowSource, guideSource] =
   await Promise.all([
     readFile(resolve(bridgeRoot, "macos/build_installer.py"), "utf8"),
     readFile(resolve(bridgeRoot, "macos/GuestStarBridge"), "utf8"),
     readFile(resolve(bridgeRoot, "macos/GuestStarLauncher.c"), "utf8"),
+    readFile(resolve(bridgeRoot, "macos/GuestStarWindow.js"), "utf8"),
     readFile(
       resolve(repositoryRoot, ".github/workflows/publish-guest-star-bridge.yml"),
       "utf8"
@@ -56,14 +57,25 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.1\.1"/);
+  assert.match(shellSource, /APP_VERSION="4\.2\.0"/);
   assert.match(shellSource, /\.bundle-build/);
   assert.match(shellSource, /installed_build.*bundled_build/s);
   assert.match(buildSource, /def write_bundle_build_id/);
   assert.match(buildSource, /La versión del iniciador no coincide con package\.json/);
 });
 
-test("la publicación deriva el paquete Universal de la versión 4.1.1", () => {
+test("la barra nativa se identifica como Guest Star Bridge y ofrece acciones útiles", () => {
+  assert.match(windowSource, /processName = "Guest Star Bridge"/);
+  assert.match(windowSource, /addMenu\(menuBar, "Guest Star Bridge"/);
+  assert.match(windowSource, /addMenu\(menuBar, "Actividad"/);
+  assert.match(windowSource, /openLiveEvent:/);
+  assert.match(windowSource, /switchActivity:/);
+  assert.match(windowSource, /openAdministration:/);
+  assert.match(windowSource, /openSettings:/);
+  assert.match(windowSource, /reloadPage:/);
+});
+
+test("la publicación deriva el paquete Universal de la versión 4.2.0", () => {
   assert.match(workflowSource, /release_meta\.outputs\.version/);
   assert.match(workflowSource, /Guest-Star-Bridge-Universal-v\$\{VERSION\}-app\.zip/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);

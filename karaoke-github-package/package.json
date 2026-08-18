@@ -1,12 +1,17 @@
 {
   "name": "guest-star-karaoke",
-  "version": "4.1.1",
+  "version": "4.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "test:http": "node scripts/production-http-test.mjs",
+    "test:d1": "esbuild scripts/d1-backend-test.ts --bundle --platform=node --format=esm --packages=external --alias:@opennextjs/cloudflare=./scripts/cloudflare-test-stub.ts --outfile=/tmp/guest-star-d1-test.mjs && node /tmp/guest-star-d1-test.mjs",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts",
+    "d1:migrate:local": "wrangler d1 migrations apply guest-star-experience --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply guest-star-experience --remote",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && wrangler deploy"
   },
   "dependencies": {

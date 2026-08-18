@@ -79,7 +79,7 @@ test("envía los controles compartidos con origen bridge", async (t) => {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({
       ok: true,
-      codeVersion: "4.1.1",
+      codeVersion: "4.2.0",
       state: { accepting: false, stateRevision: 8, activityId: "activity-2" },
       requests: []
     }));
@@ -246,6 +246,6 @@ test("avisa al Host cuando el servicio publicado todavía es anterior a 4.1", as
       },
       "reset"
     ),
-    /service version 4\.1\.1.*Contact the Superhost/i
+    /service version 4\.2\.0.*Contact the Superhost/i
   );
 });

@@ -8,6 +8,12 @@ por hotel.
 El Superhost puede definir nombre del equipo, lema, bienvenida, mensaje en vivo
 y mensaje final, además de decidir qué elementos aparecen en la página pública.
 
+Los mensajes de bienvenida, estados antes/durante/después de la actividad,
+próxima actividad y reseñas se conservan por cada uno de los siete idiomas. La
+traducción automática gratuita completa los demás idiomas cuando está
+disponible; si falla, el panel muestra campos manuales por idioma y conserva lo
+ya traducido.
+
 ## Reseña interna
 
 - Puede ser anónima.
