@@ -49,8 +49,10 @@ export async function storeBridgeSecrets({ deviceId, authToken, deviceToken }) {
     return false;
   }
   try {
-    await setSecret(SERVICE_AUTH, deviceId, authToken);
-    await setSecret(SERVICE_DEVICE, deviceId, deviceToken);
+    await Promise.all([
+      setSecret(SERVICE_AUTH, deviceId, authToken),
+      setSecret(SERVICE_DEVICE, deviceId, deviceToken)
+    ]);
     return true;
   } catch {
     return false;
@@ -59,9 +61,13 @@ export async function storeBridgeSecrets({ deviceId, authToken, deviceToken }) {
 
 export async function loadBridgeSecrets(deviceId) {
   if (!deviceId) return { authToken: "", deviceToken: "" };
+  const [authToken, deviceToken] = await Promise.all([
+    getSecret(SERVICE_AUTH, deviceId),
+    getSecret(SERVICE_DEVICE, deviceId)
+  ]);
   return {
-    authToken: await getSecret(SERVICE_AUTH, deviceId),
-    deviceToken: await getSecret(SERVICE_DEVICE, deviceId)
+    authToken,
+    deviceToken
   };
 }
 

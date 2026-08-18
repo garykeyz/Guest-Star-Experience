@@ -7,7 +7,7 @@ la información por hotel.
 
 1. Descarga o conserva el release 3.0.7.
 2. Confirma que la hoja antigua tenga las solicitudes esperadas.
-3. Instala `Code.gs` 4.1.0 en el proyecto de Apps Script existente.
+3. Instala `Code.gs` 4.1.1 en el proyecto de Apps Script existente.
 4. Configura `INITIAL_HOTEL_NAME` y `INITIAL_HOTEL_TIMEZONE`.
 
 ## Ejecutar la migración
@@ -28,7 +28,7 @@ la información por hotel.
 - La tabla `Hotels` contiene `dataSheetId` para cada hotel.
 - El primer hotel abre su hoja independiente.
 - El enlace permanente `/h/...` muestra solo ese hotel.
-- El Bridge 4.0 inicia sesión y permite seleccionar una actividad autorizada.
+- El Bridge 4.1.1 inicia sesión y permite seleccionar una actividad autorizada.
 - No hay hojas nuevas al crear usuarios.
 
 `setupMultiUserV4` es idempotente: puede ejecutarse de nuevo para reparar tablas

@@ -8,7 +8,7 @@ async function parseResponse(response) {
   }
 }
 
-const REQUIRED_CODE_VERSION = "4.1.0";
+const REQUIRED_CODE_VERSION = "4.1.1";
 const APPS_SCRIPT_TIMEOUT_MS = 70000;
 
 function endpoint(config) {

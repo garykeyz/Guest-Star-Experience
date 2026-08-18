@@ -1,4 +1,4 @@
-# Guest Star Bridge 4.1.0
+# Guest Star Bridge 4.1.1
 
 Aplicación local Universal para Mac que conecta Guest Star con la biblioteca de
 karaoke y la cola Karaoke real de VirtualDJ.
@@ -9,17 +9,17 @@ karaoke y la cola Karaoke real de VirtualDJ.
 - VirtualDJ y Network Control activos.
 - Biblioteca local o disco de karaoke conectado.
 - Internet.
-- Usuario Host, contraseña temporal y asignación creados por el Superhost.
+- Usuario Host, contraseña permanente y asignación creados por el Superhost.
 
 El operador solo necesita la app, sus credenciales y la asignación entregada por
 el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Bridge-Universal-v4.1.0-app.zip` o abre el DMG.
+1. Descomprime `Guest-Star-Bridge-Universal-v4.1.1-app.zip` o abre el DMG.
 2. Mueve **Guest Star Bridge.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
-4. Inicia sesión con el usuario Host y cambia la contraseña temporal.
+4. Inicia sesión con el usuario Host y su contraseña permanente.
 5. Selecciona hotel, sede y actividad entre tus asignaciones.
 6. En Settings, elige las carpetas locales y configura Network Control.
 7. Prueba VirtualDJ y sincroniza.

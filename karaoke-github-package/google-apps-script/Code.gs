@@ -11,9 +11,9 @@ const HEADERS = [
   "Last seen in VirtualDJ", "Status revision"
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
-const BRIDGE_API_VERSION = "4.1.0";
-const GUEST_STAR_CODE_BUILD = "4.1.0-superhost-bridge";
-const V4_SCHEMA_VERSION = "4.0.0";
+const BRIDGE_API_VERSION = "4.1.1";
+const GUEST_STAR_CODE_BUILD = "4.1.1-speed-session-security";
+const V4_SCHEMA_VERSION = "4.1.1";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_REQUIRED_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
@@ -23,11 +23,14 @@ const V4_REQUIRED_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email"
 ];
 let REQUEST_DATA_SHEET_ID_ = "";
+let V4_REQUEST_MASTER_SPREADSHEET_ = null;
+let V4_REQUEST_TABLE_ROWS_ = {};
+let V4_REQUEST_TABLE_SHEETS_ = {};
 const V4_MASTER_TABLES = {
   Users: [
     "userId", "username", "displayName", "email", "passwordHash",
     "passwordSalt", "role", "status", "staticHostSlug", "mustChangePassword",
-    "createdAt", "updatedAt", "lastLoginAt"
+    "createdAt", "updatedAt", "lastLoginAt", "passwordUpdatedAt"
   ],
   Hotels: [
     "hotelId", "name", "slug", "publicCode", "publicUrl", "qrFileId",
@@ -41,7 +44,7 @@ const V4_MASTER_TABLES = {
     "activityId", "hotelId", "venueId", "name", "internalCode", "status",
     "defaultDurationSeconds", "defaultTransitionSeconds", "showPublicStatus",
     "showCountdown", "scheduledStartAt", "autoStartEnabled", "acceptEarlyRequests",
-    "currentCycleId", "createdAt", "updatedAt"
+    "currentCycleId", "createdAt", "updatedAt", "allowedLanguagesJson"
   ],
   UserAssignments: [
     "assignmentId", "userId", "hotelId", "venueId", "activityId",
@@ -284,6 +287,7 @@ const YOUTUBE_LANGUAGE_CONFIG = {
 };
 
 function doGet(e) {
+  resetV4RuntimeCache_();
   const params = (e && e.parameter) || {};
   const v4Response = publicGetV4_(params);
   if (v4Response !== null) return jsonp_(v4Response, params.callback);
@@ -300,6 +304,7 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  resetV4RuntimeCache_();
   let body;
   try {
     body = JSON.parse((e && e.postData && e.postData.contents) || "{}");
@@ -345,6 +350,19 @@ function doPost(e) {
     }
 
     const requestedLanguage = body.languageCode || body.language;
+    if (publicContext && publicContext.activity) {
+      const requestedLanguageCode = activityLanguageCodeV4_(requestedLanguage);
+      const allowedLanguages = normalizeActivityLanguagesV4_(
+        publicContext.activity.allowedLanguagesJson
+      );
+      if (!requestedLanguageCode || allowedLanguages.indexOf(requestedLanguageCode) < 0) {
+        return json_({
+          ok: false,
+          code: "LANGUAGE_NOT_ALLOWED",
+          state: publicExperienceStateV4_(publicContext.hotel)
+        });
+      }
+    }
     const song = findSong_(body.song, body.artist, requestedLanguage);
     const accumulatedSeconds =
       cfg.accumulatedSeconds + song.seconds + cfg.transition;
@@ -1459,11 +1477,32 @@ function jsonp_(data, callback) {
 // -----------------------------------------------------------------------------
 
 function masterSpreadsheetV4_() {
+  if (V4_REQUEST_MASTER_SPREADSHEET_) return V4_REQUEST_MASTER_SPREADSHEET_;
   const properties = PropertiesService.getScriptProperties();
   const masterId = properties.getProperty("MASTER_SHEET_ID");
-  if (masterId) return SpreadsheetApp.openById(masterId);
+  if (masterId) {
+    V4_REQUEST_MASTER_SPREADSHEET_ = SpreadsheetApp.openById(masterId);
+    return V4_REQUEST_MASTER_SPREADSHEET_;
+  }
   const active = SpreadsheetApp.getActiveSpreadsheet();
-  return active || SpreadsheetApp.openById(SHEET_ID);
+  V4_REQUEST_MASTER_SPREADSHEET_ = active || SpreadsheetApp.openById(SHEET_ID);
+  return V4_REQUEST_MASTER_SPREADSHEET_;
+}
+
+function resetV4RuntimeCache_() {
+  V4_REQUEST_MASTER_SPREADSHEET_ = null;
+  V4_REQUEST_TABLE_ROWS_ = {};
+  V4_REQUEST_TABLE_SHEETS_ = {};
+}
+
+function tableCacheKeyV4_(spreadsheet, tableName) {
+  let spreadsheetId = "spreadsheet";
+  try {
+    spreadsheetId = spreadsheet.getId();
+  } catch (error) {
+    // Unit-test doubles may not implement getId().
+  }
+  return String(spreadsheetId || "spreadsheet") + ":" + String(tableName || "");
 }
 
 function isoNowV4_() {
@@ -1474,6 +1513,38 @@ function normalizeIdentifierV4_(value) {
   let text = String(value || "").toLowerCase();
   if (text.normalize) text = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   return text.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+
+function activityLanguageCodeV4_(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "es" || raw === "spanish" || raw === "español") return "es";
+  if (raw === "en" || raw === "english" || raw === "inglés") return "en";
+  return "";
+}
+
+function normalizeActivityLanguagesV4_(value) {
+  let requested = value;
+  if (typeof requested === "string") {
+    try {
+      requested = JSON.parse(requested || "[]");
+    } catch (error) {
+      requested = requested.split(",");
+    }
+  }
+  if (!Array.isArray(requested)) requested = [];
+  const normalized = [];
+  requested.forEach(function(language) {
+    const code = activityLanguageCodeV4_(language);
+    if (code && normalized.indexOf(code) < 0) normalized.push(code);
+  });
+  return normalized.length ? normalized : ["es", "en"];
+}
+
+function activityWithLanguagesV4_(activity) {
+  if (!activity) return null;
+  return Object.assign({}, activity, {
+    allowedLanguages: normalizeActivityLanguagesV4_(activity.allowedLanguagesJson)
+  });
 }
 
 function randomTokenV4_(length) {
@@ -1512,6 +1583,10 @@ function safeEqualV4_(left, right) {
 }
 
 function ensureTableV4_(spreadsheet, name, headers) {
+  const cacheKey = tableCacheKeyV4_(spreadsheet, name);
+  if (V4_REQUEST_TABLE_SHEETS_[cacheKey]) {
+    return V4_REQUEST_TABLE_SHEETS_[cacheKey];
+  }
   const sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
   ensureSheetWidth_(sheet, headers.length);
   const current = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
@@ -1522,14 +1597,22 @@ function ensureTableV4_(spreadsheet, name, headers) {
   });
   if (changed) sheet.getRange(1, 1, 1, headers.length).setValues([next]);
   sheet.setFrozenRows(1);
+  V4_REQUEST_TABLE_SHEETS_[cacheKey] = sheet;
   return sheet;
 }
 
 function tableRowsV4_(spreadsheet, tableName, headers) {
+  const cacheKey = tableCacheKeyV4_(spreadsheet, tableName);
+  if (Object.prototype.hasOwnProperty.call(V4_REQUEST_TABLE_ROWS_, cacheKey)) {
+    return V4_REQUEST_TABLE_ROWS_[cacheKey];
+  }
   const sheet = ensureTableV4_(spreadsheet, tableName, headers);
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  return sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
+  if (lastRow < 2) {
+    V4_REQUEST_TABLE_ROWS_[cacheKey] = [];
+    return V4_REQUEST_TABLE_ROWS_[cacheKey];
+  }
+  V4_REQUEST_TABLE_ROWS_[cacheKey] = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
     .map(function(values, index) {
       const record = { _row: index + 2 };
       headers.forEach(function(header, column) {
@@ -1538,6 +1621,7 @@ function tableRowsV4_(spreadsheet, tableName, headers) {
       });
       return record;
     });
+  return V4_REQUEST_TABLE_ROWS_[cacheKey];
 }
 
 function appendRecordV4_(spreadsheet, tableName, headers, record) {
@@ -1545,6 +1629,7 @@ function appendRecordV4_(spreadsheet, tableName, headers, record) {
   sheet.appendRow(headers.map(function(header) {
     return record[header] === undefined ? "" : record[header];
   }));
+  delete V4_REQUEST_TABLE_ROWS_[tableCacheKeyV4_(spreadsheet, tableName)];
   return Object.assign({}, record, { _row: sheet.getLastRow() });
 }
 
@@ -1558,6 +1643,7 @@ function updateRecordV4_(spreadsheet, tableName, headers, row, changes) {
     }
   });
   range.setValues([values]);
+  delete V4_REQUEST_TABLE_ROWS_[tableCacheKeyV4_(spreadsheet, tableName)];
 }
 
 function findRecordV4_(spreadsheet, tableName, headers, field, value) {
@@ -1773,7 +1859,8 @@ function createSuperhostV4_(master) {
     mustChangePassword: true,
     createdAt: now,
     updatedAt: now,
-    lastLoginAt: ""
+    lastLoginAt: "",
+    passwordUpdatedAt: now
   });
   return { user: user, temporaryPassword: temporaryPassword, created: true };
 }
@@ -1848,7 +1935,8 @@ function createInitialHotelV4_(master, superhost, legacySource) {
     acceptEarlyRequests: false,
     currentCycleId: "",
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    allowedLanguagesJson: JSON.stringify(["es", "en"])
   });
   appendRecordV4_(master, "UserAssignments", V4_MASTER_TABLES.UserAssignments, {
     assignmentId: Utilities.getUuid(),
@@ -2218,7 +2306,8 @@ function publicUserV4_(user) {
     staticHostSlug: user.staticHostSlug,
     mustChangePassword: user.mustChangePassword === true ||
       String(user.mustChangePassword).toLowerCase() === "true",
-    lastLoginAt: user.lastLoginAt || ""
+    lastLoginAt: user.lastLoginAt || "",
+    passwordUpdatedAt: user.passwordUpdatedAt || user.updatedAt || ""
   };
 }
 
@@ -2297,10 +2386,10 @@ function registerDeviceV4_(master, user, body) {
       updatedAt: now
     });
   } else {
-    if (device.status !== "active") throw new Error("DEVICE_REVOKED");
     updateRecordV4_(master, "Devices", V4_MASTER_TABLES.Devices, device._row, {
       deviceName: clean_(body.deviceName || device.deviceName),
       deviceTokenHash: tokenHashV4_(rawToken),
+      status: "active",
       lastHeartbeatAt: now,
       bridgeVersion: clean_(body.bridgeVersion || device.bridgeVersion || BRIDGE_API_VERSION),
       updatedAt: now
@@ -2314,7 +2403,6 @@ function registerDeviceV4_(master, user, body) {
 
 function loginV4_(body) {
   const master = masterSpreadsheetV4_();
-  ensureMasterTablesV4_(master);
   const identifier = String(body.username || body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
   if (!identifier || !password) return { ok: false, code: "MISSING_CREDENTIALS" };
@@ -2601,6 +2689,7 @@ function changePasswordV4_(body) {
     passwordHash: hashSecretV4_(nextPassword, nextSalt),
     passwordSalt: nextSalt,
     mustChangePassword: false,
+    passwordUpdatedAt: isoNowV4_(),
     updatedAt: isoNowV4_()
   });
   auditV4_({ userId: auth.user.userId, action: "password.changed" });
@@ -2684,8 +2773,10 @@ function createHostUserV4_(auth, body) {
   if (users.some(function(user) {
     return user.username === username || (email && String(user.email).toLowerCase() === email);
   })) return { ok: false, code: "USER_EXISTS" };
-  const temporaryPassword = String(body.temporaryPassword || randomTokenV4_(18));
-  if (temporaryPassword.length < 12) return { ok: false, code: "WEAK_PASSWORD" };
+  const password = String(body.password || "");
+  if (password.length < 12 || password.length > 128) {
+    return { ok: false, code: "WEAK_PASSWORD" };
+  }
   const salt = randomTokenV4_(32);
   const now = isoNowV4_();
   const user = appendRecordV4_(auth.master, "Users", V4_MASTER_TABLES.Users, {
@@ -2693,22 +2784,19 @@ function createHostUserV4_(auth, body) {
     username: username,
     displayName: clean_(body.displayName || username),
     email: email,
-    passwordHash: hashSecretV4_(temporaryPassword, salt),
+    passwordHash: hashSecretV4_(password, salt),
     passwordSalt: salt,
-    role: body.role === "superhost" ? "superhost" : "host",
+    role: "host",
     status: "active",
     staticHostSlug: uniqueUserSlugV4_(auth.master, username, ""),
-    mustChangePassword: true,
+    mustChangePassword: false,
     createdAt: now,
     updatedAt: now,
-    lastLoginAt: ""
+    lastLoginAt: "",
+    passwordUpdatedAt: now
   });
   auditV4_({ userId: auth.user.userId, action: "user.created", targetId: user.userId });
-  return {
-    ok: true,
-    user: publicUserV4_(user),
-    temporaryPassword: temporaryPassword
-  };
+  return { ok: true, user: publicUserV4_(user) };
 }
 
 function createHotelForSuperhostV4_(auth, body) {
@@ -2807,7 +2895,8 @@ function createHotelForSuperhostUnlockedV4_(auth, body) {
     acceptEarlyRequests: false,
     currentCycleId: "",
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    allowedLanguagesJson: JSON.stringify(["es", "en"])
   });
   updateRecordV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels, saved._row, {
     activePublicActivityId: activity.activityId,
@@ -2969,8 +3058,21 @@ function updateHotelForSuperhostV4_(auth, body) {
 function updateHostUserV4_(auth, body) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
   const user = findRecordV4_(auth.master, "Users", V4_MASTER_TABLES.Users, "userId", body.userId);
-  if (!user) return { ok: false, code: "USER_NOT_FOUND" };
+  if (!user || user.role !== "host") return { ok: false, code: "USER_NOT_FOUND" };
   const changes = { updatedAt: isoNowV4_() };
+  if (body.username !== undefined) {
+    const username = normalizeIdentifierV4_(body.username).replace(/-/g, ".");
+    if (!username || username.length < 3) {
+      return { ok: false, code: "INVALID_USERNAME" };
+    }
+    const duplicateUsername = tableRowsV4_(auth.master, "Users", V4_MASTER_TABLES.Users)
+      .some(function(candidate) {
+        return candidate.userId !== user.userId &&
+          String(candidate.username || "").toLowerCase() === username.toLowerCase();
+      });
+    if (duplicateUsername) return { ok: false, code: "USER_EXISTS" };
+    changes.username = username;
+  }
   if (body.displayName !== undefined) changes.displayName = clean_(body.displayName);
   if (body.email !== undefined) {
     const email = emailAddressV4_(body.email);
@@ -3015,6 +3117,40 @@ function updateHostUserV4_(auth, body) {
   }
   auditV4_({ userId: auth.user.userId, action: "user.updated", targetId: user.userId, details: changes });
   return { ok: true, user: publicUserV4_(Object.assign({}, user, changes)) };
+}
+
+function setHostPasswordV4_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const user = findRecordV4_(auth.master, "Users", V4_MASTER_TABLES.Users, "userId", body.userId);
+  if (!user || user.role !== "host") return { ok: false, code: "USER_NOT_FOUND" };
+  const password = String(body.password || "");
+  if (password.length < 12 || password.length > 128) {
+    return { ok: false, code: "WEAK_PASSWORD" };
+  }
+  const now = isoNowV4_();
+  const salt = randomTokenV4_(32);
+  updateRecordV4_(auth.master, "Users", V4_MASTER_TABLES.Users, user._row, {
+    passwordHash: hashSecretV4_(password, salt),
+    passwordSalt: salt,
+    mustChangePassword: false,
+    passwordUpdatedAt: now,
+    updatedAt: now
+  });
+  revokeUserAccessV4_(auth.master, user.userId);
+  auditV4_({
+    userId: auth.user.userId,
+    action: "host.password.set",
+    targetId: user.userId,
+    details: { sessionsRevoked: true }
+  });
+  return {
+    ok: true,
+    user: publicUserV4_(Object.assign({}, user, {
+      mustChangePassword: false,
+      passwordUpdatedAt: now,
+      updatedAt: now
+    }))
+  };
 }
 
 function revokeAssignmentV4_(auth, body) {
@@ -3092,9 +3228,40 @@ function createActivityV4_(auth, body) {
     acceptEarlyRequests: body.acceptEarlyRequests === true,
     currentCycleId: "",
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    allowedLanguagesJson: JSON.stringify(
+      normalizeActivityLanguagesV4_(body.allowedLanguages)
+    )
   });
   auditV4_({ userId: auth.user.userId, action: "activity.created", hotelId: context.hotel.hotelId, venueId: context.venue.venueId, activityId: activity.activityId });
+  return { ok: true, activity: activity };
+}
+
+function updateActivityLanguagesV4_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const context = resolveTenantContextV4_(auth, body);
+  if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
+  const allowedLanguages = normalizeActivityLanguagesV4_(body.allowedLanguages);
+  const changes = {
+    allowedLanguagesJson: JSON.stringify(allowedLanguages),
+    updatedAt: isoNowV4_()
+  };
+  updateRecordV4_(
+    auth.master,
+    "Activities",
+    V4_MASTER_TABLES.Activities,
+    context.activity._row,
+    changes
+  );
+  const activity = activityWithLanguagesV4_(Object.assign({}, context.activity, changes));
+  auditV4_({
+    userId: auth.user.userId,
+    action: "activity.languages.updated",
+    hotelId: context.hotel.hotelId,
+    venueId: context.venue.venueId,
+    activityId: context.activity.activityId,
+    details: { allowedLanguages: allowedLanguages }
+  });
   return { ok: true, activity: activity };
 }
 
@@ -3179,7 +3346,8 @@ function adminStateV4_(auth) {
     users: tableRowsV4_(auth.master, "Users", V4_MASTER_TABLES.Users).map(publicUserV4_),
     hotels: tableRowsV4_(auth.master, "Hotels", V4_MASTER_TABLES.Hotels),
     venues: tableRowsV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues),
-    activities: tableRowsV4_(auth.master, "Activities", V4_MASTER_TABLES.Activities),
+    activities: tableRowsV4_(auth.master, "Activities", V4_MASTER_TABLES.Activities)
+      .map(activityWithLanguagesV4_),
     assignments: tableRowsV4_(auth.master, "UserAssignments", V4_MASTER_TABLES.UserAssignments),
     devices: tableRowsV4_(auth.master, "Devices", V4_MASTER_TABLES.Devices).map(function(device) {
       return {
@@ -3228,10 +3396,14 @@ function dispatchV4Action_(body) {
     adminState: function() { return adminStateV4_(requireAuthV4_(body)); },
     createHost: function() { return createHostUserV4_(requireAuthV4_(body), body); },
     updateHost: function() { return updateHostUserV4_(requireAuthV4_(body), body); },
+    setHostPassword: function() { return setHostPasswordV4_(requireAuthV4_(body), body); },
     createHotel: function() { return createHotelForSuperhostV4_(requireAuthV4_(body), body); },
     updateHotel: function() { return updateHotelForSuperhostV4_(requireAuthV4_(body), body); },
     createVenue: function() { return createVenueV4_(requireAuthV4_(body), body); },
     createActivity: function() { return createActivityV4_(requireAuthV4_(body), body); },
+    updateActivityLanguages: function() {
+      return updateActivityLanguagesV4_(requireAuthV4_(body), body);
+    },
     assignUser: function() { return assignUserV4_(requireAuthV4_(body), body); },
     revokeAssignment: function() { return revokeAssignmentV4_(requireAuthV4_(body), body); },
     revokeDevice: function() { return revokeDeviceV4_(requireAuthV4_(body), body); }
@@ -3373,7 +3545,8 @@ function publicExperienceStateV4_(hotel) {
       scheduledStartAt: scheduledStartAt,
       showCountdown: activity.showCountdown === true || String(activity.showCountdown) === "true",
       acceptEarlyRequests: activity.acceptEarlyRequests === true ||
-        String(activity.acceptEarlyRequests) === "true"
+        String(activity.acceptEarlyRequests) === "true",
+      allowedLanguages: normalizeActivityLanguagesV4_(activity.allowedLanguagesJson)
     } : null,
     branding: publicBrandingV4_(hotel.hotelId),
     upcomingActivities: upcomingForHotelV4_(hotel.hotelId)
@@ -3633,6 +3806,12 @@ function updateActivitySettingsV4_(auth, body) {
     changes.showPublicStatus = body.showPublicStatus === true;
     setPublicStatusVisibility_(body.showPublicStatus === true, body.source === "bridge" ? "bridge" : "web");
   }
+  if (body.allowedLanguages !== undefined) {
+    if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+    changes.allowedLanguagesJson = JSON.stringify(
+      normalizeActivityLanguagesV4_(body.allowedLanguages)
+    );
+  }
   context.activity = updateCentralRecordV4_("Activities", "activityId", context.activity.activityId, changes);
   configureActivitySheetV4_(context);
   setActivePublicActivityV4_(context.hotel, context.activity.activityId);
@@ -3652,7 +3831,40 @@ function selectActivityV4_(auth, body) {
       updatedAt: isoNowV4_()
     });
   }
-  return selectedActivityStateV4_(auth, context);
+  return selectedActivitySummaryV4_(auth, context);
+}
+
+function selectedActivitySummaryV4_(auth, context) {
+  const activity = activityWithLanguagesV4_(context.activity);
+  const status = String(activity.status || "");
+  const accepting = status === "in_progress" || (
+    status === "scheduled" && (
+      activity.acceptEarlyRequests === true || String(activity.acceptEarlyRequests) === "true"
+    )
+  );
+  return {
+    ok: true,
+    codeVersion: BRIDGE_API_VERSION,
+    serverNow: isoNowV4_(),
+    user: publicUserV4_(auth.user),
+    hotel: context.hotel,
+    venue: context.venue,
+    activity: activity,
+    permissions: context.permissions,
+    state: {
+      activityId: activity.activityId,
+      activityHours: Math.max(0.25, Number(activity.defaultDurationSeconds || 7200) / 3600),
+      transitionSeconds: Math.max(0, Number(activity.defaultTransitionSeconds || 30)),
+      accepting: accepting,
+      activityRunning: status === "in_progress",
+      showPublicStatus: activity.showPublicStatus === true ||
+        String(activity.showPublicStatus) === "true",
+      updatedAt: activity.updatedAt || "",
+      lastAction: "select",
+      lastSource: "bridge"
+    },
+    share: shareInfoV4_(context.hotel)
+  };
 }
 
 function selectedActivityStateV4_(auth, context) {
@@ -3679,7 +3891,7 @@ function selectedActivityStateV4_(auth, context) {
     user: publicUserV4_(auth.user),
     hotel: freshHotel,
     venue: context.venue,
-    activity: freshActivity,
+    activity: activityWithLanguagesV4_(freshActivity),
     permissions: effectivePermissionsV4_(auth.user, {
       hotelId: context.hotel.hotelId,
       venueId: context.venue ? context.venue.venueId : "",

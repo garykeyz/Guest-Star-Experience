@@ -5,6 +5,7 @@ import {
   configForStorage,
   DEFAULT_CONFIG,
   LEGACY_DIRECT_APPS_SCRIPT_URL,
+  mergeLoadedSecrets,
   migrateAppsScriptUrl,
   publicConfig,
   sanitizeConfig
@@ -54,7 +55,7 @@ test("permite olvidar carpeta y PIN por separado al cerrar", () => {
   assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 9 recuerda sesión y selección sin guardar contraseñas", () => {
+test("la configuración 10 recuerda sesión y selección sin guardar contraseñas de usuario", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -70,7 +71,7 @@ test("la configuración 9 recuerda sesión y selección sin guardar contraseñas
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 9);
+  assert.equal(runtime.configVersion, 10);
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");
@@ -134,4 +135,19 @@ test("permite no recordar tokens ni última actividad", () => {
   assert.equal(stored.lastHotelId, "");
   assert.equal(stored.lastVenueId, "");
   assert.equal(stored.lastActivityId, "");
+});
+
+test("conserva la sesión guardada si Keychain no devuelve los tokens", () => {
+  const stored = sanitizeConfig({
+    authToken: "session-from-file",
+    deviceToken: "device-from-file",
+    deviceId: "device-1",
+    rememberLogin: true,
+    secretsInKeychain: true
+  }, DEFAULT_CONFIG);
+
+  const loaded = mergeLoadedSecrets(stored, { authToken: "", deviceToken: "" });
+
+  assert.equal(loaded.authToken, "session-from-file");
+  assert.equal(loaded.deviceToken, "device-from-file");
 });

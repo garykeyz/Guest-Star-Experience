@@ -67,7 +67,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.1.0";
+const BRIDGE_VERSION = "4.1.1";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -96,6 +96,7 @@ let libraryFiles = [];
 let requests = [];
 let scanning = false;
 let syncing = false;
+let syncAgain = false;
 let lastScanAt = null;
 let lastSyncAt = null;
 let libraryError = "";
@@ -1422,7 +1423,11 @@ async function scanNow() {
 }
 
 async function syncNow() {
-  if (syncing || !guestStarConfigured()) return;
+  if (!guestStarConfigured()) return;
+  if (syncing) {
+    syncAgain = true;
+    return;
+  }
   syncing = true;
   sheetError = "";
   broadcastState();
@@ -1455,15 +1460,23 @@ async function syncNow() {
     await persistQueuedEntries(nextActivity.activityId);
   } catch (error) {
     sheetError = errorMessage(error);
+  }
+  try {
+    await reconcileVirtualDjQueue();
+    await reportLocalStates();
+    await prepareMissingYoutube();
+    await prepareHitSuggestionYoutube();
+    await autoQueueExactMatches();
+  } catch (error) {
+    if (!sheetError) sheetError = errorMessage(error);
   } finally {
     syncing = false;
+    broadcastState();
+    if (syncAgain) {
+      syncAgain = false;
+      void syncNow();
+    }
   }
-  await reconcileVirtualDjQueue();
-  await reportLocalStates();
-  await prepareMissingYoutube();
-  await prepareHitSuggestionYoutube();
-  await autoQueueExactMatches();
-  broadcastState();
 }
 
 async function reportLocalStates() {
@@ -2281,6 +2294,7 @@ async function api(request, response, url) {
     const allowed = new Set([
       "adminState", "createHotel", "updateHotel", "createVenue",
       "createActivity", "createHost", "updateHost", "assignUser",
+      "setHostPassword", "updateActivityLanguages",
       "revokeAssignment", "revokeDevice", "updateHotelBranding",
       "scheduleActivity", "cancelSchedule", "listReviews", "updateReview",
       "regenerateHotelQr", "hotelShare"
@@ -2338,7 +2352,7 @@ async function api(request, response, url) {
       deviceId: data.deviceId,
       lastUsername: String(body.username || "").trim(),
       rememberLogin: body.rememberLogin !== false
-    }, config));
+    }, config), { storeSecrets: true });
     identityState = {
       authenticated: true,
       user: data.user || null,
@@ -2430,9 +2444,13 @@ async function api(request, response, url) {
     applyActivityState(data);
     requests = bridgeRequests(data);
     clearTransientCaches();
-    await persistQueuedEntries(activityState.activityId);
-    await syncNow();
+    sheetError = "";
     json(response, 200, stateView());
+    broadcastState();
+    void syncNow().catch((error) => {
+      sheetError = errorMessage(error);
+      broadcastState();
+    });
     return;
   }
   if (request.method === "POST" && pathname === "/api/config") {
@@ -2470,7 +2488,8 @@ async function api(request, response, url) {
       acceptEarlyRequests: body.acceptEarlyRequests,
       showCountdown: body.showCountdown,
       autoStartEnabled: body.autoStartEnabled,
-      showPublicStatus: body.showPublicStatus
+      showPublicStatus: body.showPublicStatus,
+      allowedLanguages: body.allowedLanguages
     });
     applyActivityState(data);
     requests = bridgeRequests(data);

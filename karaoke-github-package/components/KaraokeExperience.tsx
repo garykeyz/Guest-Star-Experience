@@ -37,6 +37,7 @@ type ApiState = {
     scheduledStartAt?: string;
     showCountdown?: boolean;
     acceptEarlyRequests?: boolean;
+    allowedLanguages?: Lang[];
   } | null;
   branding?: Record<string, string | boolean>;
   upcomingActivities?: Array<{
@@ -241,7 +242,11 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const text=copy[lang||"en"];
   const warningText=duplicateCopy[lang||"en"];
   const statusText=activityCopy[lang||"en"];
-  const active=languages.find(x=>x[0]===lang)||languages[0];
+  const allowedLanguageCodes=activity.activity?.allowedLanguages?.length
+    ? activity.activity.allowedLanguages
+    : (["es","en"] as Lang[]);
+  const availableLanguages=languages.filter(x=>allowedLanguageCodes.includes(x[0]));
+  const active=availableLanguages.find(x=>x[0]===lang)||availableLanguages[0]||languages[0];
   const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
   const serverOffset=Number.isFinite(Date.parse(String(activity.serverNow||"")))
     ? Date.parse(String(activity.serverNow))-Number(activity._receivedAt||clockNow)
@@ -321,6 +326,10 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     const id=window.setInterval(()=>setClockNow(Date.now()),1000);
     return()=>clearInterval(id);
   },[]);
+
+  useEffect(()=>{
+    if(lang&&!availableLanguages.some(language=>language[0]===lang))setLang(null);
+  },[lang,allowedLanguageCodes.join(",")]);
 
   useEffect(()=>{
     if(!hotelCode)return;
@@ -406,10 +415,10 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       <p className="eyebrow"><Sparkles size={14}/> SONG LANGUAGE</p>
       <h1>What language will you sing in?</h1>
       <p>Choose a language before completing your request. This helps us find the best karaoke version and lets the host know your selection.</p>
-      <div className="languageGrid">{languages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[2]}</strong><Check size={18}/></button>)}</div>
+      <div className="languageGrid">{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[2]}</strong><Check size={18}/></button>)}</div>
     </motion.section>:<>
     <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[2]}</span><ChevronDown size={16}/></button>
-      <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{languages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[2]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
+      <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[2]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
     </div>
     {bootstrapError&&<section className="tenantError" role="alert"><strong>Link unavailable</strong><span>{bootstrapError}</span></section>}
     {activity.hotel&&<section className="tenantIdentity">

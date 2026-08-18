@@ -1,4 +1,4 @@
-# Guest Star Experience 4.1.0
+# Guest Star Experience 4.1.1
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
@@ -19,6 +19,19 @@ El **Superhost** administra el sistema desde su propia cuenta de Google:
 Al crear un hotel desde el panel se crean en una sola operación: hoja del hotel,
 sede principal, actividad Guest Star Karaoke, identidad inicial, enlace, QR y
 asignación del Superhost.
+
+## Correcciones 4.1.1
+
+- la selección de actividad responde antes de sincronizar la cola completa y
+  evita el error 502;
+- la sesión del Bridge se conserva durante 30 días cuando se activa
+  **Keep me signed in**;
+- los Hosts usan contraseñas permanentes, pueden cambiar la propia y el
+  Superhost puede reemplazarlas revocando las sesiones anteriores;
+- el Superhost puede editar usuario, nombre, correo y revisar último acceso,
+  último cambio de contraseña y auditoría;
+- cada actividad permite Español, English o ambos;
+- las lecturas repetidas de Google Sheets se reutilizan durante cada solicitud.
 
 ## Primera configuración
 

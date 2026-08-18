@@ -58,7 +58,7 @@ test("solo el estado Saltado se resta del cálculo de la actividad", () => {
 
 test("la cola del Bridge incluye el estado compartido", () => {
   assert.match(source, /state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.0"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.1"/);
   assert.match(source, /body\.action === "bridgeControl"/);
   assert.match(source, /control:\s*control,\s*state:\s*publicState_\(\),\s*requests:\s*bridgeQueue_\(\)/);
   assert.match(source, /touchState_\("reset",\s*source,\s*true\)/);
@@ -913,6 +913,85 @@ test("crear un usuario solo registra permisos y nunca crea otro spreadsheet", ()
   assert.match(body, /appendRecordV4_\(auth\.master, "Users"/);
   assert.doesNotMatch(body, /SpreadsheetApp\.create/);
   assert.doesNotMatch(body, /DriveApp\.create/);
+  assert.match(body, /const password = String\(body\.password/);
+  assert.match(body, /role: "host"/);
+  assert.doesNotMatch(body, /body\.role/);
+  assert.match(body, /mustChangePassword: false/);
+  assert.doesNotMatch(body, /temporaryPassword/);
+});
+
+test("un Host puede volver a autorizar su Mac con la contraseña permanente", () => {
+  const body = source.slice(
+    source.indexOf("function registerDeviceV4_"),
+    source.indexOf("function loginV4_")
+  );
+  assert.match(body, /status: "active"/);
+  assert.doesNotMatch(body, /DEVICE_REVOKED/);
+  assert.match(body, /device\.userId !== user\.userId/);
+});
+
+test("el login no vuelve a revisar todas las tablas administrativas", () => {
+  const body = source.slice(
+    source.indexOf("function loginV4_"),
+    source.indexOf("function authenticateV4_")
+  );
+  assert.doesNotMatch(body, /ensureMasterTablesV4_/);
+  assert.match(body, /tableRowsV4_\(master, "Users"/);
+});
+
+test("el Superhost reemplaza una contraseña permanente sin poder leer la anterior", () => {
+  const body = source.slice(
+    source.indexOf("function setHostPasswordV4_"),
+    source.indexOf("function revokeAssignmentV4_")
+  );
+  assert.match(body, /hashSecretV4_\(password, salt\)/);
+  assert.match(body, /revokeUserAccessV4_\(auth\.master, user\.userId\)/);
+  assert.match(body, /action: "host\.password\.set"/);
+  assert.doesNotMatch(body, /password:\s*password/);
+});
+
+test("cada actividad limita el formulario público a Español, English o ambos", () => {
+  assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_(["es"])), ["es"]);
+  assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_(["English", "Español"])), ["en", "es"]);
+  assert.deepEqual(Array.from(context.normalizeActivityLanguagesV4_([])), ["es", "en"]);
+  assert.match(source, /code: "LANGUAGE_NOT_ALLOWED"/);
+  assert.match(source, /allowedLanguagesJson: JSON\.stringify/);
+  assert.match(source, /action: "activity\.languages\.updated"/);
+});
+
+test("seleccionar actividad devuelve un resumen rápido y deja la cola para la sincronización", () => {
+  const body = source.slice(
+    source.indexOf("function selectActivityV4_"),
+    source.indexOf("function selectedActivityStateV4_")
+  );
+  assert.match(body, /return selectedActivitySummaryV4_\(auth, context\)/);
+  assert.doesNotMatch(body, /bridgeQueue_\(\)/);
+  assert.doesNotMatch(body, /activityAwareStateV4_/);
+});
+
+test("reutiliza las filas de una tabla dentro de la misma solicitud", () => {
+  let dataReads = 0;
+  const sheet = {
+    getLastRow: () => 2,
+    getMaxColumns: () => 1,
+    insertColumnsAfter: () => {},
+    setFrozenRows: () => {},
+    getRange: (row) => row === 1 ? {
+      getDisplayValues: () => [["id"]],
+      setValues: () => {}
+    } : {
+      getValues: () => { dataReads += 1; return [["one"]]; }
+    }
+  };
+  const spreadsheet = {
+    getId: () => "master",
+    getSheetByName: () => sheet,
+    insertSheet: () => sheet
+  };
+  context.resetV4RuntimeCache_();
+  context.tableRowsV4_(spreadsheet, "Example", ["id"]);
+  context.tableRowsV4_(spreadsheet, "Example", ["id"]);
+  assert.equal(dataReads, 1);
 });
 
 test("crear un hotel automatiza su hoja, sede, actividad, asignación, identidad, enlace y QR directo", () => {
@@ -942,8 +1021,8 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 });
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
-  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.0"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.1\.0-superhost-bridge"/);
+  assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.1"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.1\.1-speed-session-security"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),
     source.indexOf("function publicHotelIdentifierV4_")
