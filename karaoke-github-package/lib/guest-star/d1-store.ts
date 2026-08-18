@@ -28,13 +28,13 @@ export const D1_BINDING = "GUEST_STAR_DB";
 export const D1_SCHEMA_VERSION = "4.2.0";
 export const DAILY_FREE_TRANSLATION_NEURON_BUDGET = 7_000;
 
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS guest_star_meta (
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS guest_star_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS guest_star_records (
+)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_records (
   scope TEXT NOT NULL,
   table_name TEXT NOT NULL,
   record_id TEXT NOT NULL,
@@ -42,10 +42,10 @@ CREATE TABLE IF NOT EXISTS guest_star_records (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (scope, table_name, record_id)
-);
-CREATE INDEX IF NOT EXISTS guest_star_records_table
-  ON guest_star_records (scope, table_name, updated_at);
-CREATE TABLE IF NOT EXISTS guest_star_requests (
+)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_table
+  ON guest_star_records (scope, table_name, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_requests (
   row_id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL,
   hotel_id TEXT NOT NULL,
@@ -74,14 +74,14 @@ CREATE TABLE IF NOT EXISTS guest_star_requests (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   archived_at TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS guest_star_requests_activity
-  ON guest_star_requests (hotel_id, activity_id, archived_at, queue_position, created_at);
-CREATE INDEX IF NOT EXISTS guest_star_requests_request_id
-  ON guest_star_requests (hotel_id, request_id, archived_at);
-CREATE INDEX IF NOT EXISTS guest_star_requests_virtual_dj
-  ON guest_star_requests (hotel_id, activity_id, virtual_dj_item_id, archived_at);
-CREATE TABLE IF NOT EXISTS guest_star_activity_runtime (
+)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_activity
+  ON guest_star_requests (hotel_id, activity_id, archived_at, queue_position, created_at)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_request_id
+  ON guest_star_requests (hotel_id, request_id, archived_at)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_virtual_dj
+  ON guest_star_requests (hotel_id, activity_id, virtual_dj_item_id, archived_at)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_activity_runtime (
   activity_id TEXT PRIMARY KEY,
   hotel_id TEXT NOT NULL,
   venue_id TEXT NOT NULL DEFAULT '',
@@ -94,16 +94,16 @@ CREATE TABLE IF NOT EXISTS guest_star_activity_runtime (
   last_action TEXT NOT NULL DEFAULT '',
   last_source TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS guest_star_activity_runtime_hotel
-  ON guest_star_activity_runtime (hotel_id, updated_at);
-CREATE TABLE IF NOT EXISTS guest_star_rate_limits (
+)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_activity_runtime_hotel
+  ON guest_star_activity_runtime (hotel_id, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_rate_limits (
   key TEXT PRIMARY KEY,
   attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS guest_star_outbox (
+)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_outbox (
   event_id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
   payload_json TEXT NOT NULL,
@@ -112,10 +112,10 @@ CREATE TABLE IF NOT EXISTS guest_star_outbox (
   created_at TEXT NOT NULL,
   processed_at TEXT NOT NULL DEFAULT '',
   last_error TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS guest_star_outbox_pending
-  ON guest_star_outbox (status, created_at);
-`;
+)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_outbox_pending
+  ON guest_star_outbox (status, created_at)`
+];
 
 const TABLE_ID_FIELDS: Record<string, string> = {
   Users: "userId",
@@ -186,7 +186,7 @@ export async function ensureD1Schema(db: D1DatabaseLike) {
   let ready = schemaReady.get(db as object);
   if (!ready) {
     ready = (async () => {
-      await db.exec(SCHEMA_SQL);
+      await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
       const now = nowIso();
       await db.batch([
         db.prepare(
@@ -838,13 +838,13 @@ export async function importD1Snapshot(db: D1DatabaseLike, snapshot: D1Migration
 
   await setMeta(db, "migration_status", "importing");
   await setMeta(db, "backend_mode", "apps_script");
-  await db.exec(`
-    DELETE FROM guest_star_records;
-    DELETE FROM guest_star_requests;
-    DELETE FROM guest_star_activity_runtime;
-    DELETE FROM guest_star_rate_limits;
-    DELETE FROM guest_star_outbox;
-  `);
+  await db.batch([
+    db.prepare("DELETE FROM guest_star_records"),
+    db.prepare("DELETE FROM guest_star_requests"),
+    db.prepare("DELETE FROM guest_star_activity_runtime"),
+    db.prepare("DELETE FROM guest_star_rate_limits"),
+    db.prepare("DELETE FROM guest_star_outbox")
+  ]);
 
   const recordStatements: D1StatementLike[] = [];
   const skippedTables = new Set(["AuthSessions", "OneTimeLoginCodes"]);
