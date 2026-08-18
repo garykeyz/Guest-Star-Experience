@@ -7,6 +7,13 @@
   "vars": {
     "KARAOKE_APPS_SCRIPT_URL": "https://script.google.com/macros/s/AKfycbxpUugPQJ1N3yb8uezB6fpd84CELAKtbuB2maE3HberOBGo5ObABGtN3ZfCI3UvKbLkzg/exec"
   },
+  "d1_databases": [
+    {
+      "binding": "GUEST_STAR_DB",
+      "database_name": "guest-star-experience",
+      "migrations_dir": "migrations"
+    }
+  ],
   "assets": {
     "binding": "ASSETS",
     "directory": ".open-next/assets"

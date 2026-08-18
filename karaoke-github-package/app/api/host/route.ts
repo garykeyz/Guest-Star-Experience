@@ -1,100 +1,203 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  backendMode,
+  d1Health,
+  ensureD1Schema,
+  getGuestStarD1,
+  importD1Snapshot,
+  type D1MigrationSnapshot,
+  type JsonObject
+} from "@/lib/guest-star/d1-store";
+import {
+  createMigrationSession,
+  handleD1HostAction,
+  setD1BackendMode
+} from "@/lib/guest-star/d1-actions";
+import {
+  callAppsScript,
+  flushD1BackupFully,
+  scheduleD1Backup
+} from "@/lib/guest-star/upstream";
 
-const APPS_SCRIPT_ENDPOINT =
-  process.env.KARAOKE_APPS_SCRIPT_URL ||
-  "https://script.google.com/macros/s/AKfycbxpUugPQJ1N3yb8uezB6fpd84CELAKtbuB2maE3HberOBGo5ObABGtN3ZfCI3UvKbLkzg/exec";
 const SESSION_COOKIE = "guest_star_host_session";
 const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
 const HOTEL_PROVISIONING_TIMEOUT_MS = 120_000;
+const MIGRATION_TIMEOUT_MS = 180_000;
+const MAX_HOST_BODY_BYTES = 128 * 1024;
 
 export const dynamic = "force-dynamic";
 
-type JsonObject = Record<string, unknown>;
-
-async function callAppsScript(payload: JsonObject) {
-  const timeoutMs = payload.action === "createHotel"
-    ? HOTEL_PROVISIONING_TIMEOUT_MS
-    : DEFAULT_APPS_SCRIPT_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(APPS_SCRIPT_ENDPOINT, {
-      method: "POST",
-      cache: "no-store",
-      redirect: "follow",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(`Guest Star returned ${response.status}.`);
-    return JSON.parse(text) as JsonObject;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function safeResponse(data: JsonObject, status = 200) {
-  const { authToken: _authToken, deviceToken: _deviceToken, ...safe } = data;
+  const {
+    authToken: _authToken,
+    deviceToken: _deviceToken,
+    passwordHash: _passwordHash,
+    passwordSalt: _passwordSalt,
+    backupSecret: _backupSecret,
+    ...safe
+  } = data;
   return NextResponse.json(safe, {
     status,
     headers: { "Cache-Control": "no-store" }
   });
 }
 
+function setSessionCookie(response: NextResponse, token: string, expiresAt: unknown) {
+  const expiry = Date.parse(String(expiresAt || ""));
+  const maxAge = Number.isFinite(expiry)
+    ? Math.max(60, Math.floor((expiry - Date.now()) / 1000))
+    : 30 * 24 * 60 * 60;
+  response.cookies.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge
+  });
+}
+
+function clearSessionCookie(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0
+  });
+}
+
+async function verifySuperhost(
+  body: JsonObject,
+  sessionToken: string,
+  mode: string,
+  db: NonNullable<ReturnType<typeof getGuestStarD1>>
+) {
+  const identity = mode === "d1_primary"
+    ? await handleD1HostAction(db, { ...body, action: "me", authToken: sessionToken })
+    : await callAppsScript({ action: "me", authToken: sessionToken });
+  if (identity?.ok !== true || (identity.user as JsonObject | undefined)?.role !== "superhost") {
+    throw new Error("FORBIDDEN");
+  }
+  return identity;
+}
+
 export async function POST(request: NextRequest) {
   let body: JsonObject;
+  const rawBody = await request.text();
+  if (new TextEncoder().encode(rawBody).byteLength > MAX_HOST_BODY_BYTES) {
+    return safeResponse({ ok: false, code: "REQUEST_TOO_LARGE" }, 413);
+  }
   try {
-    body = await request.json() as JsonObject;
+    body = JSON.parse(rawBody) as JsonObject;
   } catch {
     return safeResponse({ ok: false, code: "INVALID_REQUEST" }, 400);
   }
+
   const action = String(body.action || "");
   const sessionToken = request.cookies.get(SESSION_COOKIE)?.value || "";
   const payload: JsonObject = { ...body };
   delete payload.authToken;
   delete payload.deviceToken;
-  if (action === "login") {
-    payload.clientType = "web";
-  } else if (action !== "consumeOneTimeLoginCode") {
-    payload.authToken = sessionToken;
-  }
+  if (action === "login") payload.clientType = "web";
+  else if (action !== "consumeOneTimeLoginCode") payload.authToken = sessionToken;
 
   try {
-    const data = await callAppsScript(payload);
+    const db = getGuestStarD1();
+    let mode = "apps_script";
+    if (db) {
+      await ensureD1Schema(db);
+      mode = await backendMode(db);
+    }
+
+    if (action.startsWith("d1")) {
+      if (!db) return safeResponse({ ok: false, code: "D1_BINDING_NOT_CONFIGURED" }, 503);
+
+      if (action === "d1Status") {
+        await verifySuperhost(body, sessionToken, mode, db);
+        return safeResponse(await d1Health(db));
+      }
+
+      if (action === "d1Prepare") {
+        if (mode !== "apps_script") return safeResponse({ ok: false, code: "D1_ALREADY_ACTIVE" }, 409);
+        const snapshot = await callAppsScript({
+          action: "exportD1Snapshot",
+          authToken: sessionToken
+        }, MIGRATION_TIMEOUT_MS);
+        if (snapshot.ok !== true) {
+          return safeResponse({ ok: false, code: String(snapshot.code || "D1_EXPORT_FAILED") }, 400);
+        }
+        const imported = await importD1Snapshot(db, snapshot as D1MigrationSnapshot);
+        return safeResponse({ ok: true, migration: imported, health: await d1Health(db) });
+      }
+
+      if (action === "d1Activate") {
+        if (mode !== "apps_script") return safeResponse(await d1Health(db));
+        const identity = await verifySuperhost(body, sessionToken, mode, db);
+        const userId = String((identity.user as JsonObject).userId || "");
+        const session = await createMigrationSession(db, userId);
+        await setD1BackendMode(db, "d1_primary");
+        const response = safeResponse(await d1Health(db));
+        setSessionCookie(response, session.token, session.expiresAt);
+        scheduleD1Backup(db);
+        return response;
+      }
+
+      if (action === "d1Rollback") {
+        await verifySuperhost(body, sessionToken, mode, db);
+        if (mode === "d1_primary") {
+          const backup = await flushD1BackupFully(db);
+          if (backup.ok !== true) {
+            return safeResponse({
+              ok: false,
+              code: "ROLLBACK_BACKUP_INCOMPLETE",
+              error: "Rollback stopped because the latest D1 changes are not yet synchronized to Google Sheets.",
+              backup
+            }, 409);
+          }
+        }
+        await setD1BackendMode(db, "apps_script");
+        const response = safeResponse({
+          ...await d1Health(db),
+          signInRequired: true
+        });
+        clearSessionCookie(response);
+        return response;
+      }
+
+      if (action === "d1BackupNow") {
+        await verifySuperhost(body, sessionToken, mode, db);
+        const backup = await flushD1BackupFully(db);
+        return safeResponse({ ok: backup.ok, backup, health: await d1Health(db) }, backup.ok ? 200 : 502);
+      }
+
+      return safeResponse({ ok: false, code: "INVALID_D1_ACTION" }, 400);
+    }
+
+    let data: JsonObject;
+    if (db && mode === "d1_primary") {
+      data = await handleD1HostAction(db, payload) || {
+        ok: false,
+        code: "D1_ACTION_NOT_IMPLEMENTED"
+      };
+      if (!["me", "adminState"].includes(action)) scheduleD1Backup(db);
+    } else {
+      const timeoutMs = action === "createHotel"
+        ? HOTEL_PROVISIONING_TIMEOUT_MS
+        : DEFAULT_APPS_SCRIPT_TIMEOUT_MS;
+      data = await callAppsScript(payload, timeoutMs);
+    }
+
     const code = String(data.code || "");
     const response = safeResponse(
       data,
-      data.ok === false && (code === "UNAUTHORIZED" || code === "INVALID_CREDENTIALS")
-        ? 401
-        : 200
+      data.ok === false && (code === "UNAUTHORIZED" || code === "INVALID_CREDENTIALS") ? 401 : 200
     );
     if (
       data.ok === true &&
       (action === "login" || action === "consumeOneTimeLoginCode") &&
       typeof data.authToken === "string"
-    ) {
-      const expiresAt = Date.parse(String(data.expiresAt || ""));
-      const maxAge = Number.isFinite(expiresAt)
-        ? Math.max(60, Math.floor((expiresAt - Date.now()) / 1000))
-        : 12 * 60 * 60;
-      response.cookies.set(SESSION_COOKIE, data.authToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge
-      });
-    }
-    if (action === "logout" || code === "UNAUTHORIZED") {
-      response.cookies.set(SESSION_COOKIE, "", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge: 0
-      });
-    }
+    ) setSessionCookie(response, data.authToken, data.expiresAt);
+    if (action === "logout" || code === "UNAUTHORIZED") clearSessionCookie(response);
     return response;
   } catch (error) {
     const message = error instanceof Error && error.name === "AbortError"
@@ -102,6 +205,7 @@ export async function POST(request: NextRequest) {
       : error instanceof Error
         ? error.message
         : "The Host Panel could not connect to Guest Star. Contact the Superhost if this continues.";
-    return safeResponse({ ok: false, error: message }, 502);
+    const status = message === "FORBIDDEN" ? 403 : 502;
+    return safeResponse({ ok: false, code: message, error: message }, status);
   }
 }

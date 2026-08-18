@@ -1022,12 +1022,29 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
   assert.match(source, /const BRIDGE_API_VERSION = "4\.1\.1"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.1\.1-speed-session-security"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.2\.0-cloudflare-d1-migration"/);
+  assert.match(source, /const V4_SCHEMA_VERSION = "4\.2\.0"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),
     source.indexOf("function publicHotelIdentifierV4_")
   );
   assert.match(dispatchBody, /codeVersion: BRIDGE_API_VERSION/);
+});
+
+test("la migración D1 exporta hashes compatibles sin sesiones ni tokens de dispositivos", () => {
+  assert.match(source, /function exportD1SnapshotV4_\(auth\)/);
+  assert.match(source, /tableName === "AuthSessions" \|\| tableName === "OneTimeLoginCodes"/);
+  assert.match(source, /device\.deviceTokenHash = ""/);
+  assert.match(source, /backupSecret: backupSecret/);
+  assert.match(source, /function ingestD1BackupV4_\(body\)/);
+  assert.match(source, /safeEqualV4_\(body\.backupSecret, expected\)/);
+  assert.match(source, /function materializeD1BackupEventV4_\(event\)/);
+  assert.match(source, /action === "record\.upsert"/);
+  assert.match(source, /action === "request\.upsert"/);
+  assert.match(source, /action === "requests\.archive"/);
+  assert.match(source, /action === "activity\.runtime"/);
+  assert.match(source, /"applyStatus", "applyError"/);
+  assert.match(source, /ok: failures\.length === 0/);
 });
 
 test("la sincronización multi-hotel no queda serializada por el lock legado", () => {

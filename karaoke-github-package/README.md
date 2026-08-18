@@ -1,7 +1,25 @@
-# Guest Star Experience 4.1.1
+# Guest Star Experience 4.2.0
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
+
+La versión 4.2 incorpora un backend Cloudflare D1 con importación validada,
+activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
+[D1-MIGRATION.md](D1-MIGRATION.md) antes de desplegar o activar la migración.
+
+## Modelo 4.2
+
+- D1 atiende login, sesiones, administración, actividad, solicitudes públicas
+  y Bridge sin esperar a Apps Script/Sheets en cada operación.
+- El despliegue inicia en modo `apps_script`; el tráfico solo cambia después de
+  **Import & Validate** y **Activate D1**.
+- Google Sheets conserva el snapshot original, el log `D1BackupEvents` y una
+  réplica de respaldo aplicable para rollback.
+- Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
+  se muestran en texto plano.
+- Hosts autorizados pueden elegir Español, English o ambos en su actividad.
+- Bridge 4.1.1 sigue siendo compatible con el servicio 4.2; no requiere un
+  instalador nuevo para esta migración.
 
 ## Modelo 4.1
 

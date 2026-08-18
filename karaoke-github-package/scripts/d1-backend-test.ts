@@ -1,0 +1,329 @@
+import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import {
+  type D1DatabaseLike,
+  type D1StatementLike,
+  backendMode,
+  d1Health,
+  ensureD1Schema,
+  importD1Snapshot,
+  listRecords
+} from "../lib/guest-star/d1-store";
+import {
+  handleD1HostAction,
+  handleD1PublicGet,
+  handleD1PublicPost,
+  setD1BackendMode
+} from "../lib/guest-star/d1-actions";
+import { hmacSha256Hex } from "../lib/guest-star/crypto";
+
+class TestStatement implements D1StatementLike {
+  private values: unknown[] = [];
+  constructor(private database: DatabaseSync, private query: string) {}
+  bind(...values: unknown[]) { this.values = values; return this; }
+  async all<T>() {
+    const results = this.database.prepare(this.query).all(...this.values as SQLInputValue[]) as T[];
+    return { success: true, results };
+  }
+  async first<T>(column?: string) {
+    const row = this.database.prepare(this.query).get(...this.values as SQLInputValue[]) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return (column ? row[column] : row) as T;
+  }
+  async run() {
+    const result = this.database.prepare(this.query).run(...this.values as SQLInputValue[]);
+    return { success: true, meta: { changes: Number(result.changes) } };
+  }
+}
+
+class TestD1 implements D1DatabaseLike {
+  readonly database = new DatabaseSync(":memory:");
+  prepare(query: string) { return new TestStatement(this.database, query); }
+  async batch<T>(statements: D1StatementLike[]) {
+    const results: unknown[] = [];
+    this.database.exec("BEGIN");
+    try {
+      for (const statement of statements) results.push(await statement.run());
+      this.database.exec("COMMIT");
+      return results as T[];
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  async exec(query: string) { this.database.exec(query); return { success: true }; }
+}
+
+const db = new TestD1();
+await db.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
+await ensureD1Schema(db);
+
+const superPassword = "Superhost-Password-2026";
+const superSalt = "0123456789abcdef0123456789abcdef";
+const superHash = await hmacSha256Hex(superPassword, superSalt);
+assert.equal(
+  superHash,
+  createHmac("sha256", superSalt).update(superPassword).digest("hex"),
+  "password hashes must stay compatible with Apps Script HMAC-SHA256"
+);
+
+const hotelId = "hotel-main";
+const venueId = "venue-main";
+const activityId = "activity-main";
+await importD1Snapshot(db, {
+  schemaVersion: "4.2.0",
+  backupSecret: "backup-secret-for-test-only",
+  master: {
+    Users: [{
+      userId: "superhost-1", username: "superhost", displayName: "Superhost",
+      email: "owner@example.com", passwordHash: superHash, passwordSalt: superSalt,
+      role: "superhost", status: "active", staticHostSlug: "superhost",
+      mustChangePassword: false, createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), lastLoginAt: "", passwordUpdatedAt: new Date().toISOString()
+    }],
+    Hotels: [{
+      hotelId, name: "Moon Palace", slug: "moon-palace", publicCode: "public-test-code",
+      publicUrl: "https://request.gstarxp.com/h/moon-palace-public-test-code",
+      qrFileId: "", qrVersion: 1, activePublicActivityId: activityId, timezone: "America/Santo_Domingo",
+      dataSheetId: "legacy-sheet", status: "active", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    }],
+    Venues: [{
+      venueId, hotelId, name: "Lobby Bar", slug: "lobby-bar", status: "active",
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    }],
+    Activities: [{
+      activityId, hotelId, venueId, name: "Karaoke Night", internalCode: "karaoke-night",
+      status: "ready", defaultDurationSeconds: 7200, defaultTransitionSeconds: 30,
+      showPublicStatus: true, showCountdown: true, scheduledStartAt: "",
+      autoStartEnabled: false, acceptEarlyRequests: false, currentCycleId: "",
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      allowedLanguagesJson: JSON.stringify(["es", "en"])
+    }],
+    UserAssignments: [], Devices: [], BridgeCommands: [], AuthSessions: [],
+    OneTimeLoginCodes: [], AuditLog: [], HotelBranding: [], ActivitySchedules: [],
+    UpcomingActivities: [], GlobalSettings: []
+  },
+  hotels: [{
+    hotelId,
+    legacyConfig: { accepting: false, activityRunning: false },
+    tables: {
+      Solicitudes: [{
+        "Fecha y hora": new Date().toISOString(), "Nombre": "Legacy Guest",
+        "Canción": "Legacy Song", "Artista": "Legacy Artist", "Idioma": "Español",
+        "Language code": "es", "Estado": "Pendiente", "ID": "legacy-request-1"
+      }],
+      Historial: [], ActivityCycles: [], Reviews: [], ReviewInvitations: [], GuestReminders: []
+    }
+  }]
+});
+
+let health = await d1Health(db);
+assert.equal(health.mode, "apps_script");
+assert.equal(health.migrationStatus, "ready");
+assert.equal(health.counts.users, 1);
+assert.equal(health.counts.requests, 1);
+await setD1BackendMode(db, "d1_primary");
+assert.equal(await backendMode(db), "d1_primary");
+
+const login = await handleD1HostAction(db, {
+  action: "login", username: "superhost", password: superPassword,
+  clientType: "web", rememberLogin: true
+});
+assert.equal(login?.ok, true);
+const superToken = String(login?.authToken || "");
+assert.ok(superToken.length >= 40);
+assert.ok(Date.parse(String(login?.expiresAt)) - Date.now() > 29 * 24 * 60 * 60 * 1000);
+
+const superAuth = { authToken: superToken };
+const bridgeLogin = await handleD1HostAction(db, {
+  action: "login", username: "superhost", password: superPassword,
+  clientType: "bridge", deviceName: "Test Bridge", bridgeVersion: "4.1.1",
+  rememberLogin: true
+});
+assert.equal(bridgeLogin?.ok, true);
+assert.equal(bridgeLogin?.codeVersion, "4.1.1", "Bridge 4.1.1 must remain compatible with service 4.2");
+const bridgeAuth = {
+  authToken: String(bridgeLogin?.authToken),
+  deviceToken: String(bridgeLogin?.deviceToken)
+};
+assert.equal((await handleD1HostAction(db, {
+  action: "selectActivity", ...bridgeAuth, hotelId, venueId, activityId, source: "bridge"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "bridgeHeartbeat", ...bridgeAuth, virtualDJConnected: true, bridgeVersion: "4.1.1"
+}))?.ok, true);
+const oneTimeCode = await handleD1HostAction(db, {
+  action: "createOneTimeLoginCode", ...bridgeAuth
+});
+assert.equal(oneTimeCode?.ok, true);
+const rawOneTimeCode = new URL(String(oneTimeCode?.url)).searchParams.get("code") || "";
+assert.equal((await handleD1HostAction(db, {
+  action: "consumeOneTimeLoginCode", code: rawOneTimeCode
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "consumeOneTimeLoginCode", code: rawOneTimeCode
+}))?.code, "INVALID_OR_EXPIRED_CODE", "one-time login codes must be consumed atomically");
+const selected = await handleD1HostAction(db, {
+  action: "selectActivity", ...superAuth, hotelId, venueId, activityId, source: "web"
+});
+assert.equal(selected?.ok, true, "activity selection must no longer return 502");
+
+const hostPassword = "Host-Permanent-Password-2026";
+const createdHost = await handleD1HostAction(db, {
+  action: "createHost", ...superAuth, username: "host.one", displayName: "Host One",
+  email: "host@example.com", password: hostPassword
+});
+assert.equal(createdHost?.ok, true);
+const hostUser = createdHost?.user as Record<string, unknown>;
+const hostId = String(hostUser.userId);
+assert.equal("passwordHash" in hostUser, false, "admin API must never expose hashes");
+
+assert.equal((await handleD1HostAction(db, {
+  action: "assignUser", ...superAuth, userId: hostId, hotelId,
+  permissions: { canChangeSchedule: true, canStartActivity: true, canOpenCloseRequests: true }
+}))?.ok, true);
+
+const hostLogin = await handleD1HostAction(db, {
+  action: "login", username: "host.one", password: hostPassword,
+  clientType: "web", rememberLogin: true
+});
+assert.equal(hostLogin?.ok, true);
+const hostToken = String(hostLogin?.authToken);
+const hostSelection = hostLogin?.selection as { hotels?: Array<Record<string, unknown>> };
+assert.equal("dataSheetId" in (hostSelection.hotels?.[0] || {}), false, "Host APIs must hide Google Sheet IDs");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateActivityLanguages", authToken: hostToken,
+  hotelId, venueId, activityId, allowedLanguages: ["es"]
+}))?.ok, true, "assigned Host can select per-activity languages");
+
+const publicParams = new URLSearchParams({ action: "publicBootstrap", hotel: "moon-palace-public-test-code" });
+const futureSchedule = await handleD1HostAction(db, {
+  action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
+  scheduledStartAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  durationSeconds: 7200, requestOpeningLeadSeconds: 600,
+  autoOpenRequests: true, autoStartActivity: true, showCountdown: true,
+  recurrenceType: "none", recurrenceInterval: 1
+});
+assert.equal(futureSchedule?.ok, true);
+assert.equal((await handleD1PublicGet(db, publicParams) as Record<string, unknown>).accepting, false,
+  "future schedules must stay closed until requestOpeningAt");
+assert.equal((await handleD1HostAction(db, {
+  action: "cancelSchedule", ...superAuth,
+  scheduleId: String((futureSchedule?.schedule as Record<string, unknown>).scheduleId)
+}))?.ok, true);
+
+const dueSchedule = await handleD1HostAction(db, {
+  action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
+  scheduledStartAt: new Date(Date.now() - 1000).toISOString(),
+  durationSeconds: 7200, requestOpeningLeadSeconds: 600,
+  autoOpenRequests: true, autoStartActivity: true, showCountdown: true,
+  recurrenceType: "none", recurrenceInterval: 1
+});
+assert.equal(dueSchedule?.ok, true);
+assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "completed");
+assert.equal((await handleD1HostAction(db, {
+  action: "activityState", ...superAuth, hotelId, venueId, activityId
+}))?.ok, true, "due schedules must be processed by Host/Bridge state reads");
+
+const publicState = await handleD1PublicGet(db, publicParams);
+assert.equal(publicState.ok, true);
+assert.equal((publicState as Record<string, unknown>).accepting, true);
+assert.equal((publicState as Record<string, unknown>).activityRunning, true,
+  "due schedules must auto-start the activity exactly once");
+assert.equal((publicState as Record<string, unknown>).queuePeopleCount, 1,
+  "legacy requests without tenant IDs must inherit the active hotel activity during import");
+const publicRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", name: "Guest One", song: "Song One",
+  artist: "Artist One", language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(publicRequest.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
+}))?.ok, true, "starting a new cycle must archive the previous D1 queue");
+
+assert.equal((await handleD1HostAction(db, {
+  action: "updateHotelBranding", ...superAuth, hotelId,
+  branding: { showRemindMe: true, showInternalRating: true }
+}))?.ok, true);
+const reminder = await handleD1PublicPost(db, {
+  action: "createGuestReminder", publicCode: "moon-palace-public-test-code",
+  guestEmail: "guest@example.com", consent: true
+});
+assert.equal(reminder.ok, true);
+assert.equal((await handleD1PublicPost(db, {
+  action: "unsubscribeGuest", publicCode: "moon-palace-public-test-code",
+  recordId: reminder.recordId, token: "wrong-token"
+})).code, "INVALID_UNSUBSCRIBE_TOKEN");
+assert.equal((await handleD1PublicPost(db, {
+  action: "unsubscribeGuest", publicCode: "moon-palace-public-test-code",
+  recordId: reminder.recordId, token: reminder.token
+})).ok, true);
+
+const submittedReview = await handleD1PublicPost(db, {
+  action: "submitReview", publicCode: "moon-palace-public-test-code", rating: 5,
+  guestName: "Guest One", comment: "Excellent", activityId: "forged-activity",
+  venueId: "forged-venue", cycleId: "forged-cycle"
+});
+assert.equal(submittedReview.ok, true);
+const storedReview = (await listRecords(db, "Reviews", hotelId))[0];
+assert.equal(storedReview.activityId, activityId, "public reviews must be clamped to the active tenant activity");
+assert.equal(storedReview.venueId, venueId, "public reviews must not accept forged venue IDs");
+
+const replacement = "Host-Replaced-Password-2026";
+assert.equal((await handleD1HostAction(db, {
+  action: "setHostPassword", ...superAuth, userId: hostId, password: replacement
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, { action: "me", authToken: hostToken }))?.code, "UNAUTHORIZED");
+assert.equal((await handleD1HostAction(db, {
+  action: "login", username: "host.one", password: replacement,
+  clientType: "web", rememberLogin: true
+}))?.ok, true);
+
+const secondHotel = await handleD1HostAction(db, {
+  action: "createHotel", ...superAuth, name: "Other Hotel", timezone: "America/Santo_Domingo"
+});
+assert.equal(secondHotel?.ok, true);
+const otherHotelId = String((secondHotel?.hotel as Record<string, unknown>).hotelId);
+assert.equal(String((secondHotel?.venue as Record<string, unknown>).hotelId), otherHotelId,
+  "new D1 hotels must include their default venue");
+assert.deepEqual((secondHotel?.activity as Record<string, unknown>).allowedLanguages, ["es", "en"],
+  "new D1 hotels must include a bilingual default activity");
+assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId), "superhost-1",
+  "new D1 hotels must assign the Superhost automatically");
+const forbidden = await handleD1HostAction(db, {
+  action: "selectActivity", authToken: String((await handleD1HostAction(db, {
+    action: "login", username: "host.one", password: replacement, clientType: "web", rememberLogin: true
+  }))?.authToken), hotelId: otherHotelId, venueId: "", activityId: ""
+});
+assert.equal(forbidden?.code, "FORBIDDEN");
+
+const outbox = await listRecords(db, "Users");
+assert.equal(outbox.length, 2);
+const serializedOutbox = JSON.stringify(
+  db.database.prepare("SELECT action, payload_json FROM guest_star_outbox").all()
+);
+assert.equal(serializedOutbox.includes('"action":"requests.archive"'), true,
+  "start-new must replicate queue archival to the Sheets standby");
+assert.equal(serializedOutbox.includes(hostPassword), false, "plaintext passwords must never enter backup events");
+assert.equal(serializedOutbox.includes(replacement), false, "replacement passwords must never enter backup events");
+assert.equal(serializedOutbox.includes(String(bridgeLogin?.deviceToken)), false, "Bridge tokens must never enter backup events");
+assert.equal(serializedOutbox.includes("deviceTokenHash"), false, "Bridge token hashes must stay out of Sheets backup events");
+
+const performanceStartedAt = performance.now();
+for (let index = 0; index < 100; index += 1) {
+  assert.equal((await handleD1HostAction(db, { action: "me", ...superAuth }))?.ok, true);
+}
+assert.ok(performance.now() - performanceStartedAt < 1000, "100 local D1 session reads should finish within one second");
+
+await setD1BackendMode(db, "apps_script");
+health = await d1Health(db);
+assert.equal(health.mode, "apps_script");
+assert.ok(health.backup.pending > 0);
+
+console.log("D1 backend tests passed", {
+  users: health.counts.users,
+  pendingBackupEvents: health.backup.pending,
+  publicRequestId: publicRequest.id
+});

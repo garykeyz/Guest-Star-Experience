@@ -223,7 +223,7 @@ try {
     })
   });
   assert.equal(bridgeLogin.status, 200);
-  assert.equal(bridgeLogin.headers.get("x-guest-star-bridge-proxy"), "4.1.1");
+  assert.equal(bridgeLogin.headers.get("x-guest-star-bridge-proxy"), "4.2.0");
   const bridgeLoginBody = await bridgeLogin.json();
   assert.equal(bridgeLoginBody.authToken, sessionToken);
   assert.equal(bridgeLoginBody.deviceToken, deviceToken);
