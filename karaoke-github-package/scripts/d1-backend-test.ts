@@ -62,7 +62,15 @@ class TestD1 implements D1DatabaseLike {
       throw error;
     }
   }
-  async exec(query: string) { this.database.exec(query); return { success: true }; }
+  async exec(query: string) {
+    assert.doesNotMatch(
+      query,
+      /\bPRAGMA\s+foreign_keys\s*=/i,
+      "Cloudflare D1 enforces foreign keys and rejects changing this PRAGMA inside its implicit transaction"
+    );
+    this.database.exec(query);
+    return { success: true };
+  }
 }
 
 const db = new TestD1();

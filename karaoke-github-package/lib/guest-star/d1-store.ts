@@ -29,7 +29,6 @@ export const D1_SCHEMA_VERSION = "4.2.0";
 export const DAILY_FREE_TRANSLATION_NEURON_BUDGET = 7_000;
 
 const SCHEMA_SQL = `
-PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS guest_star_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
