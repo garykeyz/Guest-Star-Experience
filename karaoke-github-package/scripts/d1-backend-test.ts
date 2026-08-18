@@ -62,11 +62,23 @@ class TestD1 implements D1DatabaseLike {
       throw error;
     }
   }
-  async exec(query: string) { this.database.exec(query); return { success: true }; }
+  async exec(query: string) {
+    assert.doesNotMatch(
+      query,
+      /\bPRAGMA\s+foreign_keys\s*=/i,
+      "Cloudflare D1 enforces foreign keys and rejects changing this PRAGMA inside its implicit transaction"
+    );
+    for (const line of query.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+      this.database.exec(line);
+    }
+    return { success: true };
+  }
 }
 
+const migrationDb = new TestD1();
+migrationDb.database.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
+
 const db = new TestD1();
-await db.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
 await ensureD1Schema(db);
 assert.equal(await reserveDailyFreeTranslationBudget(db, DAILY_FREE_TRANSLATION_NEURON_BUDGET - 1), true);
 assert.equal(await reserveDailyFreeTranslationBudget(db, 2), false,
