@@ -2,6 +2,7 @@
 
 import { CSSProperties, FormEvent, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { normalizeBrandImageUrl } from "@/lib/guest-star/media-url";
 import {
   ArrowRight, Bell, CalendarPlus, Check, ChevronDown, Clock3, Headphones,
   Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
@@ -429,7 +430,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     </div>
     {bootstrapError&&<section className="tenantError" role="alert"><strong>Link unavailable</strong><span>{bootstrapError}</span></section>}
     {activity.hotel&&<section className="tenantIdentity">
-      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<img src={String(branding.hotelLogoUrl||branding.teamLogoUrl)} alt=""/>}
+      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/>}
       <div>
         {branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}
         {branding.showActivityDetails!==false&&<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span>}

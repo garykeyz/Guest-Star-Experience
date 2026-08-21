@@ -105,6 +105,13 @@ test("el HOST controla si los huéspedes ven el estado de la actividad", () => {
   assert.match(source, /getRange\("B13"\)\.setValue\(false\)/);
 });
 
+test("los venues se pueden administrar y protegen sus actividades", () => {
+  assert.match(source, /function updateVenueV4_\(auth, body\)/);
+  assert.match(source, /VENUE_HAS_ACTIVE_ACTIVITIES/);
+  assert.match(source, /updateVenue:\s*function\(\)/);
+  assert.match(source, /activeVenueIds\[activity\.venueId\]/);
+});
+
 test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {
   const originalSpreadsheet = context.spreadsheet_;
   context.spreadsheet_ = () => ({

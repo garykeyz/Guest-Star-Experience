@@ -362,8 +362,14 @@ async function effectivePermissions(
 async function accessibleSelection(db: D1DatabaseLike, user: JsonObject) {
   const hotels = (await listRecords(db, "Hotels")).filter((hotel) => text(hotel.status) === "active");
   const venues = (await listRecords(db, "Venues")).filter((venue) => text(venue.status) === "active");
+  const activeHotelIds = new Set(hotels.map((hotel) => text(hotel.hotelId)));
+  const activeVenueIds = new Set(venues.map((venue) => text(venue.venueId)));
   const activities = (await listRecords(db, "Activities"))
-    .filter((activity) => text(activity.status) !== "inactive")
+    .filter((activity) => (
+      text(activity.status) !== "inactive" &&
+      activeHotelIds.has(text(activity.hotelId)) &&
+      activeVenueIds.has(text(activity.venueId))
+    ))
     .map((activity) => activityWithLanguages(activity) as JsonObject);
   if (text(user.role) === "superhost") return { hotels, venues, activities };
   const assignments = (await listRecords(db, "UserAssignments"))
@@ -892,8 +898,7 @@ async function createHotel(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     hotel,
     venue,
     activity: activityWithLanguages(activity),
-    assignment,
-    warning: "D1 is primary. Google Sheets receives an asynchronous hot-standby copy without plaintext passwords."
+    assignment
   };
 }
 
@@ -929,6 +934,46 @@ async function createVenue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   });
   await audit(db, { userId: auth.user.userId, action: "venue.created", hotelId: context.hotel.hotelId, venueId: venue.venueId });
   return { ok: true, venue };
+}
+
+async function updateVenue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  const venue = await getRecord(db, "Venues", text(body.venueId));
+  if (!venue) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const hotel = await getRecord(db, "Hotels", text(venue.hotelId));
+  if (!hotel) return { ok: false, code: "VENUE_NOT_FOUND" };
+
+  const requestedStatus = text(body.status);
+  const deleting = requestedStatus === "inactive";
+  if (deleting) {
+    const linkedActivities = (await listRecords(db, "Activities")).filter((activity) => (
+      text(activity.venueId) === text(venue.venueId) && text(activity.status) !== "inactive"
+    ));
+    if (linkedActivities.length) {
+      return {
+        ok: false,
+        code: "VENUE_HAS_ACTIVE_ACTIVITIES",
+        error: "Delete the active activities assigned to this venue before deleting the venue."
+      };
+    }
+  }
+
+  const changes: JsonObject = { updatedAt: nowIso() };
+  if (body.name !== undefined) {
+    const name = text(body.name);
+    if (!name) return { ok: false, code: "VENUE_NAME_REQUIRED" };
+    changes.name = name;
+  }
+  if (body.status !== undefined) changes.status = deleting ? "inactive" : "active";
+  const updated = await patchRecord(db, "Venues", text(venue.venueId), changes) || venue;
+  await audit(db, {
+    userId: auth.user.userId,
+    action: deleting ? "venue.deleted" : body.status !== undefined ? "venue.restored" : "venue.updated",
+    hotelId: venue.hotelId,
+    venueId: venue.venueId,
+    details: changes
+  });
+  return { ok: true, venue: updated, recoverable: deleting };
 }
 
 async function createActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -2172,6 +2217,7 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "createHotel") return await createHotel(db, auth, body);
     if (action === "updateHotel") return await updateHotelAction(db, auth, body);
     if (action === "createVenue") return await createVenue(db, auth, body);
+    if (action === "updateVenue") return await updateVenue(db, auth, body);
     if (action === "createActivity") return await createActivity(db, auth, body);
     if (action === "updateActivity") return await updateActivityRecord(db, auth, body);
     if (action === "updateActivityLanguages") return await updateActivityLanguages(db, auth, body);

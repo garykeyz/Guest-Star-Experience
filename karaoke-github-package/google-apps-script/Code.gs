@@ -2671,8 +2671,15 @@ function accessibleSelectionV4_(user) {
     .filter(function(hotel) { return hotel.status === "active"; });
   const venues = tableRowsV4_(master, "Venues", V4_MASTER_TABLES.Venues)
     .filter(function(venue) { return venue.status === "active"; });
+  const activeHotelIds = {};
+  const activeVenueIds = {};
+  hotels.forEach(function(hotel) { activeHotelIds[hotel.hotelId] = true; });
+  venues.forEach(function(venue) { activeVenueIds[venue.venueId] = true; });
   const activities = tableRowsV4_(master, "Activities", V4_MASTER_TABLES.Activities)
-    .filter(function(activity) { return activity.status !== "inactive"; });
+    .filter(function(activity) {
+      return activity.status !== "inactive" &&
+        activeHotelIds[activity.hotelId] && activeVenueIds[activity.venueId];
+    });
   if (user.role === "superhost") {
     return { hotels: hotels, venues: venues, activities: activities };
   }
@@ -3250,6 +3257,53 @@ function createVenueV4_(auth, body) {
   });
   auditV4_({ userId: auth.user.userId, action: "venue.created", hotelId: context.hotel.hotelId, venueId: venue.venueId });
   return { ok: true, venue: venue };
+}
+
+function updateVenueV4_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const venue = findRecordV4_(
+    auth.master, "Venues", V4_MASTER_TABLES.Venues, "venueId", body.venueId
+  );
+  if (!venue) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const hotel = findRecordV4_(
+    auth.master, "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", venue.hotelId
+  );
+  if (!hotel) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const deleting = body.status === "inactive";
+  if (deleting) {
+    const linkedActivities = tableRowsV4_(
+      auth.master, "Activities", V4_MASTER_TABLES.Activities
+    ).filter(function(activity) {
+      return activity.venueId === venue.venueId && activity.status !== "inactive";
+    });
+    if (linkedActivities.length) {
+      return {
+        ok: false,
+        code: "VENUE_HAS_ACTIVE_ACTIVITIES",
+        error: "Delete the active activities assigned to this venue before deleting the venue."
+      };
+    }
+  }
+  const changes = { updatedAt: isoNowV4_() };
+  if (body.name !== undefined) {
+    const name = clean_(body.name);
+    if (!name) return { ok: false, code: "VENUE_NAME_REQUIRED" };
+    changes.name = name;
+  }
+  if (body.status !== undefined) changes.status = deleting ? "inactive" : "active";
+  updateRecordV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues, venue._row, changes);
+  auditV4_({
+    userId: auth.user.userId,
+    action: deleting ? "venue.deleted" : body.status !== undefined ? "venue.restored" : "venue.updated",
+    hotelId: venue.hotelId,
+    venueId: venue.venueId,
+    details: changes
+  });
+  return {
+    ok: true,
+    venue: Object.assign({}, venue, changes),
+    recoverable: deleting
+  };
 }
 
 function uniqueChildSlugV4_(master, tableName, parentField, parentId, value) {
@@ -3914,6 +3968,7 @@ function dispatchV4Action_(body) {
     createHotel: function() { return createHotelForSuperhostV4_(requireAuthV4_(body), body); },
     updateHotel: function() { return updateHotelForSuperhostV4_(requireAuthV4_(body), body); },
     createVenue: function() { return createVenueV4_(requireAuthV4_(body), body); },
+    updateVenue: function() { return updateVenueV4_(requireAuthV4_(body), body); },
     createActivity: function() { return createActivityV4_(requireAuthV4_(body), body); },
     updateActivity: function() { return updateActivityV4_(requireAuthV4_(body), body); },
     updateActivityLanguages: function() {

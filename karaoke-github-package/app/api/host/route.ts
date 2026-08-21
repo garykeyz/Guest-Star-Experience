@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
         ok: false,
         code: "D1_ACTION_NOT_IMPLEMENTED"
       };
-      if (!["me", "adminState"].includes(action)) scheduleD1Backup(db);
+      scheduleD1Backup(db);
     } else {
       const timeoutMs = action === "createHotel"
         ? HOTEL_PROVISIONING_TIMEOUT_MS

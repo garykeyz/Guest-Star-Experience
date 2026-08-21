@@ -81,7 +81,7 @@ export async function flushD1BackupFully(db: D1DatabaseLike, maxBatches = 10) {
 }
 
 export function scheduleD1Backup(db: D1DatabaseLike) {
-  const operation = flushD1Backup(db).catch(() => ({ ok: false }));
+  const operation = flushD1BackupFully(db, 4).catch(() => ({ ok: false }));
   try {
     getCloudflareContext().ctx.waitUntil(operation);
   } catch {
