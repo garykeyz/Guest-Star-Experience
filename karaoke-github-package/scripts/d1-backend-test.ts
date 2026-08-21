@@ -103,6 +103,7 @@ const hostPanelSource = readFileSync("components/HostPanel.tsx", "utf8");
 const publicExperienceSource = readFileSync("components/KaraokeExperience.tsx", "utf8");
 const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
 const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
+const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
 assert.match(rootPageSource, /isHostPanelHostname\(hostname\)/,
   "the production host domain root must render the Host Panel");
 assert.match(hostPanelSource, /name="venueId" required/,
@@ -115,6 +116,12 @@ assert.match(hostPanelSource, /<summary>Manage Bridge devices \(\{adminDevices\.
   "Bridge device history must stay compact by default");
 assert.match(hostPanelSource, /<summary>Revoked devices \(\{revokedAdminDevices\.length\}\)<\/summary>/,
   "revoked Bridge devices must be grouped in a secondary collapsed section");
+assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com/,
+  "Superhost must be able to choose the optional root-domain experience");
+assert.match(hostPanelSource, /action:"setDefaultPublicExperience"/,
+  "the root-domain selection must be saved through the authenticated Host API");
+assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
+  "the local Bridge Superhost proxy must allow the root-domain setting");
 assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
   "the public experience must normalize Google Drive logo links");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
@@ -403,6 +410,47 @@ assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId)
 const editableActivity = secondHotel?.activity as Record<string, unknown>;
 const editableActivityId = String(editableActivity.activityId);
 const editableVenueId = String((secondHotel?.venue as Record<string, unknown>).venueId);
+const rootOnlyActivity = await handleD1HostAction(db, {
+  action: "createActivity", ...superAuth, hotelId: otherHotelId, venueId: editableVenueId,
+  name: "Root Domain Event", defaultDurationSeconds: 5400, defaultTransitionSeconds: 30,
+  allowedLanguages: ["es", "en"]
+});
+const rootOnlyActivityId = String((rootOnlyActivity?.activity as Record<string, unknown>).activityId);
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "web"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultPublicExperience", ...superAuth, enabled: true,
+  hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
+}))?.ok, true);
+const rootAdminState = await handleD1HostAction(db, { action: "adminState", ...superAuth });
+assert.deepEqual(rootAdminState?.defaultPublicExperience, {
+  configured: true, available: true, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: rootOnlyActivityId,
+  updatedAt: String((rootAdminState?.defaultPublicExperience as Record<string, unknown>).updatedAt)
+});
+const rootPublicState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: "default"
+})) as Record<string, unknown>;
+assert.equal((rootPublicState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
+  "request.gstarxp.com must use the exact Superhost-selected activity");
+assert.equal(rootPublicState.accepting, false,
+  "the selected root activity must keep its own request status instead of borrowing the hotel's active activity");
+const otherHotelIdentifier = String((secondHotel?.hotel as Record<string, unknown>).publicUrl);
+const permanentOtherState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: otherHotelIdentifier
+})) as Record<string, unknown>;
+assert.equal((permanentOtherState.activity as Record<string, unknown>).activityId, editableActivityId,
+  "permanent hotel links must remain independent from the root-domain override");
+assert.equal(permanentOtherState.accepting, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultPublicExperience", ...superAuth, enabled: false
+}))?.ok, true, "the optional root-domain override must be removable");
+assert.equal((await handleD1HostAction(db, {
+  action: "finishActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "web"
+}))?.ok, true);
 assert.equal((await handleD1HostAction(db, {
   action: "updateVenue", ...superAuth, venueId: editableVenueId, status: "inactive"
 }))?.code, "VENUE_HAS_ACTIVE_ACTIVITIES",

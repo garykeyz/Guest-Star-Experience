@@ -123,6 +123,72 @@ function hotelQrPngUrl(entity: Entity) {
     : "";
 }
 
+function DefaultPublicExperienceForm({
+  hotels, venues, activities, current, busy, onSave
+}: {
+  hotels: Entity[];
+  venues: Entity[];
+  activities: Entity[];
+  current: Entity;
+  busy: boolean;
+  onSave: (selection: { enabled: boolean; hotelId?: string; venueId?: string; activityId?: string }) => Promise<void>;
+}) {
+  const activeHotels=hotels.filter(item=>value(item,"status")==="active");
+  const activeVenues=venues.filter(item=>value(item,"status")==="active");
+  const activeActivities=activities.filter(item=>value(item,"status")!=="inactive");
+  const configured=current.configured===true||String(current.configured)==="true";
+  const available=current.available===true||String(current.available)==="true";
+  const currentKey=`${value(current,"hotelId")}:${value(current,"venueId")}:${value(current,"activityId")}:${value(current,"updatedAt")}`;
+  const [defaultHotelId,setDefaultHotelId]=useState("");
+  const [defaultVenueId,setDefaultVenueId]=useState("");
+  const [defaultActivityId,setDefaultActivityId]=useState("");
+
+  useEffect(()=>{
+    const requested=value(current,"hotelId");
+    setDefaultHotelId(activeHotels.some(item=>value(item,"hotelId")===requested)
+      ?requested:value(activeHotels[0],"hotelId"));
+    setDefaultVenueId(value(current,"venueId"));
+    setDefaultActivityId(value(current,"activityId"));
+  },[currentKey,hotels]);
+
+  useEffect(()=>{
+    const options=activeVenues.filter(item=>value(item,"hotelId")===defaultHotelId);
+    if(!options.some(item=>value(item,"venueId")===defaultVenueId)){
+      setDefaultVenueId(value(options[0],"venueId"));
+    }
+  },[defaultHotelId,defaultVenueId,venues]);
+
+  useEffect(()=>{
+    const options=activeActivities.filter(item=>
+      value(item,"hotelId")===defaultHotelId&&value(item,"venueId")===defaultVenueId
+    );
+    if(!options.some(item=>value(item,"activityId")===defaultActivityId)){
+      setDefaultActivityId(value(options[0],"activityId"));
+    }
+  },[activities,defaultActivityId,defaultHotelId,defaultVenueId]);
+
+  const venueOptions=activeVenues.filter(item=>value(item,"hotelId")===defaultHotelId);
+  const activityOptions=activeActivities.filter(item=>
+    value(item,"hotelId")===defaultHotelId&&value(item,"venueId")===defaultVenueId
+  );
+  const currentHotel=hotels.find(item=>value(item,"hotelId")===value(current,"hotelId"));
+  const currentVenue=venues.find(item=>value(item,"venueId")===value(current,"venueId"));
+  const currentActivity=activities.find(item=>value(item,"activityId")===value(current,"activityId"));
+
+  return <details><summary>Default experience for request.gstarxp.com</summary>
+    <p>{configured
+      ?`${value(currentHotel,"name")||"Hotel"} · ${value(currentVenue,"name")||"Venue"} · ${value(currentActivity,"name")||"Activity"}`
+      :"Automatic mode: the service uses the hotel’s current public activity."}</p>
+    {configured&&!available&&<p className="hostError">This saved selection is unavailable. Choose an active hotel, venue and activity again.</p>}
+    <div className="hostGrid three">
+      <label>Hotel<select value={defaultHotelId} onChange={event=>setDefaultHotelId(event.target.value)}>{activeHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label>
+      <label>Event venue<select value={defaultVenueId} onChange={event=>setDefaultVenueId(event.target.value)} disabled={!venueOptions.length}>{venueOptions.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label>
+      <label>Activity<select value={defaultActivityId} onChange={event=>setDefaultActivityId(event.target.value)} disabled={!activityOptions.length}>{activityOptions.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label>
+    </div>
+    <div className="entityLinks"><button type="button" disabled={busy||!defaultHotelId||!defaultVenueId||!defaultActivityId} onClick={()=>void onSave({enabled:true,hotelId:defaultHotelId,venueId:defaultVenueId,activityId:defaultActivityId})}>Save Default</button>{configured&&<button type="button" disabled={busy} onClick={()=>void onSave({enabled:false})}>Use Automatic Mode</button>}<a href="https://request.gstarxp.com" target="_blank" rel="noreferrer"><ExternalLink/>Open Root Page</a></div>
+  </details>;
+}
+
 export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }) {
   const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
@@ -301,6 +367,13 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     if(data){if(data.warning)setNotice(String(data.warning));formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
+  async function saveDefaultPublicExperience(selection:{enabled:boolean;hotelId?:string;venueId?:string;activityId?:string}){
+    const data=await run(selection.enabled?"Default public experience saved.":"Automatic public experience restored.",()=>hostApi({
+      action:"setDefaultPublicExperience",...selection
+    }));
+    if(data)await refreshAdmin();
+  }
+
   async function createVenue(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
     const data=await run("Venue created.",()=>hostApi({action:"createVenue",hotelId:form.get("hotelId"),name:form.get("name")}));
@@ -468,6 +541,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     {user.role==="superhost"&&<section className="adminStack">
       <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Permanent Links</h2><p>Create each hotel and manage its permanent guest link and QR code.</p></div></div>
         <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel</button></form>
+        <DefaultPublicExperienceForm hotels={adminHotels} venues={adminVenues} activities={adminActivities} current={(admin?.defaultPublicExperience as Entity|undefined)||{}} busy={busy} onSave={saveDefaultPublicExperience}/>
         <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";let confirmHotelName="";if(!inactive){confirmHotelName=window.prompt(`Type ${value(item,"name")} exactly to delete this hotel:`,"")||"";if(confirmHotelName!==value(item,"name"))return;}await run(inactive?"Hotel restored.":"Hotel deleted and recoverable.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive",confirmHotelName}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Restore":"Delete"}</button></div></article>)}</div>
       </section>
       <div className="adminColumns">
