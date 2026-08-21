@@ -2292,8 +2292,8 @@ async function api(request, response, url) {
     const body = await readJson(request);
     const action = String(body.action || "");
     const allowed = new Set([
-      "adminState", "createHotel", "updateHotel", "createVenue",
-      "createActivity", "createHost", "updateHost", "assignUser",
+      "adminState", "createHotel", "updateHotel", "createVenue", "updateVenue",
+      "createActivity", "updateActivity", "setDefaultPublicExperience", "createHost", "updateHost", "assignUser",
       "setHostPassword", "updateActivityLanguages",
       "revokeAssignment", "revokeDevice", "updateHotelBranding",
       "scheduleActivity", "cancelSchedule", "listReviews", "updateReview",
@@ -2302,7 +2302,7 @@ async function api(request, response, url) {
     if (!allowed.has(action)) throw new Error("Superhost action not allowed.");
     const data = await v4AppsScriptAction(config, action, body);
     if ([
-      "createHotel", "updateHotel", "createVenue", "createActivity",
+      "createHotel", "updateHotel", "createVenue", "updateVenue", "createActivity", "updateActivity",
       "assignUser", "revokeAssignment"
     ].includes(action)) {
       const identity = await fetchBridgeIdentity(config);

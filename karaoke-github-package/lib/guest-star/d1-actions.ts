@@ -37,6 +37,7 @@ const PERMISSIONS = [
 
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const HOST_BASE_URL = "https://host.gstarxp.com";
+const DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
 export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
 
 type PermissionName = typeof PERMISSIONS[number];
@@ -50,6 +51,11 @@ type Context = {
   venue: JsonObject | null;
   activity: JsonObject | null;
   permissions: Record<string, boolean>;
+};
+type ResolvedPublicContext = {
+  hotel: JsonObject;
+  activityId: string;
+  configuredDefault: boolean;
 };
 
 function nowIso() {
@@ -362,8 +368,14 @@ async function effectivePermissions(
 async function accessibleSelection(db: D1DatabaseLike, user: JsonObject) {
   const hotels = (await listRecords(db, "Hotels")).filter((hotel) => text(hotel.status) === "active");
   const venues = (await listRecords(db, "Venues")).filter((venue) => text(venue.status) === "active");
+  const activeHotelIds = new Set(hotels.map((hotel) => text(hotel.hotelId)));
+  const activeVenueIds = new Set(venues.map((venue) => text(venue.venueId)));
   const activities = (await listRecords(db, "Activities"))
-    .filter((activity) => text(activity.status) !== "inactive")
+    .filter((activity) => (
+      text(activity.status) !== "inactive" &&
+      activeHotelIds.has(text(activity.hotelId)) &&
+      activeVenueIds.has(text(activity.venueId))
+    ))
     .map((activity) => activityWithLanguages(activity) as JsonObject);
   if (text(user.role) === "superhost") return { hotels, venues, activities };
   const assignments = (await listRecords(db, "UserAssignments"))
@@ -708,8 +720,74 @@ async function adminState(db: D1DatabaseLike, auth: Auth) {
     schedules: await listRecords(db, "ActivitySchedules"),
     upcomingActivities: await listRecords(db, "UpcomingActivities"),
     branding: await listRecords(db, "HotelBranding"),
+    defaultPublicExperience: await defaultPublicExperienceSetting(db),
     auditLog: (await listRecords(db, "AuditLog")).slice(-500)
   };
+}
+
+async function defaultPublicExperienceSetting(db: D1DatabaseLike) {
+  const record = await getRecord(db, "GlobalSettings", DEFAULT_PUBLIC_EXPERIENCE_SETTING);
+  const setting = parseObject(record?.settingValue);
+  const hotelId = text(setting.hotelId);
+  const venueId = text(setting.venueId);
+  const activityId = text(setting.activityId);
+  const configured = bool(setting.enabled) && Boolean(hotelId && venueId && activityId);
+  let available = false;
+  if (configured) {
+    const [hotel, venue, activity] = await Promise.all([
+      getRecord(db, "Hotels", hotelId),
+      getRecord(db, "Venues", venueId),
+      getRecord(db, "Activities", activityId)
+    ]);
+    available = Boolean(
+      hotel && text(hotel.status) === "active" &&
+      venue && text(venue.status) === "active" && text(venue.hotelId) === hotelId &&
+      activity && text(activity.status) !== "inactive" &&
+      text(activity.hotelId) === hotelId && text(activity.venueId) === venueId
+    );
+  }
+  return {
+    configured,
+    available,
+    hotelId,
+    venueId,
+    activityId,
+    updatedAt: text(record?.updatedAt)
+  };
+}
+
+async function setDefaultPublicExperience(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  const enabled = body.enabled !== false;
+  let settingValue: JsonObject = { enabled: false, hotelId: "", venueId: "", activityId: "" };
+  if (enabled) {
+    const context = await tenantContext(db, auth, {
+      hotelId: body.hotelId,
+      venueId: body.venueId,
+      activityId: body.activityId
+    });
+    if (!context.venue || !context.activity) return { ok: false, code: "DEFAULT_EXPERIENCE_REQUIRED" };
+    settingValue = {
+      enabled: true,
+      hotelId: text(context.hotel.hotelId),
+      venueId: text(context.venue.venueId),
+      activityId: text(context.activity.activityId)
+    };
+  }
+  const stamp = nowIso();
+  await save(db, "GlobalSettings", {
+    settingKey: DEFAULT_PUBLIC_EXPERIENCE_SETTING,
+    settingValue: JSON.stringify(settingValue),
+    updatedAt: stamp
+  });
+  await audit(db, {
+    userId: auth.user.userId,
+    action: enabled ? "public.defaultExperience.updated" : "public.defaultExperience.cleared",
+    hotelId: settingValue.hotelId,
+    venueId: settingValue.venueId,
+    activityId: settingValue.activityId
+  });
+  return { ok: true, defaultPublicExperience: await defaultPublicExperienceSetting(db) };
 }
 
 async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -892,8 +970,7 @@ async function createHotel(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
     hotel,
     venue,
     activity: activityWithLanguages(activity),
-    assignment,
-    warning: "D1 is primary. Google Sheets receives an asynchronous hot-standby copy without plaintext passwords."
+    assignment
   };
 }
 
@@ -929,6 +1006,46 @@ async function createVenue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   });
   await audit(db, { userId: auth.user.userId, action: "venue.created", hotelId: context.hotel.hotelId, venueId: venue.venueId });
   return { ok: true, venue };
+}
+
+async function updateVenue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  const venue = await getRecord(db, "Venues", text(body.venueId));
+  if (!venue) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const hotel = await getRecord(db, "Hotels", text(venue.hotelId));
+  if (!hotel) return { ok: false, code: "VENUE_NOT_FOUND" };
+
+  const requestedStatus = text(body.status);
+  const deleting = requestedStatus === "inactive";
+  if (deleting) {
+    const linkedActivities = (await listRecords(db, "Activities")).filter((activity) => (
+      text(activity.venueId) === text(venue.venueId) && text(activity.status) !== "inactive"
+    ));
+    if (linkedActivities.length) {
+      return {
+        ok: false,
+        code: "VENUE_HAS_ACTIVE_ACTIVITIES",
+        error: "Delete the active activities assigned to this venue before deleting the venue."
+      };
+    }
+  }
+
+  const changes: JsonObject = { updatedAt: nowIso() };
+  if (body.name !== undefined) {
+    const name = text(body.name);
+    if (!name) return { ok: false, code: "VENUE_NAME_REQUIRED" };
+    changes.name = name;
+  }
+  if (body.status !== undefined) changes.status = deleting ? "inactive" : "active";
+  const updated = await patchRecord(db, "Venues", text(venue.venueId), changes) || venue;
+  await audit(db, {
+    userId: auth.user.userId,
+    action: deleting ? "venue.deleted" : body.status !== undefined ? "venue.restored" : "venue.updated",
+    hotelId: venue.hotelId,
+    venueId: venue.venueId,
+    details: changes
+  });
+  return { ok: true, venue: updated, recoverable: deleting };
 }
 
 async function createActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1978,6 +2095,25 @@ async function resolvePublicHotel(db: D1DatabaseLike, identifier: unknown) {
   ) || null;
 }
 
+async function resolvePublicContext(db: D1DatabaseLike, identifier: unknown): Promise<ResolvedPublicContext | null> {
+  const key = text(identifier)
+    .replace(/^https?:\/\/[^/]+\/h\//i, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (key === "default") {
+    const setting = await defaultPublicExperienceSetting(db);
+    if (setting.configured && setting.available) {
+      const hotel = await getRecord(db, "Hotels", setting.hotelId);
+      if (hotel) return { hotel, activityId: setting.activityId, configuredDefault: true };
+    }
+  }
+  const hotel = await resolvePublicHotel(db, identifier);
+  return hotel ? {
+    hotel,
+    activityId: text(hotel.activePublicActivityId),
+    configuredDefault: false
+  } : null;
+}
+
 async function safeBranding(db: D1DatabaseLike, hotelId: string) {
   const branding = (await listRecords(db, "HotelBranding"))
     .find((record) => text(record.hotelId) === hotelId) || {};
@@ -1988,9 +2124,9 @@ async function safeBranding(db: D1DatabaseLike, hotelId: string) {
   return safe;
 }
 
-async function publicExperience(db: D1DatabaseLike, hotel: JsonObject) {
-  const activity = text(hotel.activePublicActivityId)
-    ? await getRecord(db, "Activities", text(hotel.activePublicActivityId))
+async function publicExperience(db: D1DatabaseLike, hotel: JsonObject, activityId = text(hotel.activePublicActivityId)) {
+  const activity = activityId
+    ? await getRecord(db, "Activities", activityId)
     : null;
   const venue = activity ? await getRecord(db, "Venues", text(activity.venueId)) : null;
   const state = activity ? await stateFor(db, hotel, activity) : {
@@ -2028,19 +2164,23 @@ function duplicateKey(value: unknown) {
 }
 
 export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams) {
-  let hotel = await resolvePublicHotel(db, params.get("hotel") || params.get("publicCode") || params.get("code"));
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  await processD1ActivitySchedules(db, text(hotel.hotelId));
-  hotel = await getRecord(db, "Hotels", text(hotel.hotelId)) || hotel;
-  return publicExperience(db, hotel);
+  const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
+  let context = await resolvePublicContext(db, identifier);
+  if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  await processD1ActivitySchedules(db, text(context.hotel.hotelId));
+  context = await resolvePublicContext(db, identifier) || context;
+  return publicExperience(db, context.hotel, context.activityId);
 }
 
 export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const action = text(body.action);
-  let hotel = await resolvePublicHotel(db, body.publicCode || body.hotel || body.hotelCode);
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  await processD1ActivitySchedules(db, text(hotel.hotelId));
-  hotel = await getRecord(db, "Hotels", text(hotel.hotelId)) || hotel;
+  const identifier = body.publicCode || body.hotel || body.hotelCode;
+  let publicContext = await resolvePublicContext(db, identifier);
+  if (!publicContext) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  await processD1ActivitySchedules(db, text(publicContext.hotel.hotelId));
+  publicContext = await resolvePublicContext(db, identifier) || publicContext;
+  const hotel = publicContext.hotel;
+  const publicActivityId = publicContext.activityId;
   const hotelId = text(hotel.hotelId);
   if (action === "submitReview") {
     const branding = await safeBranding(db, hotelId);
@@ -2053,8 +2193,8 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
     const fingerprint = limitedText(body._requestFingerprint || body.guestEmail || body.comment, 240);
     const rateKey = `review:${(await sha256Hex(`${hotelId}:${fingerprint}`)).slice(0, 32)}`;
     if (!await checkRateLimit(db, rateKey, 4, 600)) return { ok: false, code: "RATE_LIMITED" };
-    const publicActivity = text(hotel.activePublicActivityId)
-      ? await getRecord(db, "Activities", text(hotel.activePublicActivityId))
+    const publicActivity = publicActivityId
+      ? await getRecord(db, "Activities", publicActivityId)
       : null;
     const review = await save(db, "Reviews", {
       reviewId: randomId(), hotelId, venueId: text(publicActivity?.venueId),
@@ -2075,7 +2215,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
     if (!await checkRateLimit(db, rateKey, 4, 600)) return { ok: false, code: "RATE_LIMITED" };
     const unsubscribeToken = randomToken(32);
     const reminder = await save(db, "GuestReminders", {
-      reminderId: randomId(), hotelId, activityId: text(hotel.activePublicActivityId), guestEmail: email,
+      reminderId: randomId(), hotelId, activityId: publicActivityId, guestEmail: email,
       status: "active", consentAt: nowIso(), unsubscribedAt: "",
       unsubscribeTokenHash: await sessionHash(db, unsubscribeToken),
       createdAt: nowIso(), updatedAt: nowIso()
@@ -2095,8 +2235,8 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   }
   if (action) return { ok: false, code: "PUBLIC_ACTION_NOT_ALLOWED" };
 
-  const activity = text(hotel.activePublicActivityId)
-    ? await getRecord(db, "Activities", text(hotel.activePublicActivityId))
+  const activity = publicActivityId
+    ? await getRecord(db, "Activities", publicActivityId)
     : null;
   if (!activity || text(activity.status) === "inactive") return { ok: false, code: "NO_PUBLIC_ACTIVITY" };
   const runtime = await runtimeFor(db, activity, hotel);
@@ -2110,7 +2250,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const requestedLanguage = languageCode(body.languageCode || body.language);
   if (!singer || !song || !artist || !requestedLanguage) return { ok: false, code: "MISSING_FIELDS" };
   if (!normalizeLanguages(activity.allowedLanguagesJson).includes(requestedLanguage)) {
-    return { ok: false, code: "LANGUAGE_NOT_ALLOWED", state: await publicExperience(db, hotel) };
+    return { ok: false, code: "LANGUAGE_NOT_ALLOWED", state: await publicExperience(db, hotel, publicActivityId) };
   }
   const requestFingerprint = limitedText(body._requestFingerprint, 240) || duplicateKey(singer);
   const rateKey = `request:${(await sha256Hex(`${hotelId}:${requestFingerprint}`)).slice(0, 32)}`;
@@ -2122,7 +2262,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
     return {
       ok: false, code: "DUPLICATE_CONFIRMATION_REQUIRED",
       duplicates: { repeatedSinger, duplicateSong, duplicateSongState: "active" },
-      state: await publicExperience(db, hotel)
+      state: await publicExperience(db, hotel, publicActivityId)
     };
   }
   const durationSeconds = Math.max(0, numberValue(body.durationSeconds));
@@ -2145,7 +2285,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   await upsertRequest(db, request);
   await appendOutbox(db, "request.upsert", { request });
   await recalculateQueue(db, hotelId, activity);
-  return { ok: true, id: request.requestId, state: await publicExperience(db, hotel) };
+  return { ok: true, id: request.requestId, state: await publicExperience(db, hotel, publicActivityId) };
 }
 
 export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): Promise<JsonObject | null> {
@@ -2166,12 +2306,14 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "changePassword") return await changePassword(db, auth, body);
     if (action === "createOneTimeLoginCode") return await createOneTimeCode(db, auth);
     if (action === "adminState") return await adminState(db, auth);
+    if (action === "setDefaultPublicExperience") return await setDefaultPublicExperience(db, auth, body);
     if (action === "createHost") return await createHost(db, auth, body);
     if (action === "updateHost") return await updateHost(db, auth, body);
     if (action === "setHostPassword") return await setHostPassword(db, auth, body);
     if (action === "createHotel") return await createHotel(db, auth, body);
     if (action === "updateHotel") return await updateHotelAction(db, auth, body);
     if (action === "createVenue") return await createVenue(db, auth, body);
+    if (action === "updateVenue") return await updateVenue(db, auth, body);
     if (action === "createActivity") return await createActivity(db, auth, body);
     if (action === "updateActivity") return await updateActivityRecord(db, auth, body);
     if (action === "updateActivityLanguages") return await updateActivityLanguages(db, auth, body);

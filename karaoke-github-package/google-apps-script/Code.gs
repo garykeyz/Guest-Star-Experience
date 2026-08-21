@@ -15,6 +15,7 @@ const BRIDGE_API_VERSION = "4.2.0";
 const GUEST_STAR_CODE_BUILD = "4.2.0-cloudflare-d1-migration";
 const V4_SCHEMA_VERSION = "4.2.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
+const V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
 const V4_REQUIRED_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive",
@@ -369,7 +370,7 @@ function doPost(e) {
         return json_({
           ok: false,
           code: "LANGUAGE_NOT_ALLOWED",
-          state: publicExperienceStateV4_(publicContext.hotel)
+          state: publicExperienceStateV4_(publicContext.hotel, publicContext.activity.activityId)
         });
       }
     }
@@ -402,7 +403,7 @@ function doPost(e) {
       ok: true,
       id: requestId,
       state: publicContext
-        ? publicExperienceStateV4_(publicContext.hotel)
+        ? publicExperienceStateV4_(publicContext.hotel, publicContext.activity.activityId)
         : publicState_()
     });
   } catch (error) {
@@ -2671,8 +2672,15 @@ function accessibleSelectionV4_(user) {
     .filter(function(hotel) { return hotel.status === "active"; });
   const venues = tableRowsV4_(master, "Venues", V4_MASTER_TABLES.Venues)
     .filter(function(venue) { return venue.status === "active"; });
+  const activeHotelIds = {};
+  const activeVenueIds = {};
+  hotels.forEach(function(hotel) { activeHotelIds[hotel.hotelId] = true; });
+  venues.forEach(function(venue) { activeVenueIds[venue.venueId] = true; });
   const activities = tableRowsV4_(master, "Activities", V4_MASTER_TABLES.Activities)
-    .filter(function(activity) { return activity.status !== "inactive"; });
+    .filter(function(activity) {
+      return activity.status !== "inactive" &&
+        activeHotelIds[activity.hotelId] && activeVenueIds[activity.venueId];
+    });
   if (user.role === "superhost") {
     return { hotels: hotels, venues: venues, activities: activities };
   }
@@ -3252,6 +3260,53 @@ function createVenueV4_(auth, body) {
   return { ok: true, venue: venue };
 }
 
+function updateVenueV4_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const venue = findRecordV4_(
+    auth.master, "Venues", V4_MASTER_TABLES.Venues, "venueId", body.venueId
+  );
+  if (!venue) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const hotel = findRecordV4_(
+    auth.master, "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", venue.hotelId
+  );
+  if (!hotel) return { ok: false, code: "VENUE_NOT_FOUND" };
+  const deleting = body.status === "inactive";
+  if (deleting) {
+    const linkedActivities = tableRowsV4_(
+      auth.master, "Activities", V4_MASTER_TABLES.Activities
+    ).filter(function(activity) {
+      return activity.venueId === venue.venueId && activity.status !== "inactive";
+    });
+    if (linkedActivities.length) {
+      return {
+        ok: false,
+        code: "VENUE_HAS_ACTIVE_ACTIVITIES",
+        error: "Delete the active activities assigned to this venue before deleting the venue."
+      };
+    }
+  }
+  const changes = { updatedAt: isoNowV4_() };
+  if (body.name !== undefined) {
+    const name = clean_(body.name);
+    if (!name) return { ok: false, code: "VENUE_NAME_REQUIRED" };
+    changes.name = name;
+  }
+  if (body.status !== undefined) changes.status = deleting ? "inactive" : "active";
+  updateRecordV4_(auth.master, "Venues", V4_MASTER_TABLES.Venues, venue._row, changes);
+  auditV4_({
+    userId: auth.user.userId,
+    action: deleting ? "venue.deleted" : body.status !== undefined ? "venue.restored" : "venue.updated",
+    hotelId: venue.hotelId,
+    venueId: venue.venueId,
+    details: changes
+  });
+  return {
+    ok: true,
+    venue: Object.assign({}, venue, changes),
+    recoverable: deleting
+  };
+}
+
 function uniqueChildSlugV4_(master, tableName, parentField, parentId, value) {
   const base = normalizeIdentifierV4_(value) || "item";
   const headers = V4_MASTER_TABLES[tableName];
@@ -3476,6 +3531,93 @@ function revokeDeviceV4_(auth, body) {
   return { ok: true };
 }
 
+function defaultPublicExperienceSettingV4_(master) {
+  const spreadsheet = master || masterSpreadsheetV4_();
+  const record = findRecordV4_(
+    spreadsheet,
+    "GlobalSettings",
+    V4_MASTER_TABLES.GlobalSettings,
+    "settingKey",
+    V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING
+  );
+  let setting = {};
+  try {
+    setting = JSON.parse(String(record && record.settingValue || "{}"));
+  } catch (error) {
+    setting = {};
+  }
+  const hotelId = String(setting.hotelId || "");
+  const venueId = String(setting.venueId || "");
+  const activityId = String(setting.activityId || "");
+  const configured = parseBooleanV4_(setting.enabled) && Boolean(hotelId && venueId && activityId);
+  let available = false;
+  if (configured) {
+    const hotel = findRecordV4_(spreadsheet, "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", hotelId);
+    const venue = findRecordV4_(spreadsheet, "Venues", V4_MASTER_TABLES.Venues, "venueId", venueId);
+    const activity = findRecordV4_(spreadsheet, "Activities", V4_MASTER_TABLES.Activities, "activityId", activityId);
+    available = Boolean(
+      hotel && hotel.status === "active" &&
+      venue && venue.status === "active" && venue.hotelId === hotelId &&
+      activity && activity.status !== "inactive" &&
+      activity.hotelId === hotelId && activity.venueId === venueId
+    );
+  }
+  return {
+    configured: configured,
+    available: available,
+    hotelId: hotelId,
+    venueId: venueId,
+    activityId: activityId,
+    updatedAt: record ? record.updatedAt : ""
+  };
+}
+
+function setDefaultPublicExperienceV4_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const enabled = body.enabled !== false;
+  let setting = { enabled: false, hotelId: "", venueId: "", activityId: "" };
+  if (enabled) {
+    const context = resolveTenantContextV4_(auth, {
+      hotelId: body.hotelId,
+      venueId: body.venueId,
+      activityId: body.activityId
+    });
+    if (!context.venue || !context.activity) return { ok: false, code: "DEFAULT_EXPERIENCE_REQUIRED" };
+    setting = {
+      enabled: true,
+      hotelId: context.hotel.hotelId,
+      venueId: context.venue.venueId,
+      activityId: context.activity.activityId
+    };
+  }
+  const now = isoNowV4_();
+  const record = findRecordV4_(
+    auth.master,
+    "GlobalSettings",
+    V4_MASTER_TABLES.GlobalSettings,
+    "settingKey",
+    V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING
+  );
+  const changes = { settingValue: JSON.stringify(setting), updatedAt: now };
+  if (record) {
+    updateRecordV4_(auth.master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings, record._row, changes);
+  } else {
+    appendRecordV4_(auth.master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings, {
+      settingKey: V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING,
+      settingValue: changes.settingValue,
+      updatedAt: now
+    });
+  }
+  auditV4_({
+    userId: auth.user.userId,
+    action: enabled ? "public.defaultExperience.updated" : "public.defaultExperience.cleared",
+    hotelId: setting.hotelId,
+    venueId: setting.venueId,
+    activityId: setting.activityId
+  });
+  return { ok: true, defaultPublicExperience: defaultPublicExperienceSettingV4_(auth.master) };
+}
+
 function adminStateV4_(auth) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
   migrateActivityLanguageCatalogV42_(auth.master);
@@ -3508,6 +3650,7 @@ function adminStateV4_(auth) {
     schedules: tableRowsV4_(auth.master, "ActivitySchedules", V4_MASTER_TABLES.ActivitySchedules),
     upcomingActivities: tableRowsV4_(auth.master, "UpcomingActivities", V4_MASTER_TABLES.UpcomingActivities),
     branding: tableRowsV4_(auth.master, "HotelBranding", V4_MASTER_TABLES.HotelBranding),
+    defaultPublicExperience: defaultPublicExperienceSettingV4_(auth.master),
     auditLog: tableRowsV4_(auth.master, "AuditLog", V4_MASTER_TABLES.AuditLog).slice(-500)
   };
 }
@@ -3908,12 +4051,16 @@ function dispatchV4Action_(body) {
     unsubscribeGuest: function() { return unsubscribeGuestV4_(body); },
     exportD1Snapshot: function() { return exportD1SnapshotV4_(requireAuthV4_(body)); },
     adminState: function() { return adminStateV4_(requireAuthV4_(body)); },
+    setDefaultPublicExperience: function() {
+      return setDefaultPublicExperienceV4_(requireAuthV4_(body), body);
+    },
     createHost: function() { return createHostUserV4_(requireAuthV4_(body), body); },
     updateHost: function() { return updateHostUserV4_(requireAuthV4_(body), body); },
     setHostPassword: function() { return setHostPasswordV4_(requireAuthV4_(body), body); },
     createHotel: function() { return createHotelForSuperhostV4_(requireAuthV4_(body), body); },
     updateHotel: function() { return updateHotelForSuperhostV4_(requireAuthV4_(body), body); },
     createVenue: function() { return createVenueV4_(requireAuthV4_(body), body); },
+    updateVenue: function() { return updateVenueV4_(requireAuthV4_(body), body); },
     createActivity: function() { return createActivityV4_(requireAuthV4_(body), body); },
     updateActivity: function() { return updateActivityV4_(requireAuthV4_(body), body); },
     updateActivityLanguages: function() {
@@ -3947,9 +4094,10 @@ function resolvePublicHotelV4_(identifier) {
   if (key === "default") {
     const defaultHotelId = PropertiesService.getScriptProperties()
       .getProperty("DEFAULT_PUBLIC_HOTEL_ID");
-    return hotels.filter(function(hotel) {
+    const activeHotels = hotels.filter(function(hotel) { return hotel.status === "active"; });
+    return activeHotels.filter(function(hotel) {
       return hotel.status === "active" && hotel.hotelId === defaultHotelId;
-    })[0] || null;
+    })[0] || activeHotels[0] || null;
   }
   return hotels.filter(function(hotel) {
     return hotel.status === "active" && (
@@ -3960,21 +4108,37 @@ function resolvePublicHotelV4_(identifier) {
   })[0] || null;
 }
 
-function publicTenantV4_(hotel) {
+function publicTenantV4_(hotel, activityId) {
   const master = masterSpreadsheetV4_();
-  const activity = hotel.activePublicActivityId
+  const selectedActivityId = String(activityId || hotel.activePublicActivityId || "");
+  const activity = selectedActivityId
     ? findRecordV4_(
       master,
       "Activities",
       V4_MASTER_TABLES.Activities,
       "activityId",
-      hotel.activePublicActivityId
+      selectedActivityId
     )
     : null;
   const venue = activity
     ? findRecordV4_(master, "Venues", V4_MASTER_TABLES.Venues, "venueId", activity.venueId)
     : null;
   return { hotel: hotel, venue: venue, activity: activity };
+}
+
+function resolvePublicContextV4_(identifier) {
+  const key = publicHotelIdentifierV4_(identifier);
+  if (key === "default") {
+    const setting = defaultPublicExperienceSettingV4_();
+    if (setting.configured && setting.available) {
+      const hotel = findRecordV4_(
+        masterSpreadsheetV4_(), "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", setting.hotelId
+      );
+      if (hotel) return publicTenantV4_(hotel, setting.activityId);
+    }
+  }
+  const hotel = resolvePublicHotelV4_(identifier);
+  return hotel ? publicTenantV4_(hotel) : null;
 }
 
 function publicBrandingV4_(hotelId) {
@@ -4028,9 +4192,9 @@ function upcomingForHotelV4_(hotelId) {
     });
 }
 
-function publicExperienceStateV4_(hotel) {
+function publicExperienceStateV4_(hotel, activityId) {
   REQUEST_DATA_SHEET_ID_ = hotel.dataSheetId;
-  const tenant = publicTenantV4_(hotel);
+  const tenant = publicTenantV4_(hotel, activityId);
   const activity = tenant.activity;
   const state = activityAwareStateV4_(activity);
   const scheduledStartAt = activity ? String(activity.scheduledStartAt || "") : "";
@@ -4072,10 +4236,10 @@ function publicGetV4_(params) {
   const identifier = params.hotel || params.publicCode || params.code;
   const wantsPublic = params.action === "publicBootstrap" || Boolean(identifier);
   if (!wantsPublic) return null;
-  const hotel = resolvePublicHotelV4_(identifier);
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  const context = resolvePublicContextV4_(identifier);
+  if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   try {
-    return publicExperienceStateV4_(hotel);
+    return publicExperienceStateV4_(context.hotel, context.activity ? context.activity.activityId : "");
   } finally {
     REQUEST_DATA_SHEET_ID_ = "";
   }
@@ -4094,9 +4258,9 @@ function configurePublicRequestContextV4_(body) {
   const identifier = body.publicCode || body.hotel || body.hotelCode;
   const setupComplete = PropertiesService.getScriptProperties().getProperty("V4_SETUP_COMPLETE");
   if (!identifier) return setupComplete ? { error: "HOTEL_REQUIRED" } : null;
-  const hotel = resolvePublicHotelV4_(identifier);
-  if (!hotel) return { error: "PUBLIC_LINK_NOT_FOUND" };
-  const tenant = publicTenantV4_(hotel);
+  const tenant = resolvePublicContextV4_(identifier);
+  if (!tenant) return { error: "PUBLIC_LINK_NOT_FOUND" };
+  const hotel = tenant.hotel;
   if (!tenant.activity || tenant.activity.status === "inactive") {
     return { error: "NO_PUBLIC_ACTIVITY" };
   }
@@ -4990,9 +5154,9 @@ function publicWriteRateLimitV4_(kind, hotelId, value) {
 }
 
 function submitReviewV4_(body) {
-  const hotel = resolvePublicHotelV4_(body.publicCode || body.hotel || body.hotelCode);
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  const tenant = publicTenantV4_(hotel);
+  const tenant = resolvePublicContextV4_(body.publicCode || body.hotel || body.hotelCode);
+  if (!tenant) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  const hotel = tenant.hotel;
   if (!tenant.activity) return { ok: false, code: "NO_PUBLIC_ACTIVITY" };
   const rating = Math.round(Number(body.rating));
   if (rating < 1 || rating > 5) return { ok: false, code: "RATING_REQUIRED" };
@@ -5073,9 +5237,9 @@ function submitReviewV4_(body) {
 }
 
 function createGuestReminderV4_(body) {
-  const hotel = resolvePublicHotelV4_(body.publicCode || body.hotel || body.hotelCode);
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  const tenant = publicTenantV4_(hotel);
+  const tenant = resolvePublicContextV4_(body.publicCode || body.hotel || body.hotelCode);
+  if (!tenant) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  const hotel = tenant.hotel;
   if (!tenant.activity || !tenant.activity.scheduledStartAt) {
     return { ok: false, code: "NO_SCHEDULED_ACTIVITY" };
   }
@@ -5122,8 +5286,9 @@ function guestUnsubscribeTokenV4_(recordId) {
 }
 
 function unsubscribeGuestV4_(body) {
-  const hotel = resolvePublicHotelV4_(body.publicCode || body.hotel || body.hotelCode);
-  if (!hotel) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  const tenant = resolvePublicContextV4_(body.publicCode || body.hotel || body.hotelCode);
+  if (!tenant) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
+  const hotel = tenant.hotel;
   const recordId = String(body.recordId || "");
   const provided = String(body.token || "");
   if (!recordId || !provided || !safeEqualV4_(provided, guestUnsubscribeTokenV4_(recordId))) {

@@ -105,6 +105,21 @@ test("el HOST controla si los huéspedes ven el estado de la actividad", () => {
   assert.match(source, /getRange\("B13"\)\.setValue\(false\)/);
 });
 
+test("los venues se pueden administrar y protegen sus actividades", () => {
+  assert.match(source, /function updateVenueV4_\(auth, body\)/);
+  assert.match(source, /VENUE_HAS_ACTIVE_ACTIVITIES/);
+  assert.match(source, /updateVenue:\s*function\(\)/);
+  assert.match(source, /activeVenueIds\[activity\.venueId\]/);
+});
+
+test("Superhost puede fijar o quitar la experiencia de request.gstarxp.com", () => {
+  assert.match(source, /V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience"/);
+  assert.match(source, /function setDefaultPublicExperienceV4_\(auth, body\)/);
+  assert.match(source, /setDefaultPublicExperience:\s*function\(\)/);
+  assert.match(source, /function resolvePublicContextV4_\(identifier\)/);
+  assert.match(source, /publicExperienceStateV4_\(context\.hotel, context\.activity/);
+});
+
 test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {
   const originalSpreadsheet = context.spreadsheet_;
   context.spreadsheet_ = () => ({

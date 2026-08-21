@@ -21,6 +21,8 @@ import {
   setD1BackendMode
 } from "../lib/guest-star/d1-actions";
 import { hmacSha256Hex } from "../lib/guest-star/crypto";
+import { googleDriveFileId, normalizeBrandImageUrl } from "../lib/guest-star/media-url";
+import { canonicalHostPanelPath, isHostPanelHostname } from "../lib/guest-star/site-routing";
 import {
   BRANDING_MESSAGE_FIELDS,
   GUEST_LANGUAGE_CODES,
@@ -77,6 +79,57 @@ class TestD1 implements D1DatabaseLike {
 
 const migrationDb = new TestD1();
 migrationDb.database.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
+
+const driveFileId = "1MoonPalaceLogo_2026abcXYZ";
+const driveShareUrl = `https://drive.google.com/file/d/${driveFileId}/view?usp=drive_link`;
+assert.equal(googleDriveFileId(driveShareUrl), driveFileId);
+assert.equal(
+  normalizeBrandImageUrl(driveShareUrl),
+  `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w1000`,
+  "Google Drive share pages must be converted to image responses before rendering"
+);
+assert.equal(
+  normalizeBrandImageUrl(`https://drive.google.com/open?id=${driveFileId}&resourcekey=public-key`),
+  `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w1000&resourcekey=public-key`
+);
+assert.equal(normalizeBrandImageUrl("https://cdn.example.com/logo.png"), "https://cdn.example.com/logo.png");
+assert.equal(isHostPanelHostname("host.gstarxp.com"), true);
+assert.equal(isHostPanelHostname("HOST.GSTARXP.COM:443"), true);
+assert.equal(isHostPanelHostname("request.gstarxp.com"), false);
+assert.equal(canonicalHostPanelPath("host.gstarxp.com"), "/");
+assert.equal(canonicalHostPanelPath("localhost:3000"), "/host");
+const rootPageSource = readFileSync("app/page.tsx", "utf8");
+const hostPanelSource = readFileSync("components/HostPanel.tsx", "utf8");
+const publicExperienceSource = readFileSync("components/KaraokeExperience.tsx", "utf8");
+const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
+const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
+const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
+assert.match(rootPageSource, /isHostPanelHostname\(hostname\)/,
+  "the production host domain root must render the Host Panel");
+assert.match(hostPanelSource, /name="venueId" required/,
+  "activity creation must require an explicit venue selection");
+assert.match(hostPanelSource, /action:"updateVenue"/,
+  "Superhost must be able to administer existing venues");
+assert.match(hostPanelSource, /<summary>Configure branding and public experience<\/summary>/,
+  "the full branding form must stay collapsed until the Superhost needs it");
+assert.match(hostPanelSource, /<summary>Manage Bridge devices \(\{adminDevices\.length\}\)<\/summary>/,
+  "Bridge device history must stay compact by default");
+assert.match(hostPanelSource, /<summary>Revoked devices \(\{revokedAdminDevices\.length\}\)<\/summary>/,
+  "revoked Bridge devices must be grouped in a secondary collapsed section");
+assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com/,
+  "Superhost must be able to choose the optional root-domain experience");
+assert.match(hostPanelSource, /action:"setDefaultPublicExperience"/,
+  "the root-domain selection must be saved through the authenticated Host API");
+assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
+  "the local Bridge Superhost proxy must allow the root-domain setting");
+assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
+  "the public experience must normalize Google Drive logo links");
+assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
+  "migration, backup, and legacy storage controls must stay out of the operational panel");
+assert.doesNotMatch(hostRouteSource, /!\["me", "adminState"\]\.includes\(action\)/,
+  "opening the panel must also trigger a non-blocking automatic backup");
+assert.match(upstreamSource, /flushD1BackupFully\(db, 4\)/,
+  "background backup must drain multiple batches without requiring a user button");
 
 const db = new TestD1();
 await ensureD1Schema(db);
@@ -357,6 +410,71 @@ assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId)
 const editableActivity = secondHotel?.activity as Record<string, unknown>;
 const editableActivityId = String(editableActivity.activityId);
 const editableVenueId = String((secondHotel?.venue as Record<string, unknown>).venueId);
+const rootOnlyActivity = await handleD1HostAction(db, {
+  action: "createActivity", ...superAuth, hotelId: otherHotelId, venueId: editableVenueId,
+  name: "Root Domain Event", defaultDurationSeconds: 5400, defaultTransitionSeconds: 30,
+  allowedLanguages: ["es", "en"]
+});
+const rootOnlyActivityId = String((rootOnlyActivity?.activity as Record<string, unknown>).activityId);
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "web"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultPublicExperience", ...superAuth, enabled: true,
+  hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
+}))?.ok, true);
+const rootAdminState = await handleD1HostAction(db, { action: "adminState", ...superAuth });
+assert.deepEqual(rootAdminState?.defaultPublicExperience, {
+  configured: true, available: true, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: rootOnlyActivityId,
+  updatedAt: String((rootAdminState?.defaultPublicExperience as Record<string, unknown>).updatedAt)
+});
+const rootPublicState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: "default"
+})) as Record<string, unknown>;
+assert.equal((rootPublicState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
+  "request.gstarxp.com must use the exact Superhost-selected activity");
+assert.equal(rootPublicState.accepting, false,
+  "the selected root activity must keep its own request status instead of borrowing the hotel's active activity");
+const otherHotelIdentifier = String((secondHotel?.hotel as Record<string, unknown>).publicUrl);
+const permanentOtherState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: otherHotelIdentifier
+})) as Record<string, unknown>;
+assert.equal((permanentOtherState.activity as Record<string, unknown>).activityId, editableActivityId,
+  "permanent hotel links must remain independent from the root-domain override");
+assert.equal(permanentOtherState.accepting, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultPublicExperience", ...superAuth, enabled: false
+}))?.ok, true, "the optional root-domain override must be removable");
+assert.equal((await handleD1HostAction(db, {
+  action: "finishActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "web"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "updateVenue", ...superAuth, venueId: editableVenueId, status: "inactive"
+}))?.code, "VENUE_HAS_ACTIVE_ACTIVITIES",
+"venues with active activities must not disappear from Host selection");
+const createdManagedVenue = await handleD1HostAction(db, {
+  action: "createVenue", ...superAuth, hotelId: otherHotelId, name: "Wet Deck"
+});
+assert.equal(createdManagedVenue?.ok, true);
+const managedVenueId = String((createdManagedVenue?.venue as Record<string, unknown>).venueId);
+const renamedVenue = await handleD1HostAction(db, {
+  action: "updateVenue", ...superAuth, venueId: managedVenueId, name: "Unique Day Club"
+});
+assert.equal((renamedVenue?.venue as Record<string, unknown>).name, "Unique Day Club");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateVenue", ...superAuth, venueId: managedVenueId, status: "inactive"
+}))?.ok, true);
+const selectionWithoutDeletedVenue = (await handleD1HostAction(db, {
+  action: "me", ...superAuth
+}))?.selection as { venues: Array<Record<string, unknown>> };
+assert.equal(selectionWithoutDeletedVenue.venues.some((venue) => venue.venueId === managedVenueId), false,
+  "deleted venues must leave the operational selector immediately");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateVenue", ...superAuth, venueId: managedVenueId, status: "active"
+}))?.ok, true, "deleted venues must remain recoverable");
 const renamedActivity = await handleD1HostAction(db, {
   action: "updateActivity", ...superAuth, activityId: editableActivityId,
   name: "International Karaoke", defaultDurationSeconds: 5400, defaultTransitionSeconds: 45
