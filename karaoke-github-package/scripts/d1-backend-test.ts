@@ -101,6 +101,7 @@ assert.equal(canonicalHostPanelPath("localhost:3000"), "/host");
 const rootPageSource = readFileSync("app/page.tsx", "utf8");
 const hostPanelSource = readFileSync("components/HostPanel.tsx", "utf8");
 const publicExperienceSource = readFileSync("components/KaraokeExperience.tsx", "utf8");
+const globalCssSource = readFileSync("app/globals.css", "utf8");
 const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
 const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
 const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
@@ -124,6 +125,12 @@ assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
   "the local Bridge Superhost proxy must allow the root-domain setting");
 assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
   "the public experience must normalize Google Drive logo links");
+assert.match(publicExperienceSource, /className="tenantLogo"/,
+  "hotel logos must render inside a dedicated presentation frame");
+assert.match(globalCssSource, /\.tenantLogo\{width:92px;height:92px/,
+  "hotel logos with built-in whitespace must remain large enough to identify");
+assert.match(globalCssSource, /filter:brightness\(\.58\) contrast\(1\.85\)/,
+  "very pale hotel logos must receive enough contrast to remain visible");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
   "migration, backup, and legacy storage controls must stay out of the operational panel");
 assert.doesNotMatch(hostRouteSource, /!\["me", "adminState"\]\.includes\(action\)/,
