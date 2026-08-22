@@ -430,7 +430,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     </div>
     {bootstrapError&&<section className="tenantError" role="alert"><strong>Link unavailable</strong><span>{bootstrapError}</span></section>}
     {activity.hotel&&<section className="tenantIdentity">
-      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/>}
+      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<span className="tenantLogo" aria-hidden="true"><img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/></span>}
       <div>
         {branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}
         {branding.showActivityDetails!==false&&<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span>}
