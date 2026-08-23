@@ -1050,7 +1050,7 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
   assert.match(source, /const BRIDGE_API_VERSION = "4\.2\.0"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.3\.0-google-fallback"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.3\.1-google-fallback"/);
   assert.match(source, /const V4_SCHEMA_VERSION = "4\.2\.0"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),
