@@ -182,7 +182,10 @@ test("el cursor de carga aparece solo durante una operación real", () => {
 
 test("identifica al huésped por dispositivo y suprime solicitudes repetidas", () => {
   assert.match(formSource, /guestDeviceId:guestDeviceId\(\)/);
-  assert.match(appSource, /item\.guestCode/);
+  assert.match(appSource, /function guestDisplayName/);
+  assert.match(appSource, /guest-alias-badge/);
+  assert.match(bridgeStyles, /\.guest-tone-0/);
+  assert.match(bridgeStyles, /\.guest-tone-1/);
   assert.match(serverSource, /duplicateOf/);
   assert.match(serverSource, /reportedDuplicateIds/);
   assert.match(serverSource, /removeDuplicateKaraokeEntries/);
@@ -262,8 +265,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.1"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.1/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.2"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.2/);
   assert.match(hostPanelSource, /Service v/);
 });
 

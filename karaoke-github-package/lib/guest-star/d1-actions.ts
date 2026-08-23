@@ -21,7 +21,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.2.1";
+export const GUEST_STAR_D1_VERSION = "4.2.2";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [

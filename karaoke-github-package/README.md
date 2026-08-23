@@ -1,4 +1,4 @@
-# Guest Star Experience 4.2.1
+# Guest Star Experience 4.2.2
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
@@ -18,7 +18,7 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
   se muestran en texto plano.
 - Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
-- Bridge 4.2.1 incluye la administración, agenda recurrente, traducciones y
+- Bridge 4.2.2 incluye la administración, agenda recurrente, traducciones y
   barra nativa actualizadas para esta versión.
 - Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
   `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
@@ -28,6 +28,16 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
   las actividades pueden editarse, desactivarse y restaurarse sin borrar datos.
 - El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
   opciones avanzadas plegadas hasta que el usuario las solicite.
+
+## Mejora visual 4.2.2
+
+- los huéspedes con el mismo nombre se distinguen de forma agradable como
+  `Alex A`, `Alex B`, etc., con una insignia de color diferente;
+- la letra se asigna por orden de primera llegada y permanece estable para las
+  demás canciones enviadas desde el mismo dispositivo;
+- un nombre único se sigue mostrando sin letra ni código técnico;
+- el código anónimo interno se conserva para reconciliar VirtualDJ sin romper
+  entradas ya existentes.
 
 ## Correcciones 4.2.1
 
