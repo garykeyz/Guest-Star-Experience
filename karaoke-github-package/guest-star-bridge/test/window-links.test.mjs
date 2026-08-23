@@ -167,6 +167,27 @@ test("la sincronización de fondo no bloquea los botones por canción", () => {
   assert.match(appSource, /actionLocks\.has\(actionScope\(item\.id\)\)/);
 });
 
+test("el cursor de carga aparece solo durante una operación real", () => {
+  assert.doesNotMatch(
+    bridgeStyles,
+    /\.button:disabled\s*\{[^}]*cursor:\s*wait/
+  );
+  assert.match(
+    bridgeStyles,
+    /\.button\.is-loading\[aria-busy="true"\]\s*\{[^}]*cursor:\s*progress/
+  );
+  assert.match(appSource, /primary\.classList\.toggle\("is-loading", activityBusy\)/);
+  assert.match(appSource, /primary\.setAttribute\("aria-busy", activityBusy \? "true" : "false"\)/);
+});
+
+test("identifica al huésped por dispositivo y suprime solicitudes repetidas", () => {
+  assert.match(formSource, /guestDeviceId:guestDeviceId\(\)/);
+  assert.match(appSource, /item\.guestCode/);
+  assert.match(serverSource, /duplicateOf/);
+  assert.match(serverSource, /reportedDuplicateIds/);
+  assert.match(serverSource, /removeDuplicateKaraokeEntries/);
+});
+
 test("separa solicitudes compactas por estado sin perder el orden de llegada", () => {
   assert.match(appSource, /Waiting to Enter the Queue/);
   assert.match(appSource, /In the VirtualDJ Queue/);
@@ -241,8 +262,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.0"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.0/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.1"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.1/);
   assert.match(hostPanelSource, /Service v/);
 });
 

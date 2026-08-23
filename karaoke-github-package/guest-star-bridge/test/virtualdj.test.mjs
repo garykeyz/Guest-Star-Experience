@@ -5,11 +5,13 @@ import {
   buildKaraokeInsertScript,
   buildKaraokeRemoveScript,
   buildKaraokeScript,
+  duplicateKaraokeIndices,
   executeVdj,
   insertKaraokeEntry,
   listKaraokeEntries,
   parseVdjDuration,
   queryVdj,
+  removeDuplicateKaraokeEntries,
   removeKaraokeEntry
 } from "../src/virtualdj.mjs";
 
@@ -29,6 +31,54 @@ test("construye una eliminación dirigida dentro de la cola karaoke", () => {
     buildKaraokeRemoveScript(2),
     'browser_window "karaoke" & browser_scroll "top" & browser_scroll +1 & browser_scroll +1 & browser_remove'
   );
+});
+
+test("detecta copias repetidas con título y artista invertidos sin mezclar dos Alex", () => {
+  assert.deepEqual(duplicateKaraokeIndices([
+    { index: 0, singer: "Alex · G-A7F2", song: "Marc Anthony", artist: "Valio la pena" },
+    { index: 1, singer: "Alex · G-A7F2", song: "Valio la pena", artist: "Marc Anthony" },
+    { index: 2, singer: "Alex · G-B918", song: "Valio la pena", artist: "Marc Anthony" }
+  ]), [1]);
+});
+
+test("elimina el bucle repetido de VirtualDJ y conserva invitados distintos", async (t) => {
+  const queue = [
+    { filepath: "", singer: "Alex · G-A7F2", title: "Marc Anthony", artist: "Valio la pena", length: "4:45" },
+    { filepath: "", singer: "Alex · G-A7F2", title: "Valio la pena", artist: "Marc Anthony", length: "4:45" },
+    { filepath: "", singer: "Alex · G-B918", title: "Valio la pena", artist: "Marc Anthony", length: "4:45" }
+  ];
+  let selected = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      if (script.includes('browser_scroll "top"')) selected = 0;
+      selected += (script.match(/browser_scroll \+1/g) || []).length;
+      if (script.includes("browser_remove")) queue.splice(selected, 1);
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
+      const index = Number(next?.[2] || 0);
+      response.end(next ? queue[index]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await removeDuplicateKaraokeEntries({
+    host: "127.0.0.1",
+    port: server.address().port,
+    password: "",
+    timeoutMs: 1000
+  });
+
+  assert.equal(result.removedCount, 1);
+  assert.equal(result.verified, true);
+  assert.deepEqual(queue.map((entry) => entry.singer), ["Alex · G-A7F2", "Alex · G-B918"]);
 });
 
 test("construye una restauración en el turno exacto de karaoke", () => {

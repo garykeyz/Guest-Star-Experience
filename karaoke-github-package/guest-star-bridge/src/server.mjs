@@ -57,6 +57,7 @@ import {
   normalizeVdjPath,
   normalizeVdjSinger,
   queryVdj,
+  removeDuplicateKaraokeEntries,
   removeKaraokeEntry
 } from "./virtualdj.mjs";
 import {
@@ -67,7 +68,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.2.0";
+const BRIDGE_VERSION = "4.2.1";
+const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -142,6 +144,7 @@ const hitYoutubeCache = new Map();
 const clipboardHandledIds = new Set();
 const rotationStates = new Map();
 const reportedStatuses = new Map();
+const reportedDuplicateIds = new Set();
 const eventClients = new Set();
 let localAvailability = new Map();
 let libraryWatchers = [];
@@ -527,6 +530,7 @@ function clearTransientCaches() {
   youtubeSearchAt.clear();
   clipboardHandledIds.clear();
   reportedStatuses.clear();
+  reportedDuplicateIds.clear();
   localAvailability.clear();
   removedExternallyIds.clear();
   vdjQueuePositions.clear();
@@ -564,7 +568,7 @@ function applyActivityState(data) {
 }
 
 function bridgeRequests(data = {}) {
-  return (Array.isArray(data.requests) ? data.requests : [])
+  const mapped = (Array.isArray(data.requests) ? data.requests : [])
     .map((item) => ({
       id: String(item.id || ""),
       sheetRow: Math.max(0, Math.floor(numberOr(item.sheetRow, 0))),
@@ -576,6 +580,9 @@ function bridgeRequests(data = {}) {
       language: String(item.language || "").trim(),
       languageCode: String(item.languageCode || "").trim(),
       sourceUrl: String(item.sourceUrl || "").trim(),
+      sourceType: String(item.sourceType || "").trim(),
+      guestIdentity: String(item.guestIdentity || "").trim(),
+      guestCode: String(item.guestCode || "").trim(),
       status: String(item.status || "Pendiente"),
       fileName: String(item.fileName || "").trim(),
       durationSeconds: Math.max(0, numberOr(item.durationSeconds, 240)),
@@ -585,7 +592,30 @@ function bridgeRequests(data = {}) {
       ),
       updatedAt: String(item.updatedAt || "")
     }))
-    .filter((item) => item.id && item.singer && item.song);
+    .filter((item) =>
+      item.id && item.singer && item.song &&
+      !["eliminada", "cancelada"].includes(normalizeText(item.status))
+    );
+  const canonicalByIdentity = new Map();
+  return mapped.map((item) => {
+    const metadata = [normalizeText(item.song), normalizeText(item.artist)]
+      .filter(Boolean)
+      .sort()
+      .join("|");
+    const guest = item.guestIdentity
+      ? `device:${item.guestIdentity}`
+      : `legacy:${normalizeText(item.singer)}`;
+    const key = `${guest}|${metadata}`;
+    const duplicateOf = canonicalByIdentity.get(key) || "";
+    if (!duplicateOf) canonicalByIdentity.set(key, item.id);
+    return { ...item, duplicateOf };
+  });
+}
+
+function vdjSingerForRequest(item) {
+  const singer = String(item?.singer || "").trim();
+  const guestCode = String(item?.guestCode || "").trim();
+  return guestCode ? `${singer} · ${guestCode}` : singer;
 }
 
 function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
@@ -612,7 +642,7 @@ function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
   return {
     id: item.id,
     filePath,
-    singer: item.singer,
+    singer: vdjSingerForRequest(item),
     song: item.song,
     artist: item.artist,
     durationSeconds:
@@ -631,7 +661,7 @@ function trackingEntryFromRequest(item) {
   return queuedEntries.get(item.id) || queuedEntryFromRequest(item) || {
     id: item.id,
     filePath: "",
-    singer: item.singer,
+    singer: vdjSingerForRequest(item),
     song: item.song,
     artist: item.artist,
     durationSeconds: Math.max(0, Number(item.durationSeconds) || 0),
@@ -823,7 +853,7 @@ function sheetMarksVirtualDj(item) {
 }
 
 function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
-  const targetSinger = normalizeText(normalizeVdjSinger(item.singer));
+  const targetSinger = normalizeText(normalizeVdjSinger(vdjSingerForRequest(item)));
   const candidates = actualEntries.filter(
     (entry) =>
       !claimedIndices.has(entry.index) &&
@@ -868,7 +898,18 @@ async function reconcileVirtualDjQueue(force = false) {
   vdjQueueCheckPromise = (async () => {
     broadcastState();
     try {
-      const rawActualEntries = await listKaraokeEntries(config.virtualDJ);
+      const initialActualEntries = await listKaraokeEntries(config.virtualDJ);
+      const duplicateCleanup = await removeDuplicateKaraokeEntries(
+        config.virtualDJ,
+        initialActualEntries
+      );
+      const rawActualEntries = duplicateCleanup.entries;
+      if (duplicateCleanup.removedCount > 0) {
+        recordReconciliation({
+          newStatus: "VirtualDJ duplicates removed",
+          reason: `removed_${duplicateCleanup.removedCount}_duplicate_queue_entries`
+        });
+      }
       const actualEntries = stabilizeVirtualDjEntries(
         rawActualEntries,
         vdjQueueEntries
@@ -1271,7 +1312,7 @@ function stateView() {
       ...new Set(
         requests
           .filter((item) => requestOutcome(item.status) !== "skipped")
-          .map((item) => item.singer)
+          .map(vdjSingerForRequest)
           .filter(Boolean)
       )
     ],
@@ -1434,7 +1475,9 @@ async function syncNow() {
   try {
     const data = await fetchBridgeQueue(config);
     const nextActivity = normalizedActivity(data);
-    const nextRequests = bridgeRequests(data);
+    const receivedRequests = bridgeRequests(data);
+    const duplicateRequests = receivedRequests.filter((item) => item.duplicateOf);
+    const nextRequests = receivedRequests.filter((item) => !item.duplicateOf);
     const activityChanged =
       queueActivityId &&
       nextActivity.activityId &&
@@ -1458,6 +1501,24 @@ async function syncNow() {
       }
     }
     await persistQueuedEntries(nextActivity.activityId);
+    for (const duplicate of duplicateRequests) {
+      if (reportedDuplicateIds.has(duplicate.id)) continue;
+      try {
+        await updateBridgeRequest(config, duplicate.id, "Cancelada", "", {
+          syncState: `duplicate_of:${duplicate.duplicateOf}`
+        });
+        reportedDuplicateIds.add(duplicate.id);
+        recordReconciliation({
+          requestId: duplicate.id,
+          previousStatus: duplicate.status,
+          newStatus: "Canceled duplicate",
+          reason: `duplicate_request_of:${duplicate.duplicateOf}`
+        });
+      } catch {
+        // The local Bridge still suppresses the duplicate for this cycle.
+        reportedDuplicateIds.add(duplicate.id);
+      }
+    }
   } catch (error) {
     sheetError = errorMessage(error);
   }
@@ -2716,9 +2777,9 @@ async function api(request, response, url) {
     const body = await readJson(request);
     const testConfig = sanitizeConfig(body, config);
     const data = await fetchBridgeQueue(testConfig);
-    if (data.codeVersion !== BRIDGE_VERSION) {
+    if (data.codeVersion !== BRIDGE_PROTOCOL_VERSION) {
       throw new Error(
-        `Guest Star is connected, but its service version is ${data.codeVersion || "older"}. Contact the Superhost to install version ${BRIDGE_VERSION}.`
+        `Guest Star is connected, but its service version is ${data.codeVersion || "older"}. Contact the Superhost to install version ${BRIDGE_PROTOCOL_VERSION}.`
       );
     }
     json(response, 200, {

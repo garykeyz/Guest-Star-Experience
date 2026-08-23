@@ -88,7 +88,8 @@ h1 span { background: linear-gradient(90deg, var(--pink), #db75ff); -webkit-back
 .button-row.left { justify-content: flex-start; margin-bottom: 18px; }
 .button { border: 1px solid transparent; border-radius: 11px; padding: 10px 14px; color: white; font-weight: 750; font-size: .82rem; transition: .2s ease; }
 .button:hover { transform: translateY(-1px); }
-.button:disabled { opacity: .45; cursor: wait; transform: none; }
+.button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.button.is-loading[aria-busy="true"] { cursor: progress; }
 .button.ghost { background: rgba(255,255,255,.045); border-color: var(--line); }
 .button.primary { background: linear-gradient(120deg, var(--pink), var(--purple)); box-shadow: 0 8px 24px rgba(255,45,149,.16); }
 .button.success { background: rgba(76,230,162,.11); border-color: rgba(76,230,162,.24); color: #8dffd0; }

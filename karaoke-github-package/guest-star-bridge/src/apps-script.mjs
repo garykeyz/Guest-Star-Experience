@@ -9,6 +9,7 @@ async function parseResponse(response) {
 }
 
 const REQUIRED_CODE_VERSION = "4.2.0";
+const BRIDGE_APP_VERSION = "4.2.1";
 const APPS_SCRIPT_TIMEOUT_MS = 70000;
 
 function endpoint(config) {
@@ -71,7 +72,7 @@ export function signInBridge(config, credentials) {
     clientType: "bridge",
     deviceId: config.deviceId || credentials.deviceId || "",
     deviceName: credentials.deviceName || "Guest Star Bridge",
-    bridgeVersion: REQUIRED_CODE_VERSION,
+    bridgeVersion: BRIDGE_APP_VERSION,
     rememberLogin: credentials.rememberLogin !== false
   });
 }
@@ -94,7 +95,7 @@ export function createHostPanelLogin(config) {
 
 export function sendBridgeHeartbeat(config, status = {}) {
   return v4AppsScriptAction(config, "bridgeHeartbeat", {
-    bridgeVersion: REQUIRED_CODE_VERSION,
+    bridgeVersion: BRIDGE_APP_VERSION,
     virtualDJConnected: status.virtualDJConnected === true
   });
 }

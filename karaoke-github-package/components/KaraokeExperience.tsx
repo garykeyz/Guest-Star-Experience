@@ -83,6 +83,33 @@ type ActivityCopy = {
 };
 
 const ENDPOINT = "/api/karaoke";
+const GUEST_DEVICE_STORAGE_KEY = "guest-star-public-device-v1";
+let ephemeralGuestDeviceId = "";
+
+function newGuestDeviceId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`;
+}
+
+function guestDeviceId() {
+  if (ephemeralGuestDeviceId) return ephemeralGuestDeviceId;
+  try {
+    const saved = window.localStorage.getItem(GUEST_DEVICE_STORAGE_KEY) || "";
+    if (/^[a-z0-9._:-]{16,128}$/i.test(saved)) {
+      ephemeralGuestDeviceId = saved;
+      return saved;
+    }
+    ephemeralGuestDeviceId = newGuestDeviceId();
+    window.localStorage.setItem(GUEST_DEVICE_STORAGE_KEY, ephemeralGuestDeviceId);
+    return ephemeralGuestDeviceId;
+  } catch {
+    ephemeralGuestDeviceId = newGuestDeviceId();
+    return ephemeralGuestDeviceId;
+  }
+}
+
 const languages: [Lang, string, string, string][] = [
   ["es","🇪🇸","Spanish","Español"],["en","🇺🇸","English","English"],["fr","🇫🇷","French","Français"],
   ["it","🇮🇹","Italian","Italiano"],["de","🇩🇪","German","Deutsch"],["ru","🇷🇺","Russian","Русский"],["pt","🇵🇹","Portuguese","Português"]
@@ -357,6 +384,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       const data=await post({
         ...values,
         ...(hotelCode?{publicCode:hotelCode}:{}),
+        guestDeviceId:guestDeviceId(),
         language:active[3],
         languageCode:active[0] === "es" ? "spanish" :
           active[0] === "en" ? "english" :

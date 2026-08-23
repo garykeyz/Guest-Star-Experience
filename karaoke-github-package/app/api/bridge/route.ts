@@ -13,7 +13,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.2.0"
+      "X-Guest-Star-Bridge-Proxy": "4.2.1"
     }
   });
 }

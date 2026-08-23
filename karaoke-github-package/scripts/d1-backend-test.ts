@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   type D1DatabaseLike,
   type D1StatementLike,
+  activeRequests,
   backendMode,
   DAILY_FREE_TRANSLATION_NEURON_BUDGET,
   d1Health,
@@ -361,6 +362,33 @@ const publicRequest = await handleD1PublicPost(db, {
   artist: "Artist One", language: "Español", languageCode: "es", comment: ""
 });
 assert.equal(publicRequest.ok, true);
+const firstAlex = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
+  name: "Alex", song: "Valió la pena", artist: "Marc Anthony",
+  language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(firstAlex.ok, true);
+const repeatedAlex = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
+  name: "Alex", song: "Marc Anthony", artist: "Valió la pena",
+  language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(repeatedAlex.ok, true);
+assert.equal(repeatedAlex.deduplicated, true,
+  "the same device must not create a second request when title and artist are inverted");
+assert.equal(repeatedAlex.id, firstAlex.id);
+const secondAlex = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-b-0987654321",
+  name: "Alex", song: "Vivir mi vida", artist: "Marc Anthony",
+  language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(secondAlex.ok, true);
+const alexRequests = (await activeRequests(db, hotelId, activityId))
+  .filter((request) => request.singer === "Alex");
+assert.equal(alexRequests.length, 2,
+  "an idempotent retry must stay single while a second Alex on another device remains distinct");
+assert.notEqual(alexRequests[0].sourceType, alexRequests[1].sourceType,
+  "different guest devices must receive different anonymous identities");
 assert.equal((await handleD1HostAction(db, {
   action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
 }))?.ok, true, "starting a new cycle must archive the previous D1 queue");
