@@ -17,6 +17,8 @@ const formSource = await readFile(
 );
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
 const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
+const googleSignInHtml = await readFile(resolve(root, "public/google-sign-in.html"), "utf8");
+const googleSignInSource = await readFile(resolve(root, "public/google-sign-in.js"), "utf8");
 const superhostSource = await readFile(resolve(root, "public/superhost.js"), "utf8");
 const qrSource = await readFile(resolve(root, "public/qr-ui.js"), "utf8");
 const faviconSource = await readFile(resolve(root, "../app/icon.svg"), "utf8");
@@ -73,7 +75,27 @@ test("la sincronización en vivo no borra el usuario mientras se escribe", () =>
     bridgeHtml.indexOf('id="selectionDialog"')
   );
   assert.match(loginHelp, /Contact your Superhost/);
-  assert.doesNotMatch(loginHelp, /Google|Sheets|Drive|Apps Script|Code\.gs/i);
+  assert.match(loginHelp, /Continue with Google/);
+  assert.doesNotMatch(loginHelp, /Sheets|Drive|Apps Script|Code\.gs/i);
+});
+
+test("Google inicia la sesión del Bridge en el navegador del sistema y solo confía en el servidor", () => {
+  assert.match(bridgeHtml, /id="googleLoginButton"/);
+  assert.match(appSource, /\/google-sign-in/);
+  assert.match(appSource, /openExternal/);
+  assert.match(serverSource, /pathname === "\/api\/auth\/google-config"/);
+  assert.match(serverSource, /pathname === "\/api\/auth\/google"/);
+  assert.match(serverSource, /requestOrigin && requestOrigin !== expectedOrigin/);
+  assert.match(serverSource, /signInBridgeWithGoogle/);
+  assert.match(serverSource, /authToken: data\.authToken/);
+  assert.match(serverSource, /deviceToken: data\.deviceToken/);
+  assert.match(serverSource, /storeSecrets: true/);
+  assert.match(googleSignInHtml, /google-sign-in\.js/);
+  assert.match(googleSignInSource, /accounts\.google\.com\/gsi\/client/);
+  assert.match(googleSignInSource, /google\.accounts\.id\.initialize/);
+  assert.match(googleSignInSource, /credential: response\.credential/);
+  assert.match(googleSignInSource, /jsonRequest\("\/api\/auth\/google"/);
+  assert.doesNotMatch(googleSignInSource, /localStorage|sessionStorage|document\.cookie/);
 });
 
 test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {

@@ -631,23 +631,12 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
   };
 }
 
-async function login(db: D1DatabaseLike, body: JsonObject) {
-  const identifier = text(body.username || body.email).toLowerCase();
-  const password = String(body.password || "");
-  if (!identifier || !password) return { ok: false, code: "MISSING_CREDENTIALS" };
-  const rateKey = `login:${(await sha256Hex(identifier)).slice(0, 32)}`;
-  if (!await checkRateLimit(db, rateKey, 5, 600)) return { ok: false, code: "RATE_LIMITED" };
-  const user = (await listRecords(db, "Users")).find((candidate) =>
-    text(candidate.username).toLowerCase() === identifier || text(candidate.email).toLowerCase() === identifier
-  ) || null;
-  const valid = Boolean(user && text(user.status) === "active" && safeEqual(
-    await hmacSha256Hex(password, user.passwordSalt), user.passwordHash
-  ));
-  if (!valid || !user) {
-    await audit(db, { action: "login.failed", details: { identifierHash: await sha256Hex(identifier) } });
-    return { ok: false, code: "INVALID_CREDENTIALS" };
-  }
-  await checkRateLimit(db, rateKey, 5, 600, true);
+async function completeLogin(
+  db: D1DatabaseLike,
+  user: JsonObject,
+  body: JsonObject,
+  auditAction = "login.succeeded"
+) {
   let deviceId = "";
   let deviceToken = "";
   if (text(body.clientType).toLowerCase() === "bridge") {
@@ -696,7 +685,7 @@ async function login(db: D1DatabaseLike, body: JsonObject) {
   const updatedUser = await patchRecord(db, "Users", text(user.userId), {
     lastLoginAt: nowIso(), updatedAt: nowIso()
   }) || user;
-  await audit(db, { userId: user.userId, deviceId, action: "login.succeeded" });
+  await audit(db, { userId: user.userId, deviceId, action: auditAction });
   return {
     ok: true,
     codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
@@ -708,6 +697,46 @@ async function login(db: D1DatabaseLike, body: JsonObject) {
     user: publicUser(updatedUser),
     selection: await accessibleSelection(db, updatedUser)
   };
+}
+
+async function login(db: D1DatabaseLike, body: JsonObject) {
+  const identifier = text(body.username || body.email).toLowerCase();
+  const password = String(body.password || "");
+  if (!identifier || !password) return { ok: false, code: "MISSING_CREDENTIALS" };
+  const rateKey = `login:${(await sha256Hex(identifier)).slice(0, 32)}`;
+  if (!await checkRateLimit(db, rateKey, 5, 600)) return { ok: false, code: "RATE_LIMITED" };
+  const user = (await listRecords(db, "Users")).find((candidate) =>
+    text(candidate.username).toLowerCase() === identifier || text(candidate.email).toLowerCase() === identifier
+  ) || null;
+  const valid = Boolean(user && text(user.status) === "active" && safeEqual(
+    await hmacSha256Hex(password, user.passwordSalt), user.passwordHash
+  ));
+  if (!valid || !user) {
+    await audit(db, { action: "login.failed", details: { identifierHash: await sha256Hex(identifier) } });
+    return { ok: false, code: "INVALID_CREDENTIALS" };
+  }
+  await checkRateLimit(db, rateKey, 5, 600, true);
+  return await completeLogin(db, user, body);
+}
+
+export async function loginD1WithVerifiedGoogle(
+  db: D1DatabaseLike,
+  verifiedEmail: string,
+  body: JsonObject
+) {
+  const email = normalizeEmail(verifiedEmail);
+  if (!email) return { ok: false, code: "INVALID_GOOGLE_CREDENTIAL" };
+  const rateKey = `google-login:${(await sha256Hex(email)).slice(0, 32)}`;
+  if (!await checkRateLimit(db, rateKey, 10, 600)) return { ok: false, code: "RATE_LIMITED" };
+  const user = (await listRecords(db, "Users")).find((candidate) =>
+    text(candidate.email).toLowerCase() === email
+  ) || null;
+  if (!user || text(user.status) !== "active") {
+    await audit(db, { action: "google.login.failed", details: { emailHash: await sha256Hex(email) } });
+    return { ok: false, code: "GOOGLE_ACCOUNT_NOT_REGISTERED" };
+  }
+  await checkRateLimit(db, rateKey, 10, 600, true);
+  return await completeLogin(db, user, body, "google.login.succeeded");
 }
 
 async function adminState(db: D1DatabaseLike, auth: Auth) {

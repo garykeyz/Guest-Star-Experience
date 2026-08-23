@@ -77,6 +77,22 @@ export function signInBridge(config, credentials) {
   });
 }
 
+export function fetchGoogleLoginConfig(config) {
+  return postPayload(config, { action: "googleLoginConfig" });
+}
+
+export function signInBridgeWithGoogle(config, credential, options = {}) {
+  return postPayload(config, {
+    action: "googleLogin",
+    credential,
+    clientType: "bridge",
+    deviceId: config.deviceId || options.deviceId || "",
+    deviceName: options.deviceName || "Guest Star Bridge",
+    bridgeVersion: BRIDGE_APP_VERSION,
+    rememberLogin: options.rememberLogin !== false
+  });
+}
+
 export function signOutBridge(config) {
   return v4AppsScriptAction(config, "logout");
 }

@@ -2469,6 +2469,43 @@ function registerDeviceV4_(master, user, body) {
   };
 }
 
+function completeLoginV43_(master, user, body, auditAction) {
+  let deviceResult = null;
+  if (String(body.clientType || "").toLowerCase() === "bridge") {
+    try {
+      deviceResult = registerDeviceV4_(master, user, body);
+    } catch (error) {
+      return { ok: false, code: String(error.message || error) };
+    }
+  }
+  const sessionResult = createSessionV4_(
+    master,
+    user,
+    deviceResult ? deviceResult.deviceId : "",
+    body.rememberLogin !== false
+  );
+  updateRecordV4_(master, "Users", V4_MASTER_TABLES.Users, user._row, {
+    lastLoginAt: isoNowV4_(),
+    updatedAt: isoNowV4_()
+  });
+  auditV4_({
+    userId: user.userId,
+    deviceId: deviceResult ? deviceResult.deviceId : "",
+    action: auditAction || "login.succeeded"
+  });
+  return {
+    ok: true,
+    codeVersion: BRIDGE_API_VERSION,
+    codeBuild: GUEST_STAR_CODE_BUILD,
+    authToken: sessionResult.token,
+    expiresAt: sessionResult.expiresAt,
+    deviceId: deviceResult ? deviceResult.deviceId : "",
+    deviceToken: deviceResult ? deviceResult.deviceToken : "",
+    user: publicUserV4_(user),
+    selection: accessibleSelectionV4_(user)
+  };
+}
+
 function loginV4_(body) {
   const master = masterSpreadsheetV4_();
   const identifier = String(body.username || body.email || "").trim().toLowerCase();
@@ -2493,40 +2530,25 @@ function loginV4_(body) {
     return { ok: false, code: "INVALID_CREDENTIALS" };
   }
   loginRateLimitV4_(identifier, true);
-  let deviceResult = null;
-  if (String(body.clientType || "").toLowerCase() === "bridge") {
-    try {
-      deviceResult = registerDeviceV4_(master, user, body);
-    } catch (error) {
-      return { ok: false, code: String(error.message || error) };
-    }
+  return completeLoginV43_(master, user, body, "login.succeeded");
+}
+
+function googleBridgeLoginV43_(body) {
+  const expected = PropertiesService.getScriptProperties().getProperty("D1_BACKUP_SECRET");
+  if (!expected || !safeEqualV4_(body.backupSecret, expected)) {
+    return { ok: false, code: "UNAUTHORIZED" };
   }
-  const sessionResult = createSessionV4_(
-    master,
-    user,
-    deviceResult ? deviceResult.deviceId : "",
-    body.rememberLogin !== false
-  );
-  updateRecordV4_(master, "Users", V4_MASTER_TABLES.Users, user._row, {
-    lastLoginAt: isoNowV4_(),
-    updatedAt: isoNowV4_()
-  });
-  auditV4_({
-    userId: user.userId,
-    deviceId: deviceResult ? deviceResult.deviceId : "",
-    action: "login.succeeded"
-  });
-  return {
-    ok: true,
-    codeVersion: BRIDGE_API_VERSION,
-    codeBuild: GUEST_STAR_CODE_BUILD,
-    authToken: sessionResult.token,
-    expiresAt: sessionResult.expiresAt,
-    deviceId: deviceResult ? deviceResult.deviceId : "",
-    deviceToken: deviceResult ? deviceResult.deviceToken : "",
-    user: publicUserV4_(user),
-    selection: accessibleSelectionV4_(user)
-  };
+  const email = emailAddressV4_(body.email);
+  if (!email) return { ok: false, code: "INVALID_GOOGLE_CREDENTIAL" };
+  const master = masterSpreadsheetV4_();
+  const user = tableRowsV4_(master, "Users", V4_MASTER_TABLES.Users).filter(function(candidate) {
+    return String(candidate.email || "").trim().toLowerCase() === email;
+  })[0];
+  if (!user || user.status !== "active") {
+    auditV4_({ action: "google.login.failed", details: { emailHash: tokenHashV4_(email) } });
+    return { ok: false, code: "GOOGLE_ACCOUNT_NOT_REGISTERED" };
+  }
+  return completeLoginV43_(master, user, body, "google.login.succeeded");
 }
 
 function authenticateV4_(body) {
@@ -4392,11 +4414,11 @@ function dispatchV4Action_(body) {
       return { ok: false, code: String(error && error.message ? error.message : error) };
     }
   }
-  if (action === "provisionGoogleFallback" || action === "googleFallbackState") {
+  if (action === "provisionGoogleFallback" || action === "googleFallbackState" || action === "googleBridgeLogin") {
     try {
-      return action === "provisionGoogleFallback"
-        ? provisionGoogleFallbackV43_(body)
-        : googleFallbackStateV43_(body);
+      if (action === "provisionGoogleFallback") return provisionGoogleFallbackV43_(body);
+      if (action === "googleBridgeLogin") return googleBridgeLoginV43_(body);
+      return googleFallbackStateV43_(body);
     } catch (error) {
       return { ok: false, code: String(error && error.message ? error.message : error) };
     } finally {

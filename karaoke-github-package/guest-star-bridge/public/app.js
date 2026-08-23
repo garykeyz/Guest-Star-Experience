@@ -1752,6 +1752,17 @@ $("#loginForm").addEventListener("submit", async (event) => {
   }
 });
 
+$("#googleLoginButton").addEventListener("click", async () => {
+  const error = $("#loginError");
+  error.classList.add("hidden");
+  try {
+    await openExternal(`${window.location.origin}/google-sign-in`);
+  } catch (googleError) {
+    error.textContent = googleError instanceof Error ? googleError.message : String(googleError);
+    error.classList.remove("hidden");
+  }
+});
+
 loginDialog.addEventListener("cancel", (event) => event.preventDefault());
 passwordDialog.addEventListener("cancel", (event) => {
   if (passwordChangeRequired) event.preventDefault();
