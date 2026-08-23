@@ -12,7 +12,7 @@ const HEADERS = [
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.2.0";
-const GUEST_STAR_CODE_BUILD = "4.3.0-google-fallback";
+const GUEST_STAR_CODE_BUILD = "4.3.1-google-fallback";
 const V4_SCHEMA_VERSION = "4.2.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";

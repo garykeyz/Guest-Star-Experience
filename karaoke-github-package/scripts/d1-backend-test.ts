@@ -273,7 +273,7 @@ await setD1BackendMode(db, "d1_primary");
 assert.equal(await backendMode(db), "d1_primary");
 
 const googleBridgeLogin = await loginD1WithVerifiedGoogle(db, verifiedGoogle.email, {
-  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.0",
+  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.1",
   rememberLogin: true
 }) as Record<string, unknown>;
 assert.equal(googleBridgeLogin?.ok, true,
@@ -281,7 +281,7 @@ assert.equal(googleBridgeLogin?.ok, true,
 assert.ok(String(googleBridgeLogin?.authToken || "").length >= 40);
 assert.ok(String(googleBridgeLogin?.deviceToken || "").length >= 40);
 assert.equal(((await loginD1WithVerifiedGoogle(db, "unknown@example.com", {
-  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.0"
+  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.1"
 })) as Record<string, unknown>).code, "GOOGLE_ACCOUNT_NOT_REGISTERED",
 "Google login must never create an unregistered Guest Star account implicitly");
 
