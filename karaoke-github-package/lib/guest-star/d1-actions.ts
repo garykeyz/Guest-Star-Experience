@@ -21,7 +21,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.2.0";
+export const GUEST_STAR_D1_VERSION = "4.2.1";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -523,7 +523,7 @@ async function stateFor(db: D1DatabaseLike, hotel: JsonObject, activity: JsonObj
     activityFinishedAt: runtime.finishedAt,
     activityRunning: runtime.running,
     showPublicStatus: bool(activity.showPublicStatus),
-    queuePeopleCount: new Set(requests.filter((item) => item.status !== "Cantada").map((item) => item.singer.toLowerCase())).size,
+    queuePeopleCount: new Set(requests.filter(publicRequestIsActive).map(publicGuestKey)).size,
     stateRevision: runtime.stateRevision,
     activityId: runtime.activityId,
     updatedAt: runtime.updatedAt,
@@ -533,6 +533,7 @@ async function stateFor(db: D1DatabaseLike, hotel: JsonObject, activity: JsonObj
 }
 
 function bridgeRequest(request: GuestStarRequest) {
+  const guestIdentity = publicGuestIdentityFromSource(request.sourceType);
   return {
     id: request.requestId,
     timestamp: request.createdAt,
@@ -550,6 +551,8 @@ function bridgeRequest(request: GuestStarRequest) {
     status: request.status,
     fileName: request.fileName,
     sourceType: request.sourceType,
+    guestIdentity,
+    guestCode: publicGuestCode(request.sourceType),
     virtualDJItemId: request.virtualDJItemId,
     queuePosition: request.queuePosition,
     syncState: request.syncState,
@@ -605,7 +608,9 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
       activityHours: numberValue(freshActivity.defaultDurationSeconds, 7200) / 3600,
       transitionSeconds: numberValue(freshActivity.defaultTransitionSeconds, 30)
     },
-    requests: requests.map(bridgeRequest),
+    requests: requests
+      .filter((request) => !["Eliminada", "Cancelada"].includes(request.status))
+      .map(bridgeRequest),
     share: shareInfo(freshHotel),
     upcomingActivities: await upcomingActivities(db, text(freshHotel.hotelId))
   };
@@ -2163,6 +2168,34 @@ function duplicateKey(value: unknown) {
   return text(value).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function requestMetadataKey(song: unknown, artist: unknown) {
+  return [duplicateKey(song), duplicateKey(artist)].filter(Boolean).sort().join("|");
+}
+
+function publicGuestIdentityFromSource(sourceType: unknown) {
+  const match = text(sourceType).match(/^public_request:([a-f0-9]{16,64})$/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function publicGuestCode(sourceType: unknown) {
+  const identity = publicGuestIdentityFromSource(sourceType);
+  return identity ? `G-${identity.slice(0, 4).toUpperCase()}` : "";
+}
+
+function publicGuestKey(request: GuestStarRequest) {
+  return publicGuestIdentityFromSource(request.sourceType) || duplicateKey(request.singer);
+}
+
+function publicRequestIsActive(request: GuestStarRequest) {
+  return !["Ya cantó", "Saltado", "Eliminada", "Cancelada"].includes(request.status);
+}
+
+async function publicGuestIdentity(hotelId: string, deviceId: unknown) {
+  const candidate = limitedText(deviceId, 128);
+  if (!/^[a-z0-9._:-]{16,128}$/i.test(candidate)) return "";
+  return (await sha256Hex(`guest-device|${hotelId}|${candidate}`)).slice(0, 32);
+}
+
 export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams) {
   const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
   let context = await resolvePublicContext(db, identifier);
@@ -2252,12 +2285,38 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   if (!normalizeLanguages(activity.allowedLanguagesJson).includes(requestedLanguage)) {
     return { ok: false, code: "LANGUAGE_NOT_ALLOWED", state: await publicExperience(db, hotel, publicActivityId) };
   }
-  const requestFingerprint = limitedText(body._requestFingerprint, 240) || duplicateKey(singer);
+  const guestIdentity = await publicGuestIdentity(hotelId, body.guestDeviceId);
+  const sourceType = guestIdentity ? `public_request:${guestIdentity}` : "public_request";
+  const requests = (await activeRequests(db, hotelId, text(activity.activityId)))
+    .filter((request) => !["Eliminada", "Cancelada"].includes(request.status));
+  const metadataKey = requestMetadataKey(song, artist);
+  const exactExisting = requests.find((request) => {
+    if (duplicateKey(request.singer) !== duplicateKey(singer)) return false;
+    if (requestMetadataKey(request.song, request.artist) !== metadataKey) return false;
+    const existingIdentity = publicGuestIdentityFromSource(request.sourceType);
+    return guestIdentity && existingIdentity
+      ? guestIdentity === existingIdentity
+      : !guestIdentity || !existingIdentity;
+  });
+  if (exactExisting) {
+    return {
+      ok: true,
+      id: exactExisting.requestId,
+      deduplicated: true,
+      state: await publicExperience(db, hotel, publicActivityId)
+    };
+  }
+  const requestFingerprint = guestIdentity || limitedText(body._requestFingerprint, 240) || duplicateKey(singer);
   const rateKey = `request:${(await sha256Hex(`${hotelId}:${requestFingerprint}`)).slice(0, 32)}`;
   if (!await checkRateLimit(db, rateKey, 8, 60)) return { ok: false, code: "RATE_LIMITED" };
-  const requests = await activeRequests(db, hotelId, text(activity.activityId));
-  const repeatedSinger = requests.some((request) => duplicateKey(request.singer) === duplicateKey(singer));
-  const duplicateSong = requests.some((request) => duplicateKey(request.song) === duplicateKey(song) && (!artist || !request.artist || duplicateKey(request.artist) === duplicateKey(artist)));
+  const repeatedSinger = requests.some((request) => {
+    const existingIdentity = publicGuestIdentityFromSource(request.sourceType);
+    if (guestIdentity && existingIdentity) return guestIdentity === existingIdentity;
+    return duplicateKey(request.singer) === duplicateKey(singer);
+  });
+  const duplicateSong = requests.some((request) =>
+    requestMetadataKey(request.song, request.artist) === metadataKey
+  );
   if (!bool(body.confirmDuplicate) && (repeatedSinger || duplicateSong)) {
     return {
       ok: false, code: "DUPLICATE_CONFIRMATION_REQUIRED",
@@ -2271,14 +2330,20 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const accumulatedSeconds = previousAccumulated + durationSeconds + transitionSeconds;
   const total = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
   const stamp = nowIso();
+  const deterministicRequestId = guestIdentity
+    ? `req-${(await sha256Hex([
+        hotelId, text(activity.activityId), text(activity.currentCycleId), guestIdentity,
+        duplicateKey(singer), metadataKey
+      ].join("|"))).slice(0, 32)}`
+    : randomId();
   const request: GuestStarRequest = {
-    rowId: randomId(), requestId: randomId(), hotelId,
+    rowId: deterministicRequestId, requestId: deterministicRequestId, hotelId,
     venueId: text(activity.venueId), activityId: text(activity.activityId),
     cycleId: text(activity.currentCycleId), singer, song, artist,
     comment: limitedText(body.comment, 500), language: limitedText(body.language, 40), languageCode: requestedLanguage,
     durationSeconds, transitionSeconds, accumulatedSeconds,
     remainingSeconds: Math.max(0, total - accumulatedSeconds),
-    sourceUrl: "", status: "Pendiente", fileName: "", sourceType: "public_request",
+    sourceUrl: "", status: "Pendiente", fileName: "", sourceType,
     virtualDJItemId: "", queuePosition: requests.length + 1, syncState: "pending",
     lastSeenAt: "", stateRevision: 1, createdAt: stamp, updatedAt: stamp, archivedAt: ""
   };

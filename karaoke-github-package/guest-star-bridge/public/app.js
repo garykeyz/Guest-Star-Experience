@@ -110,7 +110,10 @@ function actionScope(id) {
 
 function requestLabel(id) {
   const item = state?.requests?.find((entry) => entry.id === id);
-  return item ? `${item.singer} — ${item.song}` : "The song";
+  const singer = item?.guestCode
+    ? `${item.singer} · ${item.guestCode}`
+    : item?.singer;
+  return item ? `${singer} — ${item.song}` : "The song";
 }
 
 async function runAction(scope, progress, operation, successMessage) {
@@ -387,6 +390,8 @@ function updateStatus() {
   requestsToggle.disabled = activityBusy || !selectedActivity || !can("canOpenCloseRequests");
   $("#requestsToggleLabel").textContent = accepting ? "Open" : "Closed";
   const primary = $("#primaryActivity");
+  primary.classList.toggle("is-loading", activityBusy);
+  primary.setAttribute("aria-busy", activityBusy ? "true" : "false");
   primary.textContent = status === "in_progress"
     ? "Finish Activity"
     : status === "finished"
@@ -967,7 +972,9 @@ function renderRequests() {
     requestNumber.title = item.sheetRow
       ? `Request ${arrival.number} · record ${item.sheetRow}`
       : `Request ${arrival.number} by arrival order`;
-    $(".singer", card).textContent = item.singer;
+    $(".singer", card).textContent = item.guestCode
+      ? `${item.singer} · ${item.guestCode}`
+      : item.singer;
     $(".song", card).textContent = item.song;
     $(".artist", card).textContent = item.artist || "Artist not provided";
     const requestComment = String(item.comment || "").trim();

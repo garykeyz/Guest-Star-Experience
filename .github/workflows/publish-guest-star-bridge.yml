@@ -250,5 +250,5 @@ jobs:
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
               --title "Guest Star Experience ${VERSION} Universal" \
-              --notes "Guest Star ${VERSION} adds seven activity languages, free automatic translation with manual fallback, weekly/biweekly/monthly scheduling, recoverable activity editing, additional Superhosts, remembered sessions, fixed Bridge actions and a native Guest Star Bridge menu bar. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, service code, source packages, checksums and guides."
+              --notes "Guest Star ${VERSION} prevents duplicate public requests and repeated VirtualDJ queue insertions, recognizes inverted title/artist metadata, distinguishes same-name guests with an anonymous device code, and only shows a loading cursor during real work. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, service code, source packages, checksums and guides."
           fi

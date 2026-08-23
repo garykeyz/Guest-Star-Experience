@@ -109,6 +109,29 @@ function sameMetadataPair(candidate, target) {
   return direct || reversed;
 }
 
+export function karaokeIdentityKey(entry) {
+  const singer = normalizeVdjSinger(entry?.singer);
+  const path = normalizeVdjPath(entry?.filePath);
+  const metadata = [
+    normalizeVdjMetadata(entry?.song),
+    normalizeVdjMetadata(entry?.artist)
+  ].filter(Boolean).sort().join("|");
+  return singer && (path || metadata) ? `${singer}|${path || metadata}` : "";
+}
+
+export function duplicateKaraokeIndices(entries = []) {
+  const firstByIdentity = new Map();
+  const duplicates = [];
+  entries.forEach((entry, sourceIndex) => {
+    const key = karaokeIdentityKey(entry);
+    if (!key) return;
+    const index = Number.isInteger(entry?.index) ? entry.index : sourceIndex;
+    if (firstByIdentity.has(key)) duplicates.push(index);
+    else firstByIdentity.set(key, index);
+  });
+  return duplicates.sort((left, right) => right - left);
+}
+
 export function sameKaraokeIdentity(candidate, target) {
   const sameSinger =
     normalizeVdjSinger(candidate?.singer) === normalizeVdjSinger(target?.singer);
@@ -217,6 +240,28 @@ export async function listKaraokeEntries(config) {
   }
 
   return entries;
+}
+
+export async function removeDuplicateKaraokeEntries(config, suppliedEntries = null) {
+  const before = Array.isArray(suppliedEntries)
+    ? suppliedEntries
+    : await listKaraokeEntries(config);
+  const duplicateIndices = duplicateKaraokeIndices(before);
+  if (!duplicateIndices.length) {
+    return { entries: before, removedCount: 0, verified: true };
+  }
+  for (const index of duplicateIndices) {
+    await executeVdj(config, buildKaraokeRemoveScript(index));
+  }
+  const after = await listKaraokeEntries(config);
+  if (duplicateKaraokeIndices(after).length) {
+    throw new Error("VirtualDJ still contains repeated copies after duplicate cleanup.");
+  }
+  return {
+    entries: after,
+    removedCount: before.length - after.length,
+    verified: true
+  };
 }
 
 export async function insertKaraokeEntry(
