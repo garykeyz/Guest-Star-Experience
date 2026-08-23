@@ -42,6 +42,19 @@ function normalizedQueryValue(value) {
   return /^(?:false|null|undefined)$/i.test(unquoted) ? "" : unquoted;
 }
 
+export function isVirtualDjTechnicalError(value) {
+  return /^error\s*:\s*-?\d+$/i.test(normalizedQueryValue(value));
+}
+
+function assertReadableQueueValue(value, property, index = -1) {
+  if (!isVirtualDjTechnicalError(value)) return;
+  const position = index >= 0 ? ` at queue position ${index + 1}` : "";
+  throw new Error(
+    `VirtualDJ returned a technical Network Control error while reading ${property}${position}. ` +
+    "The previous valid queue was preserved; restart Network Control or VirtualDJ and synchronize again."
+  );
+}
+
 export function normalizeVdjPath(value) {
   return normalizedQueryValue(value).replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
 }
@@ -204,9 +217,9 @@ function karaokeSongQuery(property, index) {
 }
 
 export async function listKaraokeEntries(config) {
-  const rawCount = normalizedQueryValue(
-    await queryVdj(config, "file_count karaoke")
-  );
+  const countResponse = await queryVdj(config, "file_count karaoke");
+  assertReadableQueueValue(countResponse, "the Karaoke queue size");
+  const rawCount = normalizedQueryValue(countResponse);
   if (!/^\d+$/.test(rawCount)) {
     throw new Error(
       "VirtualDJ did not return the Karaoke queue size. Check that Network Control is up to date."
@@ -223,6 +236,15 @@ export async function listKaraokeEntries(config) {
       queryVdj(config, karaokeSongQuery("artist", index)),
       queryVdj(config, karaokeSongQuery("length", index))
     ]);
+    [
+      [filePath, "file path"],
+      [singer, "singer"],
+      [song, "title"],
+      [artist, "artist"],
+      [length, "duration"]
+    ].forEach(([value, property]) =>
+      assertReadableQueueValue(value, property, index)
+    );
     const entry = {
       index,
       filePath: normalizedQueryValue(filePath),

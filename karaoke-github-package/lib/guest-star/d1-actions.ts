@@ -21,7 +21,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.2.2";
+export const GUEST_STAR_D1_VERSION = "4.3.0";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -38,6 +38,7 @@ const PERMISSIONS = [
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const HOST_BASE_URL = "https://host.gstarxp.com";
 const DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
+const DEFAULT_GOOGLE_FALLBACK_SETTING = "defaultGoogleFallback";
 export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
 
 type PermissionName = typeof PERMISSIONS[number];
@@ -203,6 +204,20 @@ function parseObject(value: unknown) {
       : {};
   } catch {
     return {};
+  }
+}
+
+function safeGoogleFormUrl(value: unknown) {
+  const candidate = text(value);
+  if (!candidate) return "";
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" || url.hostname !== "docs.google.com") return "";
+    return /^\/forms\/d\/(?:e\/)?[^/]+\/(?:viewform|edit)\/?$/i.test(url.pathname)
+      ? `${url.origin}${url.pathname}`
+      : "";
+  } catch {
+    return "";
   }
 }
 
@@ -726,6 +741,7 @@ async function adminState(db: D1DatabaseLike, auth: Auth) {
     upcomingActivities: await listRecords(db, "UpcomingActivities"),
     branding: await listRecords(db, "HotelBranding"),
     defaultPublicExperience: await defaultPublicExperienceSetting(db),
+    defaultGoogleFallback: await defaultGoogleFallbackSetting(db),
     auditLog: (await listRecords(db, "AuditLog")).slice(-500)
   };
 }
@@ -793,6 +809,87 @@ async function setDefaultPublicExperience(db: D1DatabaseLike, auth: Auth, body: 
     activityId: settingValue.activityId
   });
   return { ok: true, defaultPublicExperience: await defaultPublicExperienceSetting(db) };
+}
+
+async function defaultGoogleFallbackSetting(db: D1DatabaseLike) {
+  const record = await getRecord(db, "GlobalSettings", DEFAULT_GOOGLE_FALLBACK_SETTING);
+  const setting = parseObject(record?.settingValue);
+  const formUrl = safeGoogleFormUrl(setting.formUrl);
+  const hotelId = text(setting.hotelId);
+  const venueId = text(setting.venueId);
+  const activityId = text(setting.activityId);
+  const userId = text(setting.userId);
+  const configured = bool(setting.enabled) && Boolean(formUrl && hotelId && activityId && userId);
+  let available = false;
+  if (configured) {
+    const [hotel, activity, user] = await Promise.all([
+      getRecord(db, "Hotels", hotelId),
+      getRecord(db, "Activities", activityId),
+      getRecord(db, "Users", userId)
+    ]);
+    available = Boolean(
+      hotel && text(hotel.status) === "active" &&
+      activity && text(activity.status) !== "inactive" && text(activity.hotelId) === hotelId &&
+      (!venueId || text(activity.venueId) === venueId) &&
+      user && text(user.status) === "active"
+    );
+  }
+  return {
+    configured,
+    available,
+    enabled: configured && available,
+    formUrl,
+    hotelId,
+    venueId,
+    activityId,
+    userId,
+    updatedAt: text(record?.updatedAt)
+  };
+}
+
+async function setDefaultGoogleFallback(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+  const enabled = body.enabled !== false;
+  let settingValue: JsonObject = {
+    enabled: false, formUrl: "", hotelId: "", venueId: "", activityId: "", userId: ""
+  };
+  if (enabled) {
+    const formUrl = safeGoogleFormUrl(body.formUrl);
+    const userId = text(body.userId);
+    if (!formUrl) return { ok: false, code: "INVALID_GOOGLE_FORM_URL" };
+    const context = await tenantContext(db, auth, {
+      hotelId: body.hotelId,
+      venueId: body.venueId,
+      activityId: body.activityId
+    });
+    const user = await getRecord(db, "Users", userId);
+    if (!context.activity || !user || text(user.status) !== "active") {
+      return { ok: false, code: "GOOGLE_FALLBACK_REQUIRED" };
+    }
+    settingValue = {
+      enabled: true,
+      formUrl,
+      hotelId: text(context.hotel.hotelId),
+      venueId: text(context.venue?.venueId),
+      activityId: text(context.activity.activityId),
+      userId
+    };
+  }
+  const stamp = nowIso();
+  await save(db, "GlobalSettings", {
+    settingKey: DEFAULT_GOOGLE_FALLBACK_SETTING,
+    settingValue: JSON.stringify(settingValue),
+    updatedAt: stamp
+  });
+  await audit(db, {
+    userId: auth.user.userId,
+    action: enabled ? "public.googleFallback.enabled" : "public.googleFallback.disabled",
+    hotelId: settingValue.hotelId,
+    venueId: settingValue.venueId,
+    activityId: settingValue.activityId,
+    fallbackUserId: settingValue.userId
+  });
+  return { ok: true, defaultGoogleFallback: await defaultGoogleFallbackSetting(db) };
 }
 
 async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1945,9 +2042,15 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
   const existing = await activeRequests(db, hotelId, activityId);
   let imported = 0;
   const seen = new Set<string>();
+  const technicalError = (value: unknown) => /^error\s*:\s*-?\d+$/i.test(text(value));
   for (const [entryIndex, entry] of entries.slice(0, 100).entries()) {
     const virtualId = text(entry.virtualDJItemId || entry.id);
-    if (!virtualId || seen.has(virtualId)) continue;
+    if (
+      !virtualId || seen.has(virtualId) || technicalError(virtualId) ||
+      technicalError(entry.singer || entry.name) ||
+      technicalError(entry.song || entry.title) ||
+      technicalError(entry.artist) || technicalError(entry.fileName)
+    ) continue;
     seen.add(virtualId);
     const match = existing.find((item) => item.virtualDJItemId === virtualId);
     const stamp = nowIso();
@@ -1977,7 +2080,17 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
     await appendOutbox(db, "request.upsert", { request });
     imported += 1;
   }
-  for (const virtualId of confirmedMissingIds) {
+  const missingIds = new Set([
+    ...confirmedMissingIds,
+    ...existing
+      .filter((item) =>
+        item.sourceType === "virtualdj_external" &&
+        item.virtualDJItemId &&
+        !seen.has(item.virtualDJItemId)
+      )
+      .map((item) => item.virtualDJItemId)
+  ]);
+  for (const virtualId of missingIds) {
     if (seen.has(virtualId)) continue;
     const match = existing.find((item) => item.virtualDJItemId === virtualId);
     if (!match) continue;
@@ -2187,7 +2300,8 @@ function publicGuestKey(request: GuestStarRequest) {
 }
 
 function publicRequestIsActive(request: GuestStarRequest) {
-  return !["Ya cantó", "Saltado", "Eliminada", "Cancelada"].includes(request.status);
+  if (request.sourceType === "virtualdj_external") return false;
+  return !["Ya cantó", "Saltado", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
 }
 
 async function publicGuestIdentity(hotelId: string, deviceId: unknown) {
@@ -2198,6 +2312,28 @@ async function publicGuestIdentity(hotelId: string, deviceId: unknown) {
 
 export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams) {
   const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
+  const requestedKey = text(identifier)
+    .replace(/^https?:\/\/[^/]+\/h\//i, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (requestedKey === "default") {
+    const fallback = await defaultGoogleFallbackSetting(db);
+    if (fallback.enabled) {
+      const fallbackHotel = await getRecord(db, "Hotels", fallback.hotelId);
+      if (fallbackHotel) {
+        await processD1ActivitySchedules(db, fallback.hotelId);
+        return {
+          ...await publicExperience(db, fallbackHotel, fallback.activityId),
+          accepting: false,
+          googleFallback: {
+            enabled: true,
+            formUrl: fallback.formUrl,
+            hotelId: fallback.hotelId,
+            activityId: fallback.activityId
+          }
+        };
+      }
+    }
+  }
   let context = await resolvePublicContext(db, identifier);
   if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   await processD1ActivitySchedules(db, text(context.hotel.hotelId));
@@ -2208,6 +2344,12 @@ export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchPar
 export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const action = text(body.action);
   const identifier = body.publicCode || body.hotel || body.hotelCode;
+  const requestedKey = text(identifier)
+    .replace(/^https?:\/\/[^/]+\/h\//i, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (requestedKey === "default" && (await defaultGoogleFallbackSetting(db)).enabled) {
+    return { ok: false, code: "GOOGLE_FALLBACK_ACTIVE" };
+  }
   let publicContext = await resolvePublicContext(db, identifier);
   if (!publicContext) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   await processD1ActivitySchedules(db, text(publicContext.hotel.hotelId));
@@ -2372,6 +2514,7 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "createOneTimeLoginCode") return await createOneTimeCode(db, auth);
     if (action === "adminState") return await adminState(db, auth);
     if (action === "setDefaultPublicExperience") return await setDefaultPublicExperience(db, auth, body);
+    if (action === "setDefaultGoogleFallback") return await setDefaultGoogleFallback(db, auth, body);
     if (action === "createHost") return await createHost(db, auth, body);
     if (action === "updateHost") return await updateHost(db, auth, body);
     if (action === "setHostPassword") return await setHostPassword(db, auth, body);

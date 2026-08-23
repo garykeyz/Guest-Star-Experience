@@ -6,7 +6,7 @@ import { normalizeBrandImageUrl } from "@/lib/guest-star/media-url";
 import {
   ArrowRight, Bell, CalendarPlus, Check, ChevronDown, Clock3, Headphones,
   Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
-  Sparkles, UserRound, UsersRound, XCircle
+  ShieldCheck, Sparkles, UserRound, UsersRound, XCircle
 } from "lucide-react";
 
 type Lang = "es" | "en" | "fr" | "it" | "de" | "ru" | "pt";
@@ -49,6 +49,12 @@ type ApiState = {
     durationSeconds?: number;
     showCountdown?: boolean;
   }>;
+  googleFallback?: {
+    enabled?: boolean;
+    formUrl?: string;
+    hotelId?: string;
+    activityId?: string;
+  };
 };
 type ApiResponse = ApiState & {
   ok?: boolean;
@@ -131,6 +137,15 @@ const activityCopy: Record<Lang, ActivityCopy> = {
   de: {label:"AKTIVITÄTSSTATUS",notStarted:"Die Aktivität hat noch nicht begonnen",running:"Aktivität läuft",finished:"Geplante Zeit beendet",elapsed:"Vergangen",remaining:"Verbleibend",queue:"Personen in der Warteschlange"},
   ru: {label:"СТАТУС МЕРОПРИЯТИЯ",notStarted:"Мероприятие ещё не началось",running:"Мероприятие идёт",finished:"Запланированное время завершено",elapsed:"Прошло",remaining:"Осталось",queue:"Людей в очереди"},
   pt: {label:"ESTADO DA ATIVIDADE",notStarted:"A atividade ainda não começou",running:"Atividade em curso",finished:"Tempo programado concluído",elapsed:"Decorrido",remaining:"Restante",queue:"Pessoas na fila"}
+};
+const fallbackCopy: Record<Lang,{eyebrow:string;title:string;body:string;action:string;language:string}> = {
+  es:{eyebrow:"RESPALDO SEGURO",title:"Solicitudes disponibles en Google Forms",body:"El anfitrión activó temporalmente el formulario de respaldo para esta actividad. Tu solicitud llegará a la misma operación del evento.",action:"Abrir formulario de solicitudes",language:"Cambiar idioma"},
+  en:{eyebrow:"SECURE BACKUP",title:"Requests available in Google Forms",body:"The host temporarily enabled the backup form for this activity. Your request will reach the same event operation.",action:"Open request form",language:"Change language"},
+  fr:{eyebrow:"SAUVEGARDE SÉCURISÉE",title:"Demandes disponibles dans Google Forms",body:"L’hôte a temporairement activé le formulaire de secours pour cette activité. Votre demande arrivera à la même équipe.",action:"Ouvrir le formulaire",language:"Changer de langue"},
+  it:{eyebrow:"BACKUP SICURO",title:"Richieste disponibili in Google Forms",body:"L’host ha attivato temporaneamente il modulo di backup per questa attività. La richiesta arriverà alla stessa gestione dell’evento.",action:"Apri il modulo richieste",language:"Cambia lingua"},
+  de:{eyebrow:"SICHERE RESERVE",title:"Anfragen über Google Forms verfügbar",body:"Der Host hat vorübergehend das Reserveformular für diese Aktivität aktiviert. Deine Anfrage erreicht dasselbe Veranstaltungsteam.",action:"Anfrageformular öffnen",language:"Sprache ändern"},
+  ru:{eyebrow:"БЕЗОПАСНЫЙ РЕЗЕРВ",title:"Заявки доступны в Google Forms",body:"Ведущий временно включил резервную форму для этого мероприятия. Ваша заявка поступит той же команде.",action:"Открыть форму заявок",language:"Сменить язык"},
+  pt:{eyebrow:"BACKUP SEGURO",title:"Pedidos disponíveis no Google Forms",body:"O anfitrião ativou temporariamente o formulário de reserva para esta atividade. O pedido chegará à mesma operação do evento.",action:"Abrir formulário de pedidos",language:"Mudar idioma"}
 };
 const common = (x: Partial<Copy>): Copy => ({
   live:"LIVE EXPERIENCE",title:"KARAOKE NIGHT",sub:"Ready to sing?",desc:"Request your favorite song and get ready to shine on stage.",
@@ -433,6 +448,36 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     }catch{setModuleError("Your review could not be submitted. Please try again.");}
   };
   const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setMenu(false);setLang(null);setDone(false);};
+
+  if(activity.googleFallback?.enabled&&activity.googleFallback.formUrl){
+    const fallbackText=fallbackCopy[lang||"en"];
+    return <main className="page fallbackPage" style={brandStyle}>
+      <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/><ShieldCheck className="ghost microphone"/></div>
+      <div className="brand">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
+      {!lang?<motion.section className="card languageGate fallbackLanguageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
+        <div className="badge"><ShieldCheck size={31}/></div>
+        <p className="eyebrow"><Sparkles size={14}/> LANGUAGE / IDIOMA</p>
+        <h1>Select your language · Selecciona tu idioma</h1>
+        <div className="languageGrid">{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[3]}</strong><Check size={18}/></button>)}</div>
+      </motion.section>:<>
+        <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[3]}</span><ChevronDown size={16}/></button>
+          <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[3]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
+        </div>
+        {activity.hotel&&<section className="tenantIdentity">
+          {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<span className="tenantLogo" aria-hidden="true"><img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/></span>}
+          <div>{branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span></div>
+        </section>}
+        <motion.section className="card googleFallbackCard" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
+          <div className="fallbackShield"><ShieldCheck size={38}/></div>
+          <p className="eyebrow"><Sparkles size={14}/> {fallbackText.eyebrow}</p>
+          <h1>{fallbackText.title}</h1>
+          <p>{fallbackText.body}</p>
+          <a className="submit googleFallbackAction" href={activity.googleFallback.formUrl} target="_blank" rel="noreferrer"><ShieldCheck size={20}/>{fallbackText.action}<ArrowRight size={18}/></a>
+          <button type="button" className="fallbackLanguage" onClick={()=>{setLang(null);setMenu(false)}}>{fallbackText.language}</button>
+        </motion.section>
+      </>}
+    </main>;
+  }
 
   return <main className="page" style={brandStyle}>
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>

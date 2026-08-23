@@ -99,6 +99,32 @@ test("lee duraciones exactas reportadas por VirtualDJ", () => {
   assert.equal(parseVdjDuration("false"), 0);
 });
 
+test("rechaza el HRESULT técnico de Network Control sin crear una canción falsa", async (t) => {
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (script === "file_count karaoke") response.end("1");
+    else if (script.includes('"title"')) response.end("error:-2147467259");
+    else if (script.includes('"filepath"')) response.end("/Music/Celia Cruz.mp4");
+    else if (script.includes('"singer"')) response.end("Moises");
+    else if (script.includes('"artist"')) response.end("Celia Cruz");
+    else response.end("4:44");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  await assert.rejects(
+    listKaraokeEntries({
+      host: "127.0.0.1",
+      port: server.address().port,
+      password: "",
+      timeoutMs: 1000
+    }),
+    /technical Network Control error.*title.*position 1/i
+  );
+});
+
 test("usa los endpoints execute y query de Network Control con Bearer", async (t) => {
   const received = [];
   const server = createServer(async (request, response) => {

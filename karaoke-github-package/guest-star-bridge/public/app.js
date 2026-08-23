@@ -1,5 +1,6 @@
 import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
 import { initSuperhostPanel } from "./superhost.js";
+import { createBridgeI18n } from "./bridge-i18n.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const ACTIVITY_LANGUAGES = [
@@ -19,6 +20,7 @@ const passwordDialog = $("#passwordDialog");
 const shareDialog = $("#shareDialog");
 const moreDialog = $("#moreDialog");
 const folderList = $("#folderList");
+const bridgeI18n = createBridgeI18n({ language: "es" });
 let state = null;
 let folders = [];
 let activityBusy = false;
@@ -186,7 +188,7 @@ function dateTime(value) {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleString("en", {
+  return parsed.toLocaleString(bridgeI18n.locale(), {
     dateStyle: "short",
     timeStyle: "short"
   });
@@ -195,7 +197,7 @@ function dateTime(value) {
 function clockTime(value) {
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleTimeString("en", {
+  return parsed.toLocaleTimeString(bridgeI18n.locale(), {
     hour: "numeric",
     minute: "2-digit"
   });
@@ -999,7 +1001,7 @@ function renderRequests() {
       : `Request ${arrival.number} by arrival order`;
     renderGuestIdentity($(".singer", card), item);
     $(".song", card).textContent = item.song;
-    $(".artist", card).textContent = item.artist || "Artist not provided";
+    $(".artist", card).textContent = item.artist || bridgeI18n.translate("Artist not provided");
     const requestComment = String(item.comment || "").trim();
     const requestCommentEl = $(".request-comment", card);
     if (requestComment) {
@@ -1425,10 +1427,9 @@ function fillSettings() {
     ? "PIN saved · leave blank to keep"
     : "Private PIN";
   $("#rememberHostPin").checked = state.config.rememberHostPin !== false;
-  $("#legacyConnection").classList.toggle(
-    "hidden",
-    state.account?.user?.role !== "superhost"
-  );
+  // Direct Apps Script/PIN values remain readable for automatic 3.x migration,
+  // but are never presented as operator controls in the 4.x interface.
+  $("#legacyConnection").classList.add("hidden");
   $("#vdjPort").value = state.config.virtualDJ.port || 80;
   $("#vdjPassword").value = "";
   $("#vdjPassword").placeholder = state.config.virtualDJ.passwordConfigured
@@ -1485,6 +1486,7 @@ function fillSettings() {
 
 function settingsPayload() {
   const payload = {
+    uiLanguage: bridgeI18n.getLanguage(),
     libraryFolders: folders.map((item) => item.trim()).filter(Boolean),
     rememberLibraryFolders: $("#rememberLibraryFolders").checked,
     appsScriptUrl: $("#appsScriptUrl").value.trim(),
@@ -2037,6 +2039,7 @@ $("#testVdj").addEventListener("click", async () => {
 
 function applyState(nextState) {
   state = nextState;
+  bridgeI18n.setLanguage(state.config?.uiLanguage || "es");
   const versionLabel = $("#bridgeVersion");
   if (versionLabel) versionLabel.textContent = `v${state.version || "unknown"}`;
   updateStatus();
@@ -2047,7 +2050,27 @@ function applyState(nextState) {
   updateAuthUi();
   superhostPanel.sync(state);
   updateStatus();
+  bridgeI18n.refresh();
 }
+
+$("#uiLanguageSelect").addEventListener("change", async (event) => {
+  const language = event.target.value === "en" ? "en" : "es";
+  bridgeI18n.setLanguage(language);
+  updateStatus();
+  renderVdjQueue();
+  renderRequests();
+  renderHitSuggestions();
+  renderRandomRotation();
+  bridgeI18n.refresh();
+  try {
+    await api("/api/config/language", {
+      method: "POST",
+      body: JSON.stringify({ uiLanguage: language })
+    });
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+});
 
 $("#randomSpanish").addEventListener("click", () => drawRandomRotation("spanish"));
 $("#randomEnglish").addEventListener("click", () => drawRandomRotation("english"));

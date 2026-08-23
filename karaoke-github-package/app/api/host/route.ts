@@ -3,6 +3,8 @@ import {
   backendMode,
   d1Health,
   ensureD1Schema,
+  getMeta,
+  getRecord,
   getGuestStarD1,
   importD1Snapshot,
   reserveDailyFreeTranslationBudget,
@@ -24,6 +26,7 @@ import {
   getWorkersAiBinding,
   prepareBrandingLocalization
 } from "@/lib/guest-star/translation";
+import { verifyGoogleIdentityToken } from "@/lib/guest-star/google-identity";
 
 const SESSION_COOKIE = "guest_star_host_session";
 const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
@@ -179,6 +182,68 @@ export async function POST(request: NextRequest) {
       return safeResponse({ ok: false, code: "INVALID_D1_ACTION" }, 400);
     }
 
+    if (action === "googleFallbackState" || action === "linkGoogleFallback") {
+      const useD1 = Boolean(db && mode === "d1_primary");
+      const identity = useD1
+        ? await handleD1HostAction(db!, { action: "me", authToken: sessionToken })
+        : await callAppsScript({ action: "me", authToken: sessionToken });
+      if (identity?.ok !== true || !identity.user) {
+        return safeResponse({ ok: false, code: "UNAUTHORIZED" }, 401);
+      }
+      const user = identity.user as JsonObject;
+      const backupSecret = useD1 ? await getMeta(db!, "sheets_backup_secret") : "";
+      if (useD1 && !backupSecret) return safeResponse({ ok: false, code: "GOOGLE_FALLBACK_NOT_READY" }, 503);
+      const googleClientId = String(process.env.GOOGLE_OAUTH_CLIENT_ID || "");
+      const appsScriptAuth = useD1 ? { backupSecret } : { authToken: sessionToken };
+
+      if (action === "linkGoogleFallback") {
+        if (!googleClientId) return safeResponse({ ok: false, code: "GOOGLE_SIGN_IN_NOT_CONFIGURED" }, 503);
+        const verified = await verifyGoogleIdentityToken(body.credential, googleClientId);
+        const accountEmail = String(user.email || "").trim().toLowerCase();
+        if (!accountEmail || verified.email !== accountEmail) {
+          return safeResponse({ ok: false, code: "GOOGLE_EMAIL_MISMATCH" }, 403);
+        }
+        const linked = await callAppsScript({
+          action: "provisionGoogleFallback",
+          ...appsScriptAuth,
+          userId: String(user.userId || ""),
+          role: String(user.role || ""),
+          displayName: String(user.displayName || user.username || "Guest Star Host"),
+          email: verified.email,
+          hotelId: String(body.hotelId || ""),
+          venueId: String(body.venueId || ""),
+          activityId: String(body.activityId || "")
+        }, HOTEL_PROVISIONING_TIMEOUT_MS);
+        return safeResponse({ ...linked, googleClientId, googleEmail: verified.email });
+      }
+
+      const state = await callAppsScript({
+        action: "googleFallbackState",
+        ...appsScriptAuth,
+        userId: String(user.userId || ""),
+        role: String(user.role || "")
+      }, HOTEL_PROVISIONING_TIMEOUT_MS);
+      let effectiveDefaultGoogleFallback = state.defaultGoogleFallback;
+      if (useD1) {
+        const stored = await getRecord(db!, "GlobalSettings", "defaultGoogleFallback");
+        try {
+          const parsed = JSON.parse(String(stored?.settingValue || "{}"));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            effectiveDefaultGoogleFallback = parsed as JsonObject;
+          }
+        } catch {
+          // Keep the Apps Script mirror value if the D1 record is not valid JSON.
+        }
+      }
+      return safeResponse({
+        ...state,
+        defaultGoogleFallback: effectiveDefaultGoogleFallback,
+        googleClientId,
+        googleSignInEnabled: Boolean(googleClientId),
+        accountEmail: String(user.email || "")
+      });
+    }
+
     let translationWarning = "";
     if (action === "updateHotelBranding" && db && mode === "d1_primary") {
       const requestedMode = String((payload.branding as JsonObject | undefined)?.translationMode || "auto");
@@ -225,7 +290,11 @@ export async function POST(request: NextRequest) {
       : error instanceof Error
         ? error.message
         : "The Host Panel could not connect to Guest Star. Contact the Superhost if this continues.";
-    const status = message === "FORBIDDEN" ? 403 : 502;
+    const status = message === "FORBIDDEN" || message === "GOOGLE_EMAIL_MISMATCH"
+      ? 403
+      : ["UNAUTHORIZED", "INVALID_GOOGLE_CREDENTIAL", "GOOGLE_CREDENTIAL_EXPIRED", "GOOGLE_EMAIL_NOT_VERIFIED"].includes(message)
+        ? 401
+        : 502;
     return safeResponse({ ok: false, code: message, error: message }, status);
   }
 }

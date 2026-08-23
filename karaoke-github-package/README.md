@@ -1,4 +1,4 @@
-# Guest Star Experience 4.2.2
+# Guest Star Experience 4.3.0
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
@@ -18,7 +18,7 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
   se muestran en texto plano.
 - Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
-- Bridge 4.2.2 incluye la administración, agenda recurrente, traducciones y
+- Bridge 4.3.0 incluye la administración, agenda recurrente, traducciones y
   barra nativa actualizadas para esta versión.
 - Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
   `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
@@ -28,6 +28,25 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
   las actividades pueden editarse, desactivarse y restaurarse sin borrar datos.
 - El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
   opciones avanzadas plegadas hasta que el usuario las solicite.
+
+## Novedades 4.3.0
+
+- Bridge mantiene separadas las solicitudes web y las pistas externas de
+  VirtualDJ, descarta respuestas técnicas `error:` y conserva la última cola
+  válida ante fallos transitorios;
+- la reconciliación reconoce título y artista invertidos, pero no adivina cuando
+  dos solicitudes compiten por la misma pista;
+- la interfaz local puede seleccionarse completamente en Español o English y
+  solo muestra un indicador de carga durante una operación real;
+- cada Host puede autorizar con Google un único Form y Sheet reutilizables como
+  respaldo; al archivar o iniciar un nuevo ciclo se crea una copia histórica y
+  se limpia el mismo par de archivos;
+- el Superhost puede revisar los respaldos por Host y actividad, y asignar de
+  manera opcional uno a la raíz de `request.gstarxp.com` sin modificar los
+  enlaces permanentes de hotel;
+- Hotel Branding y Bridge Devices permanecen compactos y plegables; los
+  controles de migración D1 se ejecutan automáticamente y no distraen al
+  operador.
 
 ## Mejora visual 4.2.2
 
