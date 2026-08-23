@@ -120,6 +120,19 @@ test("Superhost puede fijar o quitar la experiencia de request.gstarxp.com", () 
   assert.match(source, /publicExperienceStateV4_\(context\.hotel, context\.activity/);
 });
 
+test("el respaldo Google reutiliza un Form y Sheet por Host y se reinicia al archivar", () => {
+  assert.match(source, /V4_DEFAULT_GOOGLE_FALLBACK_SETTING = "defaultGoogleFallback"/);
+  assert.match(source, /function provisionGoogleFallbackV43_\(body\)/);
+  assert.match(source, /FormApp\.DestinationType\.SPREADSHEET/);
+  assert.match(source, /function googleFallbackSnapshotV43_\(master, mapping, reason\)/);
+  assert.match(source, /resetGoogleFallbackForArchiveV43_\(payload\)/);
+  assert.match(source, /if \(startNew\) \{[\s\S]*resetGoogleFallbackForArchiveV43_\(\{/);
+  assert.match(source, /function archiveQueueV4_[\s\S]*resetGoogleFallbackForArchiveV43_\(\{/);
+  assert.match(source, /setDefaultGoogleFallback:\s*function\(\)/);
+  assert.match(source, /googleFallback:\s*\{/);
+  assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/forms/);
+});
+
 test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {
   const originalSpreadsheet = context.spreadsheet_;
   context.spreadsheet_ = () => ({
@@ -1037,7 +1050,7 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
   assert.match(source, /const BRIDGE_API_VERSION = "4\.2\.0"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.2\.0-cloudflare-d1-migration"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.3\.0-google-fallback"/);
   assert.match(source, /const V4_SCHEMA_VERSION = "4\.2\.0"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),

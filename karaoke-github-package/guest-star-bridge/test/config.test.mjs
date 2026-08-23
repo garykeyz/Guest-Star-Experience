@@ -55,7 +55,7 @@ test("permite olvidar carpeta y PIN por separado al cerrar", () => {
   assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 10 recuerda sesión y selección sin guardar contraseñas de usuario", () => {
+test("la configuración 11 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -65,13 +65,15 @@ test("la configuración 10 recuerda sesión y selección sin guardar contraseña
       lastVenueId: "venue-1",
       lastActivityId: "activity-1",
       rememberLogin: true,
-      rememberSelection: true
+      rememberSelection: true,
+      uiLanguage: "en"
     },
     DEFAULT_CONFIG
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 10);
+  assert.equal(runtime.configVersion, 11);
+  assert.equal(runtime.uiLanguage, "en");
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");

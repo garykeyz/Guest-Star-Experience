@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,6 +17,13 @@
         <p class="subtitle">Local library · YouTube · Live VirtualDJ Karaoke queue</p>
       </div>
       <div class="topbar-actions">
+        <label class="bridge-language-control" aria-label="Bridge language">
+          <span>Idioma</span>
+          <select id="uiLanguageSelect">
+            <option value="es">Español</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <button class="button ghost hidden" id="openHostPanel">Superhost</button>
         <button class="button ghost hidden" id="liveEventButton">Evento en vivo</button>
         <button class="button ghost hidden" id="switchActivity">Switch Activity</button>
@@ -170,7 +177,7 @@
           Remember selected folders on this Mac
         </label>
 
-        <details id="legacyConnection" class="legacy-settings">
+        <details id="legacyConnection" class="legacy-settings hidden" hidden aria-hidden="true">
           <summary>Legacy 3.x connection settings</summary>
           <label for="appsScriptUrl">Google Apps Script URL</label>
           <input id="appsScriptUrl" name="appsScriptUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" />

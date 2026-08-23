@@ -12,13 +12,17 @@ const HEADERS = [
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.2.0";
-const GUEST_STAR_CODE_BUILD = "4.2.0-cloudflare-d1-migration";
+const GUEST_STAR_CODE_BUILD = "4.3.0-google-fallback";
 const V4_SCHEMA_VERSION = "4.2.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
+const V4_DEFAULT_GOOGLE_FALLBACK_SETTING = "defaultGoogleFallback";
+const V4_GOOGLE_FALLBACK_PREFIX = "googleFallback:";
+const V4_GOOGLE_FALLBACK_SNAPSHOT_PREFIX = "googleFallbackSnapshot:";
 const V4_REQUIRED_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/forms",
   "https://www.googleapis.com/auth/script.external_request",
   "https://www.googleapis.com/auth/script.scriptapp",
   "https://www.googleapis.com/auth/userinfo.email"
@@ -2216,14 +2220,14 @@ function authorizeGuestStarV4() {
     masterFileName: file.getName(),
     driveFolderReady: driveReadiness.ok,
     note: driveReadiness.ok
-      ? "Google Sheets and Drive folder access are authorized. Update the existing web app deployment before returning to the Host Panel."
+      ? "Google Sheets, Forms and Drive access are authorized. Update the existing web app deployment before returning to the Host Panel."
       : "Google Sheets is authorized. Hotel creation will still work in My Drive even if Drive folder organization is unavailable."
   };
   console.log(JSON.stringify(result));
   try {
     master.toast(
-      "Google Sheets and Drive access are authorized. Update the existing web app deployment, then return to the Host Panel.",
-      "Guest Star 4.0",
+      "Google Sheets, Forms and Drive access are authorized. Update the existing web app deployment, then return to the Host Panel.",
+      "Guest Star 4.3",
       10
     );
   } catch (error) {
@@ -3618,6 +3622,355 @@ function setDefaultPublicExperienceV4_(auth, body) {
   return { ok: true, defaultPublicExperience: defaultPublicExperienceSettingV4_(auth.master) };
 }
 
+function globalSettingJsonV43_(master, key) {
+  const record = findRecordV4_(
+    master || masterSpreadsheetV4_(),
+    "GlobalSettings",
+    V4_MASTER_TABLES.GlobalSettings,
+    "settingKey",
+    key
+  );
+  let value = {};
+  try {
+    value = JSON.parse(String(record && record.settingValue || "{}"));
+  } catch (error) {
+    value = {};
+  }
+  return { record: record, value: value && typeof value === "object" ? value : {} };
+}
+
+function saveGlobalSettingJsonV43_(master, key, value) {
+  const found = globalSettingJsonV43_(master, key);
+  const changes = { settingValue: JSON.stringify(value || {}), updatedAt: isoNowV4_() };
+  if (found.record) {
+    updateRecordV4_(master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings, found.record._row, changes);
+  } else {
+    appendRecordV4_(master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings, {
+      settingKey: key,
+      settingValue: changes.settingValue,
+      updatedAt: changes.updatedAt
+    });
+  }
+  return value;
+}
+
+function safeGoogleFormUrlV43_(value) {
+  const source = String(value || "").trim();
+  const match = source.match(/^https:\/\/docs\.google\.com(\/forms\/d\/(?:e\/)?[^/?#]+\/(?:viewform|edit)\/?)(?:[?#].*)?$/i);
+  return match ? "https://docs.google.com" + match[1] : "";
+}
+
+function defaultGoogleFallbackSettingV43_(master) {
+  const spreadsheet = master || masterSpreadsheetV4_();
+  const stored = globalSettingJsonV43_(spreadsheet, V4_DEFAULT_GOOGLE_FALLBACK_SETTING);
+  const setting = stored.value;
+  const formUrl = safeGoogleFormUrlV43_(setting.formUrl);
+  const hotelId = String(setting.hotelId || "");
+  const venueId = String(setting.venueId || "");
+  const activityId = String(setting.activityId || "");
+  const userId = String(setting.userId || "");
+  const configured = parseBooleanV4_(setting.enabled) && Boolean(formUrl && hotelId && activityId && userId);
+  let available = false;
+  if (configured) {
+    const hotel = findRecordV4_(spreadsheet, "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", hotelId);
+    const activity = findRecordV4_(spreadsheet, "Activities", V4_MASTER_TABLES.Activities, "activityId", activityId);
+    const user = findRecordV4_(spreadsheet, "Users", V4_MASTER_TABLES.Users, "userId", userId);
+    available = Boolean(
+      hotel && hotel.status === "active" &&
+      activity && activity.status !== "inactive" && activity.hotelId === hotelId &&
+      (!venueId || activity.venueId === venueId) &&
+      user && user.status === "active"
+    );
+  }
+  return {
+    configured: configured,
+    available: available,
+    enabled: configured && available,
+    formUrl: formUrl,
+    hotelId: hotelId,
+    venueId: venueId,
+    activityId: activityId,
+    userId: userId,
+    updatedAt: stored.record ? stored.record.updatedAt : ""
+  };
+}
+
+function setDefaultGoogleFallbackV43_(auth, body) {
+  if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
+  const enabled = body.enabled !== false;
+  let setting = { enabled: false, formUrl: "", hotelId: "", venueId: "", activityId: "", userId: "" };
+  if (enabled) {
+    const formUrl = safeGoogleFormUrlV43_(body.formUrl);
+    const user = findRecordV4_(auth.master, "Users", V4_MASTER_TABLES.Users, "userId", body.userId);
+    const context = resolveTenantContextV4_(auth, body);
+    if (!formUrl) return { ok: false, code: "INVALID_GOOGLE_FORM_URL" };
+    if (!user || user.status !== "active" || !context.activity) {
+      return { ok: false, code: "GOOGLE_FALLBACK_REQUIRED" };
+    }
+    setting = {
+      enabled: true,
+      formUrl: formUrl,
+      hotelId: context.hotel.hotelId,
+      venueId: context.venue ? context.venue.venueId : "",
+      activityId: context.activity.activityId,
+      userId: user.userId
+    };
+  }
+  saveGlobalSettingJsonV43_(auth.master, V4_DEFAULT_GOOGLE_FALLBACK_SETTING, setting);
+  auditV4_({
+    userId: auth.user.userId,
+    action: enabled ? "public.googleFallback.enabled" : "public.googleFallback.disabled",
+    hotelId: setting.hotelId,
+    venueId: setting.venueId,
+    activityId: setting.activityId,
+    targetId: setting.userId
+  });
+  return { ok: true, defaultGoogleFallback: defaultGoogleFallbackSettingV43_(auth.master) };
+}
+
+function googleFallbackFolderV43_() {
+  const properties = PropertiesService.getScriptProperties();
+  const existingId = properties.getProperty("GOOGLE_FALLBACK_FOLDER_ID");
+  if (existingId) {
+    try { return DriveApp.getFolderById(existingId); } catch (error) {}
+  }
+  const folder = DriveApp.createFolder("Guest Star Experience - Google Backup");
+  properties.setProperty("GOOGLE_FALLBACK_FOLDER_ID", folder.getId());
+  return folder;
+}
+
+function googleFallbackServiceAuthV43_(body) {
+  const expected = PropertiesService.getScriptProperties().getProperty("D1_BACKUP_SECRET");
+  if (expected && safeEqualV4_(body.backupSecret, expected)) {
+    const master = masterSpreadsheetV4_();
+    const user = findRecordV4_(master, "Users", V4_MASTER_TABLES.Users, "userId", body.userId);
+    if (!user || user.status !== "active") throw new Error("UNAUTHORIZED");
+    return { master: master, user: user, session: null, device: null };
+  }
+  const auth = requireAuthV4_(body);
+  if (body.userId && String(body.userId) !== String(auth.user.userId)) throw new Error("FORBIDDEN");
+  return auth;
+}
+
+function googleFallbackMappingV43_(master, userId) {
+  return globalSettingJsonV43_(master, V4_GOOGLE_FALLBACK_PREFIX + String(userId || ""));
+}
+
+function googleFallbackHasResponsesV43_(spreadsheet) {
+  return spreadsheet.getSheets().some(function(sheet) { return sheet.getLastRow() > 1; });
+}
+
+function googleFallbackSnapshotV43_(master, mapping, reason) {
+  if (!mapping || !mapping.spreadsheetId) return null;
+  let spreadsheet;
+  try { spreadsheet = SpreadsheetApp.openById(mapping.spreadsheetId); } catch (error) { return null; }
+  if (!googleFallbackHasResponsesV43_(spreadsheet)) return null;
+  const folder = googleFallbackFolderV43_();
+  const stamp = isoNowV4_();
+  const activity = findRecordV4_(
+    master, "Activities", V4_MASTER_TABLES.Activities, "activityId", mapping.currentActivityId
+  );
+  const title = [
+    "Guest Star Backup", mapping.displayName || "Host",
+    activity ? activity.name : mapping.currentActivityId || "Activity",
+    stamp.replace(/[:.]/g, "-")
+  ].join(" - ").slice(0, 180);
+  const file = DriveApp.getFileById(mapping.spreadsheetId).makeCopy(title, folder);
+  if (mapping.email) {
+    try { file.addEditor(mapping.email); } catch (error) {}
+  }
+  const snapshot = {
+    snapshotId: Utilities.getUuid(),
+    userId: mapping.userId,
+    displayName: mapping.displayName,
+    email: mapping.email,
+    hotelId: mapping.currentHotelId || "",
+    venueId: mapping.currentVenueId || "",
+    activityId: mapping.currentActivityId || "",
+    reason: String(reason || "activity.reset"),
+    snapshotUrl: "https://docs.google.com/spreadsheets/d/" + file.getId() + "/edit",
+    createdAt: stamp
+  };
+  saveGlobalSettingJsonV43_(
+    master,
+    V4_GOOGLE_FALLBACK_SNAPSHOT_PREFIX + stamp + ":" + snapshot.snapshotId,
+    snapshot
+  );
+  return snapshot;
+}
+
+function googleFallbackClearV43_(mapping) {
+  if (mapping.formId) {
+    try { FormApp.openById(mapping.formId).deleteAllResponses(); } catch (error) {}
+  }
+  if (mapping.spreadsheetId) {
+    try {
+      SpreadsheetApp.openById(mapping.spreadsheetId).getSheets().forEach(function(sheet) {
+        const lastRow = sheet.getLastRow();
+        const lastColumn = Math.max(1, sheet.getLastColumn());
+        if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, lastColumn).clearContent();
+      });
+    } catch (error) {}
+  }
+}
+
+function googleFallbackResetMappingV43_(master, mapping, reason) {
+  const snapshot = googleFallbackSnapshotV43_(master, mapping, reason);
+  googleFallbackClearV43_(mapping);
+  return snapshot;
+}
+
+function googleFallbackFormItemsV43_(form) {
+  if (form.getItems().length) return;
+  form.addTextItem().setTitle("Nombre / Name").setRequired(true);
+  form.addTextItem().setTitle("Canción / Song").setRequired(true);
+  form.addTextItem().setTitle("Artista / Artist").setRequired(true);
+  form.addListItem().setTitle("Idioma / Language").setChoiceValues([
+    "Español", "English", "Français", "Italiano", "Deutsch", "Русский", "Português"
+  ]).setRequired(true);
+  form.addParagraphTextItem().setTitle("Comentario opcional / Optional note").setRequired(false);
+}
+
+function provisionGoogleFallbackV43_(body) {
+  const auth = googleFallbackServiceAuthV43_(body);
+  const email = String(body.email || "").trim().toLowerCase();
+  if (!email || email !== String(auth.user.email || "").trim().toLowerCase()) {
+    throw new Error("GOOGLE_EMAIL_MISMATCH");
+  }
+  const context = resolveTenantContextV4_(auth, body);
+  if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
+  const stored = googleFallbackMappingV43_(auth.master, auth.user.userId);
+  let mapping = stored.value || {};
+  const changedActivity = mapping.currentActivityId && (
+    mapping.currentActivityId !== context.activity.activityId || mapping.currentHotelId !== context.hotel.hotelId
+  );
+  if (changedActivity) googleFallbackResetMappingV43_(auth.master, mapping, "activity.changed");
+
+  const folder = googleFallbackFolderV43_();
+  const displayName = String(auth.user.displayName || auth.user.username || body.displayName || "Guest Star Host");
+  const baseTitle = ("Guest Star Requests - " + displayName).slice(0, 180);
+  let spreadsheet;
+  try { spreadsheet = mapping.spreadsheetId ? SpreadsheetApp.openById(mapping.spreadsheetId) : null; } catch (error) { spreadsheet = null; }
+  if (!spreadsheet) {
+    spreadsheet = SpreadsheetApp.create(baseTitle);
+    DriveApp.getFileById(spreadsheet.getId()).moveTo(folder);
+  }
+  let form;
+  try { form = mapping.formId ? FormApp.openById(mapping.formId) : null; } catch (error) { form = null; }
+  if (!form) {
+    form = FormApp.create(baseTitle);
+    DriveApp.getFileById(form.getId()).moveTo(folder);
+  }
+  googleFallbackFormItemsV43_(form);
+  form.setTitle(baseTitle + " - " + context.activity.name);
+  form.setDescription([
+    context.hotel.name,
+    context.venue ? context.venue.name : "",
+    context.activity.name,
+    "Guest Star Experience secure operational backup."
+  ].filter(String).join(" · "));
+  form.setCollectEmail(false).setLimitOneResponsePerUser(false).setShowLinkToRespondAgain(true);
+  if (typeof form.setRequireLogin === "function") form.setRequireLogin(false);
+  form.setConfirmationMessage("Solicitud recibida. Request received.");
+  form.setAcceptingResponses(true);
+  if (typeof form.setPublished === "function") form.setPublished(true);
+  let destinationId = "";
+  try { destinationId = String(form.getDestinationId() || ""); } catch (error) {}
+  if (destinationId !== spreadsheet.getId()) {
+    form.setDestination(FormApp.DestinationType.SPREADSHEET, spreadsheet.getId());
+  }
+
+  [DriveApp.getFileById(form.getId()), DriveApp.getFileById(spreadsheet.getId())].forEach(function(file) {
+    file.addEditor(email);
+  });
+  mapping = {
+    userId: auth.user.userId,
+    displayName: displayName,
+    email: email,
+    spreadsheetId: spreadsheet.getId(),
+    formId: form.getId(),
+    sheetUrl: spreadsheet.getUrl(),
+    formUrl: safeGoogleFormUrlV43_(form.getPublishedUrl()),
+    formEditUrl: safeGoogleFormUrlV43_(form.getEditUrl()),
+    currentHotelId: context.hotel.hotelId,
+    currentVenueId: context.venue ? context.venue.venueId : "",
+    currentActivityId: context.activity.activityId,
+    lastResetAt: changedActivity ? isoNowV4_() : String(mapping.lastResetAt || ""),
+    updatedAt: isoNowV4_()
+  };
+  saveGlobalSettingJsonV43_(auth.master, V4_GOOGLE_FALLBACK_PREFIX + auth.user.userId, mapping);
+  return { ok: true, asset: googleFallbackPublicAssetV43_(auth.master, mapping), reused: Boolean(stored.record) };
+}
+
+function googleFallbackPublicAssetV43_(master, mapping) {
+  const hotel = findRecordV4_(master, "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", mapping.currentHotelId);
+  const activity = findRecordV4_(master, "Activities", V4_MASTER_TABLES.Activities, "activityId", mapping.currentActivityId);
+  return {
+    userId: String(mapping.userId || ""),
+    displayName: String(mapping.displayName || ""),
+    email: String(mapping.email || ""),
+    hotelId: String(mapping.currentHotelId || ""),
+    hotelName: hotel ? String(hotel.name || "") : "",
+    venueId: String(mapping.currentVenueId || ""),
+    activityId: String(mapping.currentActivityId || ""),
+    activityName: activity ? String(activity.name || "") : "",
+    sheetUrl: String(mapping.sheetUrl || ""),
+    formUrl: safeGoogleFormUrlV43_(mapping.formUrl),
+    formEditUrl: safeGoogleFormUrlV43_(mapping.formEditUrl),
+    lastResetAt: String(mapping.lastResetAt || ""),
+    updatedAt: String(mapping.updatedAt || "")
+  };
+}
+
+function googleFallbackStateV43_(body) {
+  const auth = googleFallbackServiceAuthV43_(body);
+  const settings = tableRowsV4_(auth.master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings);
+  const assets = settings.filter(function(record) {
+    return String(record.settingKey || "").indexOf(V4_GOOGLE_FALLBACK_PREFIX) === 0 &&
+      String(record.settingKey || "").indexOf(V4_GOOGLE_FALLBACK_SNAPSHOT_PREFIX) !== 0;
+  }).map(function(record) {
+    let mapping = {};
+    try { mapping = JSON.parse(String(record.settingValue || "{}")); } catch (error) {}
+    return googleFallbackPublicAssetV43_(auth.master, mapping);
+  }).filter(function(asset) {
+    return auth.user.role === "superhost" || asset.userId === auth.user.userId;
+  });
+  const snapshots = settings.filter(function(record) {
+    return String(record.settingKey || "").indexOf(V4_GOOGLE_FALLBACK_SNAPSHOT_PREFIX) === 0;
+  }).map(function(record) {
+    try { return JSON.parse(String(record.settingValue || "{}")); } catch (error) { return {}; }
+  }).filter(function(snapshot) {
+    return auth.user.role === "superhost" || snapshot.userId === auth.user.userId;
+  }).sort(function(left, right) {
+    return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
+  }).slice(0, 200);
+  return {
+    ok: true,
+    assets: assets,
+    snapshots: snapshots,
+    defaultGoogleFallback: defaultGoogleFallbackSettingV43_(auth.master)
+  };
+}
+
+function resetGoogleFallbackForArchiveV43_(payload) {
+  const master = masterSpreadsheetV4_();
+  tableRowsV4_(master, "GlobalSettings", V4_MASTER_TABLES.GlobalSettings)
+    .filter(function(record) {
+      return String(record.settingKey || "").indexOf(V4_GOOGLE_FALLBACK_PREFIX) === 0 &&
+        String(record.settingKey || "").indexOf(V4_GOOGLE_FALLBACK_SNAPSHOT_PREFIX) !== 0;
+    })
+    .forEach(function(record) {
+      let mapping = {};
+      try { mapping = JSON.parse(String(record.settingValue || "{}")); } catch (error) { return; }
+      if (String(mapping.currentHotelId || "") !== String(payload.hotelId || "")) return;
+      if (payload.activityId && String(mapping.currentActivityId || "") !== String(payload.activityId)) return;
+      googleFallbackResetMappingV43_(master, mapping, "activity.archived");
+      mapping.lastResetAt = isoNowV4_();
+      mapping.updatedAt = mapping.lastResetAt;
+      saveGlobalSettingJsonV43_(master, record.settingKey, mapping);
+    });
+}
+
 function adminStateV4_(auth) {
   if (auth.user.role !== "superhost") throw new Error("FORBIDDEN");
   migrateActivityLanguageCatalogV42_(auth.master);
@@ -3651,6 +4004,7 @@ function adminStateV4_(auth) {
     upcomingActivities: tableRowsV4_(auth.master, "UpcomingActivities", V4_MASTER_TABLES.UpcomingActivities),
     branding: tableRowsV4_(auth.master, "HotelBranding", V4_MASTER_TABLES.HotelBranding),
     defaultPublicExperience: defaultPublicExperienceSettingV4_(auth.master),
+    defaultGoogleFallback: defaultGoogleFallbackSettingV43_(auth.master),
     auditLog: tableRowsV4_(auth.master, "AuditLog", V4_MASTER_TABLES.AuditLog).slice(-500)
   };
 }
@@ -3934,7 +4288,15 @@ function materializeD1BackupEventV4_(event) {
     : {};
   if (action === "record.upsert") return upsertD1BackupRecordV4_(payload);
   if (action === "request.upsert") return upsertD1BackupRequestV4_(payload);
-  if (action === "requests.archive") return archiveD1BackupRequestsV4_(payload);
+  if (action === "requests.archive") {
+    archiveD1BackupRequestsV4_(payload);
+    try {
+      resetGoogleFallbackForArchiveV43_(payload);
+    } catch (error) {
+      console.warn("Google fallback reset failed: " + String(error && error.message ? error.message : error));
+    }
+    return;
+  }
   if (action === "activity.runtime") return applyD1BackupRuntimeV4_(payload);
   throw new Error("BACKUP_ACTION_NOT_ALLOWED");
 }
@@ -4030,6 +4392,17 @@ function dispatchV4Action_(body) {
       return { ok: false, code: String(error && error.message ? error.message : error) };
     }
   }
+  if (action === "provisionGoogleFallback" || action === "googleFallbackState") {
+    try {
+      return action === "provisionGoogleFallback"
+        ? provisionGoogleFallbackV43_(body)
+        : googleFallbackStateV43_(body);
+    } catch (error) {
+      return { ok: false, code: String(error && error.message ? error.message : error) };
+    } finally {
+      REQUEST_DATA_SHEET_ID_ = "";
+    }
+  }
   const actions = {
     login: function() { return loginV4_(body); },
     logout: function() { return logoutV4_(body); },
@@ -4053,6 +4426,9 @@ function dispatchV4Action_(body) {
     adminState: function() { return adminStateV4_(requireAuthV4_(body)); },
     setDefaultPublicExperience: function() {
       return setDefaultPublicExperienceV4_(requireAuthV4_(body), body);
+    },
+    setDefaultGoogleFallback: function() {
+      return setDefaultGoogleFallbackV43_(requireAuthV4_(body), body);
     },
     createHost: function() { return createHostUserV4_(requireAuthV4_(body), body); },
     updateHost: function() { return updateHostUserV4_(requireAuthV4_(body), body); },
@@ -4236,6 +4612,29 @@ function publicGetV4_(params) {
   const identifier = params.hotel || params.publicCode || params.code;
   const wantsPublic = params.action === "publicBootstrap" || Boolean(identifier);
   if (!wantsPublic) return null;
+  if (publicHotelIdentifierV4_(identifier) === "default") {
+    const fallback = defaultGoogleFallbackSettingV43_();
+    if (fallback.enabled) {
+      const hotel = findRecordV4_(
+        masterSpreadsheetV4_(), "Hotels", V4_MASTER_TABLES.Hotels, "hotelId", fallback.hotelId
+      );
+      if (hotel) {
+        try {
+          return Object.assign({}, publicExperienceStateV4_(hotel, fallback.activityId), {
+            accepting: false,
+            googleFallback: {
+              enabled: true,
+              formUrl: fallback.formUrl,
+              hotelId: fallback.hotelId,
+              activityId: fallback.activityId
+            }
+          });
+        } finally {
+          REQUEST_DATA_SHEET_ID_ = "";
+        }
+      }
+    }
+  }
   const context = resolvePublicContextV4_(identifier);
   if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   try {
@@ -4258,6 +4657,10 @@ function configurePublicRequestContextV4_(body) {
   const identifier = body.publicCode || body.hotel || body.hotelCode;
   const setupComplete = PropertiesService.getScriptProperties().getProperty("V4_SETUP_COMPLETE");
   if (!identifier) return setupComplete ? { error: "HOTEL_REQUIRED" } : null;
+  if (
+    publicHotelIdentifierV4_(identifier) === "default" &&
+    defaultGoogleFallbackSettingV43_().enabled
+  ) return { error: "GOOGLE_FALLBACK_ACTIVE" };
   const tenant = resolvePublicContextV4_(identifier);
   if (!tenant) return { error: "PUBLIC_LINK_NOT_FOUND" };
   const hotel = tenant.hotel;
@@ -4345,7 +4748,13 @@ function startSelectedActivityV4_(auth, body, startNew) {
   const context = resolveTenantContextV4_(auth, body);
   if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
   requirePermissionV4_(context, startNew ? "canStartNewActivity" : "canStartActivity");
-  if (startNew) resetActivity_("web");
+  if (startNew) {
+    resetActivity_("web");
+    resetGoogleFallbackForArchiveV43_({
+      hotelId: context.hotel.hotelId,
+      activityId: context.activity.activityId
+    });
+  }
   configureActivitySheetV4_(context);
   let cycle = activityCycleV4_(context);
   if (!cycle || cycle.status === "finished" || cycle.status === "archived") {
@@ -4408,6 +4817,10 @@ function archiveQueueV4_(auth, body) {
   requirePermissionV4_(context, "canArchiveQueue");
   const cycle = activityCycleV4_(context);
   resetActivity_(body.source === "bridge" ? "bridge" : "web");
+  resetGoogleFallbackForArchiveV43_({
+    hotelId: context.hotel.hotelId,
+    activityId: context.activity.activityId
+  });
   if (cycle) {
     updateRecordV4_(spreadsheet_(), "ActivityCycles", V4_HOTEL_TABLES.ActivityCycles, cycle._row, {
       status: "archived",

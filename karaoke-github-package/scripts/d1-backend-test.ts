@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHmac, generateKeyPairSync, sign as rsaSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
@@ -24,6 +24,10 @@ import {
 import { hmacSha256Hex } from "../lib/guest-star/crypto";
 import { googleDriveFileId, normalizeBrandImageUrl } from "../lib/guest-star/media-url";
 import { canonicalHostPanelPath, isHostPanelHostname } from "../lib/guest-star/site-routing";
+import {
+  clearGoogleIdentityKeyCacheForTests,
+  verifyGoogleIdentityToken
+} from "../lib/guest-star/google-identity";
 import {
   BRANDING_MESSAGE_FIELDS,
   GUEST_LANGUAGE_CODES,
@@ -104,6 +108,7 @@ const hostPanelSource = readFileSync("components/HostPanel.tsx", "utf8");
 const publicExperienceSource = readFileSync("components/KaraokeExperience.tsx", "utf8");
 const globalCssSource = readFileSync("app/globals.css", "utf8");
 const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
+const appsScriptSource = readFileSync("google-apps-script/Code.gs", "utf8");
 const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
 const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
 assert.match(rootPageSource, /isHostPanelHostname\(hostname\)/,
@@ -122,8 +127,24 @@ assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com/,
   "Superhost must be able to choose the optional root-domain experience");
 assert.match(hostPanelSource, /action:"setDefaultPublicExperience"/,
   "the root-domain selection must be saved through the authenticated Host API");
+assert.match(hostPanelSource, /Google Form and Sheet Backup/,
+  "Host Panel must expose the reusable Google operational backup");
+assert.match(hostPanelSource, /action:"setDefaultGoogleFallback"/,
+  "Superhost must be able to assign or remove the Google fallback at the root domain");
+assert.match(hostRouteSource, /getRecord\(db!, "GlobalSettings", "defaultGoogleFallback"\)/,
+  "the Host Panel must report the live D1 root fallback instead of a stale Sheets mirror");
+assert.match(publicExperienceSource, /googleFallbackCard/,
+  "the root Google fallback must remain inside a branded Guest Star handoff");
+assert.match(appsScriptSource, /FormApp\.DestinationType\.SPREADSHEET/,
+  "the reusable Google Form must store responses in its linked Sheet");
+assert.match(appsScriptSource, /resetGoogleFallbackForArchiveV43_/,
+  "archiving or starting a new activity must reset the operational Google backup automatically");
+assert.match(appsScriptSource, /https:\/\/www\.googleapis\.com\/auth\/forms/,
+  "Apps Script must request the Forms scope explicitly");
 assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
   "the local Bridge Superhost proxy must allow the root-domain setting");
+assert.match(bridgeServerSource, /"setDefaultGoogleFallback"/,
+  "the local Bridge Superhost proxy must preserve the root Google fallback setting");
 assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
   "the public experience must normalize Google Drive logo links");
 assert.match(publicExperienceSource, /className="tenantLogo"/,
@@ -138,6 +159,43 @@ assert.doesNotMatch(hostRouteSource, /!\["me", "adminState"\]\.includes\(action\
   "opening the panel must also trigger a non-blocking automatic backup");
 assert.match(upstreamSource, /flushD1BackupFully\(db, 4\)/,
   "background backup must drain multiple batches without requiring a user button");
+
+const googleClientId = "guest-star-test.apps.googleusercontent.com";
+const googleKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const googlePublicJwk = googleKeyPair.publicKey.export({ format: "jwk" });
+googlePublicJwk.kid = "guest-star-test-key";
+googlePublicJwk.alg = "RS256";
+googlePublicJwk.use = "sig";
+const googleNow = Date.now();
+const base64UrlJson = (value:unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const googleUnsignedToken = [
+  base64UrlJson({ alg: "RS256", kid: googlePublicJwk.kid, typ: "JWT" }),
+  base64UrlJson({
+    iss: "https://accounts.google.com", aud: googleClientId,
+    sub: "google-user-1", email: "owner@example.com", email_verified: true,
+    name: "Guest Star Owner", iat: Math.floor(googleNow / 1000) - 5,
+    exp: Math.floor(googleNow / 1000) + 3600
+  })
+].join(".");
+const googleCredential = `${googleUnsignedToken}.${rsaSign(
+  "RSA-SHA256", Buffer.from(googleUnsignedToken), googleKeyPair.privateKey
+).toString("base64url")}`;
+clearGoogleIdentityKeyCacheForTests();
+const verifiedGoogle = await verifyGoogleIdentityToken(googleCredential, googleClientId, {
+  now: googleNow,
+  fetcher: async () => new Response(JSON.stringify({ keys: [googlePublicJwk] }), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "public,max-age=3600" }
+  })
+});
+assert.equal(verifiedGoogle.email, "owner@example.com");
+const googleCredentialParts = googleCredential.split(".");
+googleCredentialParts[2] = `${googleCredentialParts[2][0] === "A" ? "B" : "A"}${googleCredentialParts[2].slice(1)}`;
+await assert.rejects(
+  verifyGoogleIdentityToken(googleCredentialParts.join("."), googleClientId, { now: googleNow }),
+  /INVALID_GOOGLE_CREDENTIAL/,
+  "Google linking must reject a tampered identity token"
+);
 
 const db = new TestD1();
 await ensureD1Schema(db);
@@ -245,6 +303,29 @@ assert.equal((await handleD1HostAction(db, {
 assert.equal((await handleD1HostAction(db, {
   action: "bridgeHeartbeat", ...bridgeAuth, virtualDJConnected: true, bridgeVersion: "4.2.0"
 }))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "bridgeExternalSync", ...bridgeAuth,
+  entries: [{
+    virtualDJItemId: "external-vdj-1", singer: "VirtualDJ",
+    song: "Que Dios Decida", artist: "El Gary", index: 0,
+    durationSeconds: 252
+  }]
+}))?.ok, true);
+let externalRows = await activeRequests(db, hotelId, activityId);
+assert.equal(externalRows.find((item) => item.virtualDJItemId === "external-vdj-1")?.sourceType,
+  "virtualdj_external", "VDJ-only tracks must stay identifiable and separate from online requests");
+assert.equal((await handleD1HostAction(db, {
+  action: "bridgeExternalSync", ...bridgeAuth,
+  entries: [{
+    virtualDJItemId: "error-entry", singer: "ERROR:-2147467259",
+    song: "error:-2147467259", artist: "error:-2147467259", index: 0
+  }]
+}))?.ok, true);
+externalRows = await activeRequests(db, hotelId, activityId);
+assert.equal(externalRows.some((item) => item.virtualDJItemId === "error-entry"), false,
+  "Network Control HRESULT values must never be stored as requests");
+assert.equal(externalRows.find((item) => item.virtualDJItemId === "external-vdj-1")?.status,
+  "Fuera de VirtualDJ", "a complete VDJ snapshot must retire stale external rows after a restart");
 const oneTimeCode = await handleD1HostAction(db, {
   action: "createOneTimeLoginCode", ...bridgeAuth
 });
@@ -479,6 +560,32 @@ const permanentOtherState = await handleD1PublicGet(db, new URLSearchParams({
 assert.equal((permanentOtherState.activity as Record<string, unknown>).activityId, editableActivityId,
   "permanent hotel links must remain independent from the root-domain override");
 assert.equal(permanentOtherState.accepting, true);
+const fallbackFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLGuestStarFallback/viewform";
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultGoogleFallback", ...superAuth, enabled: true,
+  formUrl: fallbackFormUrl, userId: "superhost-1",
+  hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
+}))?.ok, true);
+const fallbackRootState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: "default"
+})) as Record<string, unknown>;
+assert.equal((fallbackRootState.googleFallback as Record<string, unknown>).formUrl, fallbackFormUrl,
+  "request.gstarxp.com must expose only the explicitly assigned Google Form");
+assert.equal((fallbackRootState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
+  "the Google fallback must carry the exact Superhost-selected activity branding");
+assert.equal(fallbackRootState.accepting, false,
+  "Guest Star submissions must close while the root Google fallback is enabled");
+assert.equal((await handleD1PublicPost(db, {
+  publicCode: "default", name: "Fallback Guest", song: "Song", artist: "Artist", language: "English"
+})).code, "GOOGLE_FALLBACK_ACTIVE");
+const permanentDuringFallback = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: otherHotelIdentifier
+})) as Record<string, unknown>;
+assert.equal(permanentDuringFallback.googleFallback, undefined,
+  "permanent hotel URLs must never inherit the optional root Google fallback");
+assert.equal((await handleD1HostAction(db, {
+  action: "setDefaultGoogleFallback", ...superAuth, enabled: false
+}))?.ok, true, "the Google root fallback must be removable immediately");
 assert.equal((await handleD1HostAction(db, {
   action: "setDefaultPublicExperience", ...superAuth, enabled: false
 }))?.ok, true, "the optional root-domain override must be removable");

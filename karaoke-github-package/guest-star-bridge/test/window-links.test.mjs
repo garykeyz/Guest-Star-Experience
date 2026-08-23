@@ -167,17 +167,27 @@ test("la sincronización de fondo no bloquea los botones por canción", () => {
   assert.match(appSource, /actionLocks\.has\(actionScope\(item\.id\)\)/);
 });
 
-test("el cursor de carga aparece solo durante una operación real", () => {
+test("el cursor no muestra carga al pasar por el botón y la operación real usa un indicador propio", () => {
   assert.doesNotMatch(
     bridgeStyles,
     /\.button:disabled\s*\{[^}]*cursor:\s*wait/
   );
+  assert.doesNotMatch(
+    bridgeStyles,
+    /cursor:\s*(?:progress|wait)/
+  );
   assert.match(
     bridgeStyles,
-    /\.button\.is-loading\[aria-busy="true"\]\s*\{[^}]*cursor:\s*progress/
+    /\.button\.is-loading\[aria-busy="true"\]::after\s*\{[^}]*animation:\s*spin/
   );
   assert.match(appSource, /primary\.classList\.toggle\("is-loading", activityBusy\)/);
   assert.match(appSource, /primary\.setAttribute\("aria-busy", activityBusy \? "true" : "false"\)/);
+});
+
+test("la configuración heredada se migra automáticamente y queda oculta al operador", () => {
+  assert.match(bridgeHtml, /id="legacyConnection"[^>]*class="[^"]*hidden[^"]*"[^>]*hidden/);
+  assert.match(appSource, /\$\("#legacyConnection"\)\.classList\.add\("hidden"\)/);
+  assert.doesNotMatch(appSource, /\$\("#legacyConnection"\)\.classList\.toggle/);
 });
 
 test("identifica al huésped por dispositivo y suprime solicitudes repetidas", () => {
@@ -265,8 +275,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.2\.2"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.2\.2/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.0"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.0/);
   assert.match(hostPanelSource, /Service v/);
 });
 

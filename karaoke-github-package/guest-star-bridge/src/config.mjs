@@ -12,7 +12,7 @@ const LEGACY_DIRECT_APPS_SCRIPT_URL =
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 10,
+  configVersion: 11,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   rememberLogin: true,
   rememberSelection: true,
   superhostLanguage: "es",
+  uiLanguage: "es",
   favoriteSongsByHotel: {},
   secretsInKeychain: false,
   libraryFolders: [],
@@ -110,6 +111,14 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
         input.superhostLanguage === undefined
           ? current.superhostLanguage || "es"
           : input.superhostLanguage
+      ).toLowerCase() === "en"
+        ? "en"
+        : "es",
+    uiLanguage:
+      String(
+        input.uiLanguage === undefined
+          ? current.uiLanguage || "es"
+          : input.uiLanguage
       ).toLowerCase() === "en"
         ? "en"
         : "es",
@@ -215,6 +224,7 @@ export async function loadConfig() {
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;
       if (parsed.rememberSelection === undefined) parsed.rememberSelection = true;
       if (parsed.superhostLanguage === undefined) parsed.superhostLanguage = "es";
+      if (parsed.uiLanguage === undefined) parsed.uiLanguage = "es";
       if (parsed.favoriteSongsByHotel === undefined) parsed.favoriteSongsByHotel = {};
     }
     let clean = sanitizeConfig(parsed, DEFAULT_CONFIG);

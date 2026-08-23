@@ -50,6 +50,7 @@ import {
 import { reconcileQueuePresence } from "./queue-presence.mjs";
 import { loadQueueState, saveQueueState } from "./queue-state.mjs";
 import { orderRequestViews } from "./request-order.mjs";
+import { isOnlineGuestRequest } from "./request-source.mjs";
 import {
   buildKaraokeScript,
   executeVdj,
@@ -69,7 +70,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.2.2";
+const BRIDGE_VERSION = "4.3.0";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -595,6 +596,7 @@ function bridgeRequests(data = {}) {
     }))
     .filter((item) =>
       item.id && item.singer && item.song &&
+      isOnlineGuestRequest(item) &&
       !["eliminada", "cancelada"].includes(normalizeText(item.status))
     );
   const canonicalByIdentity = new Map();
@@ -2331,7 +2333,8 @@ async function api(request, response, url) {
     const body = await readJson(request);
     config = await saveConfig(sanitizeConfig({
       ...config,
-      superhostLanguage: body.language
+      superhostLanguage: body.language,
+      uiLanguage: body.language
     }, config));
     json(response, 200, {
       ok: true,
@@ -2355,7 +2358,7 @@ async function api(request, response, url) {
     const action = String(body.action || "");
     const allowed = new Set([
       "adminState", "createHotel", "updateHotel", "createVenue", "updateVenue",
-      "createActivity", "updateActivity", "setDefaultPublicExperience", "createHost", "updateHost", "assignUser",
+      "createActivity", "updateActivity", "setDefaultPublicExperience", "setDefaultGoogleFallback", "createHost", "updateHost", "assignUser",
       "setHostPassword", "updateActivityLanguages",
       "revokeAssignment", "revokeDevice", "updateHotelBranding",
       "scheduleActivity", "cancelSchedule", "listReviews", "updateReview",
@@ -2513,6 +2516,17 @@ async function api(request, response, url) {
       sheetError = errorMessage(error);
       broadcastState();
     });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/config/language") {
+    const body = await readJson(request);
+    config = await saveConfig(sanitizeConfig({
+      ...config,
+      uiLanguage: body.uiLanguage,
+      superhostLanguage: body.uiLanguage
+    }, config));
+    json(response, 200, { ok: true, uiLanguage: config.uiLanguage });
+    broadcastState();
     return;
   }
   if (request.method === "POST" && pathname === "/api/config") {

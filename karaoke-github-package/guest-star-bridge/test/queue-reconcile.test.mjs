@@ -128,6 +128,32 @@ test("reconoce Mi Vida aunque VirtualDJ invierta título y artista", () => {
   assert.deepEqual(result.missing, []);
 });
 
+test("reconoce metadatos invertidos únicos aunque VirtualDJ haya cambiado el cantante", () => {
+  const result = reconcileTrackedQueue([{
+    id: "request-unique", singer: "Alex · G-19AF",
+    song: "Valió la pena", artist: "Marc Anthony", durationSeconds: 274
+  }], [{
+    index: 0, singer: "Gary", song: "Marc Anthony",
+    artist: "Valio la pena", durationSeconds: 274
+  }]);
+
+  assert.equal(result.matched.get("request-unique").index, 0);
+  assert.equal(result.matchDetails.get("request-unique").fields.includes("metadataReversed"), true);
+  assert.equal(result.matchDetails.get("request-unique").fields.includes("uniqueMetadata"), true);
+});
+
+test("no adivina por metadatos cuando dos solicitudes compiten por la misma canción", () => {
+  const result = reconcileTrackedQueue([
+    { id: "alex-a", singer: "Alex A", song: "Mi Vida", artist: "Divino", durationSeconds: 237 },
+    { id: "alex-b", singer: "Alex B", song: "Mi Vida", artist: "Divino", durationSeconds: 237 }
+  ], [{
+    index: 0, singer: "Sin identificar", song: "Divino", artist: "Mi Vida", durationSeconds: 237
+  }]);
+
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.missing, ["alex-a", "alex-b"]);
+});
+
 test("mantiene el identificador estable cuando VirtualDJ reordena la cola", () => {
   const first = stabilizeVirtualDjEntries([
     { index: 0, filePath: "/Music/First.mp4", singer: "Ana" },

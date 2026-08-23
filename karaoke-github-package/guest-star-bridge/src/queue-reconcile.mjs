@@ -111,7 +111,12 @@ export function queueMetadataMatches(tracked, actual) {
   return queueMetadataMatchDetails(tracked, actual).matches;
 }
 
-function candidateMatch(tracked, actual, singerPopulation) {
+function candidateMatch(
+  tracked,
+  actual,
+  actualMetadataPopulation,
+  trackedMetadataPopulation
+) {
   const fields = [];
   const linkedId = String(tracked?.virtualDJItemId || "");
   const actualId = String(actual?.virtualDJItemId || "");
@@ -147,8 +152,11 @@ function candidateMatch(tracked, actual, singerPopulation) {
   if (sameSinger && sameMetadata) return { confidence: 0.91, fields };
   if (samePath && sameMetadata) return { confidence: 0.9, fields };
   if (samePath) return { confidence: 0.86, fields };
-  if (sameMetadata && sameDuration && singerPopulation === 1) {
-    return { confidence: 0.83, fields };
+  if (
+    sameMetadata && sameDuration &&
+    actualMetadataPopulation === 1 && trackedMetadataPopulation === 1
+  ) {
+    return { confidence: 0.84, fields: [...fields, "uniqueMetadata"] };
   }
   return { confidence: 0, fields };
 }
@@ -165,15 +173,22 @@ export function reconcileTrackedQueue(trackedEntries = [], actualEntries = []) {
   for (const tracked of trackedEntries) {
     const id = String(tracked?.id || "");
     if (!id) continue;
-    const targetSinger = singerKey(tracked?.singer);
-    const singerPopulation = stableActual.filter(
-      (entry) => singerKey(entry.singer) === targetSinger
+    const actualMetadataPopulation = stableActual.filter(
+      (entry) => queueMetadataMatches(tracked, entry)
+    ).length;
+    const trackedMetadataPopulation = trackedEntries.filter(
+      (entry) => queueMetadataMatches(tracked, entry)
     ).length;
     const candidates = stableActual
       .filter((entry) => !claimedIndices.has(entry.index))
       .map((entry) => ({
         entry,
-        ...candidateMatch(tracked, entry, singerPopulation)
+        ...candidateMatch(
+          tracked,
+          entry,
+          actualMetadataPopulation,
+          trackedMetadataPopulation
+        )
       }))
       .filter((candidate) => candidate.confidence >= 0.82)
       .sort((left, right) =>
