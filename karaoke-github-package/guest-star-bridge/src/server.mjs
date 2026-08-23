@@ -12,12 +12,14 @@ import {
   controlActivity,
   fetchBridgeQueue,
   fetchBridgeIdentity,
+  fetchGoogleLoginConfig,
   hasV4Session,
   pollBridgeCommands,
   searchKaraokeYouTube,
   selectBridgeActivity,
   sendBridgeHeartbeat,
   signInBridge,
+  signInBridgeWithGoogle,
   signOutBridge,
   syncExternalVirtualDjEntries,
   updateBridgeConfig,
@@ -2283,7 +2285,11 @@ async function chooseFolder() {
 }
 
 async function serveStatic(pathname, response) {
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const relative = pathname === "/"
+    ? "index.html"
+    : pathname === "/google-sign-in"
+      ? "google-sign-in.html"
+      : pathname.replace(/^\/+/, "");
   const filePath = resolve(PUBLIC_DIR, relative);
   if (filePath !== PUBLIC_DIR && !filePath.startsWith(`${PUBLIC_DIR}${sep}`)) {
     json(response, 403, { ok: false, error: "Ruta no permitida." });
@@ -2430,6 +2436,49 @@ async function api(request, response, url) {
       user: identityState.user,
       selection: identityState.selection,
       mustChangePassword: data.user?.mustChangePassword === true
+    });
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/auth/google-config") {
+    const data = await fetchGoogleLoginConfig(config);
+    json(response, 200, {
+      ok: true,
+      googleClientId: String(data.googleClientId || "")
+    });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/auth/google") {
+    const expectedOrigin = `http://${String(request.headers.host || "")}`;
+    const requestOrigin = String(request.headers.origin || "");
+    if (requestOrigin && requestOrigin !== expectedOrigin) {
+      json(response, 403, { ok: false, code: "INVALID_ORIGIN" });
+      return;
+    }
+    const body = await readJson(request);
+    const data = await signInBridgeWithGoogle(config, String(body.credential || ""), {
+      rememberLogin: body.rememberLogin !== false,
+      deviceName: body.deviceName || `Guest Star Bridge on ${process.env.HOSTNAME || "Mac"}`
+    });
+    config = await saveConfig(sanitizeConfig({
+      ...config,
+      authToken: data.authToken,
+      deviceToken: data.deviceToken,
+      deviceId: data.deviceId,
+      lastUsername: String(data.user?.email || data.user?.username || ""),
+      rememberLogin: body.rememberLogin !== false
+    }, config), { storeSecrets: true });
+    identityState = {
+      authenticated: true,
+      user: data.user || null,
+      selection: data.selection || { hotels: [], venues: [], activities: [] }
+    };
+    sheetError = "";
+    broadcastState();
+    json(response, 200, {
+      ok: true,
+      user: identityState.user,
+      selection: identityState.selection,
+      mustChangePassword: false
     });
     return;
   }

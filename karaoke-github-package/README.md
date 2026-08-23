@@ -41,6 +41,9 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - cada Host puede autorizar con Google un único Form y Sheet reutilizables como
   respaldo; al archivar o iniciar un nuevo ciclo se crea una copia histórica y
   se limpia el mismo par de archivos;
+- Host y Superhost pueden iniciar sesión en Bridge con el mismo correo Google
+  registrado. La verificación ocurre en Google dentro del navegador del sistema;
+  Guest Star nunca recibe ni almacena la contraseña de Google;
 - el Superhost puede revisar los respaldos por Host y actividad, y asignar de
   manera opcional uno a la raíz de `request.gstarxp.com` sin modificar los
   enlaces permanentes de hotel;
@@ -121,6 +124,10 @@ enlaces y QR sí se crean desde el panel.
 - Build: `npx opennextjs-cloudflare build`
 - Deploy: `npx wrangler deploy`
 - Variable requerida: `KARAOKE_APPS_SCRIPT_URL=https://script.google.com/.../exec`
+- Para habilitar **Continuar con Google**: `GOOGLE_OAUTH_CLIENT_ID=<web-client-id>`.
+  En ese cliente OAuth agrega como orígenes JavaScript autorizados
+  `https://host.gstarxp.com`, `http://127.0.0.1:8787` y
+  `http://localhost:8787`. El correo debe existir previamente en Guest Star.
 
 El mismo despliegue puede servir `request.gstarxp.com` y el dominio Host. La
 página pública usa `/h/<hotel>` y el panel seguro usa `/host`.

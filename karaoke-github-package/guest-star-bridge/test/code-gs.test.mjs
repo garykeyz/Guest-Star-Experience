@@ -1059,6 +1059,15 @@ test("las sesiones web informan la versión exacta de Code.gs", () => {
   assert.match(dispatchBody, /codeVersion: BRIDGE_API_VERSION/);
 });
 
+test("Google Bridge login reutiliza únicamente usuarios activos y una sesión normal", () => {
+  assert.match(source, /action === "googleBridgeLogin"/);
+  assert.match(source, /function googleBridgeLoginV43_\(body\)/);
+  assert.match(source, /safeEqualV4_\(body\.backupSecret, expected\)/);
+  assert.match(source, /String\(candidate\.email \|\| ""\)\.trim\(\)\.toLowerCase\(\) === email/);
+  assert.match(source, /user\.status !== "active"/);
+  assert.match(source, /completeLoginV43_\(master, user, body, "google\.login\.succeeded"\)/);
+});
+
 test("la migración D1 exporta hashes compatibles sin sesiones ni tokens de dispositivos", () => {
   assert.match(source, /function exportD1SnapshotV4_\(auth\)/);
   assert.match(source, /tableName === "AuthSessions" \|\| tableName === "OneTimeLoginCodes"/);

@@ -18,6 +18,7 @@ import {
   handleD1HostAction,
   handleD1PublicGet,
   handleD1PublicPost,
+  loginD1WithVerifiedGoogle,
   nextScheduleOccurrence,
   setD1BackendMode
 } from "../lib/guest-star/d1-actions";
@@ -270,6 +271,19 @@ assert.equal(health.counts.users, 1);
 assert.equal(health.counts.requests, 1);
 await setD1BackendMode(db, "d1_primary");
 assert.equal(await backendMode(db), "d1_primary");
+
+const googleBridgeLogin = await loginD1WithVerifiedGoogle(db, verifiedGoogle.email, {
+  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.0",
+  rememberLogin: true
+}) as Record<string, unknown>;
+assert.equal(googleBridgeLogin?.ok, true,
+  "a verified Google address registered to an active Guest Star user must create a Bridge session");
+assert.ok(String(googleBridgeLogin?.authToken || "").length >= 40);
+assert.ok(String(googleBridgeLogin?.deviceToken || "").length >= 40);
+assert.equal(((await loginD1WithVerifiedGoogle(db, "unknown@example.com", {
+  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.0"
+})) as Record<string, unknown>).code, "GOOGLE_ACCOUNT_NOT_REGISTERED",
+"Google login must never create an unregistered Guest Star account implicitly");
 
 const login = await handleD1HostAction(db, {
   action: "login", username: "superhost", password: superPassword,

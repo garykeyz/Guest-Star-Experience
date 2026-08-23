@@ -9,7 +9,8 @@ karaoke y la cola Karaoke real de VirtualDJ.
 - VirtualDJ y Network Control activos.
 - Biblioteca local o disco de karaoke conectado.
 - Internet.
-- Usuario Host, contraseña permanente y asignación creados por el Superhost.
+- Usuario Host o Superhost, correo y asignación creados por el Superhost. Puede
+  usar contraseña permanente o la cuenta Google con ese mismo correo.
 
 El operador solo necesita la app, sus credenciales y la asignación entregada por
 el Superhost; no necesita Node, npm ni Terminal.
@@ -19,7 +20,9 @@ el Superhost; no necesita Node, npm ni Terminal.
 1. Descomprime `Guest-Star-Bridge-Universal-v4.3.0-app.zip` o abre el DMG.
 2. Mueve **Guest Star Bridge.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
-4. Inicia sesión con el usuario Host y su contraseña permanente.
+4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
+   Google se abre en Safari/Chrome para evitar un acceso inseguro dentro del
+   WebView y regresa automáticamente al Bridge al terminar.
 5. Selecciona hotel, sede y actividad entre tus asignaciones.
 6. En Settings, elige las carpetas locales y configura Network Control.
 7. Prueba VirtualDJ y sincroniza.
@@ -83,6 +86,8 @@ completo.
 - archivo de configuración con permisos `0600`;
 - token de dispositivo separado de la sesión web;
 - selección y permisos verificados de nuevo por el servicio Guest Star.
+- el token de identidad Google se valida en el servidor contra el cliente OAuth;
+  una cuenta desconocida nunca crea automáticamente un usuario Guest Star.
 
 ## Pruebas
 
