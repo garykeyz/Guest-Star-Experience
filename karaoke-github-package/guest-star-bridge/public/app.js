@@ -108,12 +108,31 @@ function actionScope(id) {
   return `request:${id}`;
 }
 
+function guestDisplayName(item) {
+  const singer = String(item?.singer || "").trim();
+  const alias = String(item?.guestAlias || "").trim();
+  return alias ? `${singer} ${alias}` : singer;
+}
+
+function renderGuestIdentity(element, item) {
+  element.textContent = "";
+  const name = document.createElement("span");
+  name.className = "singer-name";
+  name.textContent = item.singer;
+  element.append(name);
+  if (!item.guestAlias) return;
+  const badge = document.createElement("span");
+  const tone = Math.max(0, Number(item.guestTone) || 0) % 6;
+  badge.className = `guest-alias-badge guest-tone-${tone}`;
+  badge.textContent = item.guestAlias;
+  badge.title = `Guest identifier ${item.guestAlias}`;
+  badge.setAttribute("aria-label", `Guest ${item.guestAlias}`);
+  element.append(badge);
+}
+
 function requestLabel(id) {
   const item = state?.requests?.find((entry) => entry.id === id);
-  const singer = item?.guestCode
-    ? `${item.singer} · ${item.guestCode}`
-    : item?.singer;
-  return item ? `${singer} — ${item.song}` : "The song";
+  return item ? `${guestDisplayName(item)} — ${item.song}` : "The song";
 }
 
 async function runAction(scope, progress, operation, successMessage) {
@@ -853,9 +872,15 @@ function renderVdjQueue() {
     return;
   }
   const next = entries[0];
+  const displayedSinger = (entry) => {
+    const linked = state?.requests?.find(
+      (item) => item.id === entry.linkedRequestId
+    );
+    return linked ? guestDisplayName(linked) : entry.singer;
+  };
   summary.textContent =
     `${entries.length} ${entries.length === 1 ? "track" : "tracks"} · ` +
-    `next: ${next.singer} — ${next.song}` +
+    `next: ${displayedSinger(next)} — ${next.song}` +
     (Number(state?.virtualDJ?.externalCount) > 0
       ? ` · ${state.virtualDJ.externalCount} external`
       : "");
@@ -870,7 +895,7 @@ function renderVdjQueue() {
     const detail = document.createElement("small");
     detail.textContent = [
       entry.artist,
-      `Singer: ${entry.singer}`,
+      `Singer: ${displayedSinger(entry)}`,
       entry.sourceType === "virtualdj_external"
         ? "Unmatched VirtualDJ item"
         : "Linked request"
@@ -972,9 +997,7 @@ function renderRequests() {
     requestNumber.title = item.sheetRow
       ? `Request ${arrival.number} · record ${item.sheetRow}`
       : `Request ${arrival.number} by arrival order`;
-    $(".singer", card).textContent = item.guestCode
-      ? `${item.singer} · ${item.guestCode}`
-      : item.singer;
+    renderGuestIdentity($(".singer", card), item);
     $(".song", card).textContent = item.song;
     $(".artist", card).textContent = item.artist || "Artist not provided";
     const requestComment = String(item.comment || "").trim();

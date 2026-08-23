@@ -29,6 +29,7 @@ import {
   requestOutcome,
   safeTransitionSeconds
 } from "./activity-summary.mjs";
+import { assignGuestAliases } from "./guest-alias.mjs";
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
 import { clearBridgeSecrets } from "./keychain.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
@@ -68,7 +69,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.2.1";
+const BRIDGE_VERSION = "4.2.2";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -597,7 +598,7 @@ function bridgeRequests(data = {}) {
       !["eliminada", "cancelada"].includes(normalizeText(item.status))
     );
   const canonicalByIdentity = new Map();
-  return mapped.map((item) => {
+  return assignGuestAliases(mapped).map((item) => {
     const metadata = [normalizeText(item.song), normalizeText(item.artist)]
       .filter(Boolean)
       .sort()
