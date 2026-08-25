@@ -27,6 +27,7 @@ import {
   prepareBrandingLocalization
 } from "@/lib/guest-star/translation";
 import { verifyGoogleIdentityToken } from "@/lib/guest-star/google-identity";
+import { runtimeEnvString } from "@/lib/guest-star/runtime-env";
 
 const SESSION_COOKIE = "guest_star_host_session";
 const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
@@ -193,7 +194,7 @@ export async function POST(request: NextRequest) {
       const user = identity.user as JsonObject;
       const backupSecret = useD1 ? await getMeta(db!, "sheets_backup_secret") : "";
       if (useD1 && !backupSecret) return safeResponse({ ok: false, code: "GOOGLE_FALLBACK_NOT_READY" }, 503);
-      const googleClientId = String(process.env.GOOGLE_OAUTH_CLIENT_ID || "");
+      const googleClientId = runtimeEnvString("GOOGLE_OAUTH_CLIENT_ID");
       const appsScriptAuth = useD1 ? { backupSecret } : { authToken: sessionToken };
 
       if (action === "linkGoogleFallback") {

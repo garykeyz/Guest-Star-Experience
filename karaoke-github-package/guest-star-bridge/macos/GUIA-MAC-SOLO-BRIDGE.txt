@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 4.3.2 — GUÍA PARA LA MAC DEL DJ
+GUEST STAR BRIDGE 4.3.3 — GUÍA PARA LA MAC DEL DJ
 
 Esta guía es para una persona que operará Bridge + VirtualDJ en otra Mac.
 Solo necesita su cuenta Host y la actividad asignada por el Superhost.
@@ -11,7 +11,7 @@ COMPATIBILIDAD
 
 LO QUE EL SUPERHOST DEBE ENTREGAR
 
-1. APP ZIP o DMG oficial 4.3.2.
+1. APP ZIP o DMG oficial 4.3.3.
 2. Usuario Host y contraseña permanente.
 3. Nombre del hotel, sede y actividad asignados.
 4. Puerto y contraseña de Network Control, si existe.
@@ -35,7 +35,7 @@ PASO 2 — PREPARAR VIRTUALDJ
 PASO 3 — INICIAR SESIÓN Y ELEGIR ACTIVIDAD
 
 1. Abre Guest Star Bridge.
-2. Confirma que la pantalla de acceso muestre v4.3.2.
+2. Confirma que la pantalla de acceso muestre v4.3.3.
 3. Escribe el usuario y contraseña permanente entregados por el Superhost.
 4. Selecciona únicamente el hotel, sede y actividad asignados.
 5. Autoriza esta Mac como dispositivo cuando se solicite.
