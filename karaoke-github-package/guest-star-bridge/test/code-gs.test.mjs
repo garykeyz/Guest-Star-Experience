@@ -123,6 +123,13 @@ test("Superhost puede fijar o quitar la experiencia de request.gstarxp.com", () 
 test("el respaldo Google reutiliza un Form y Sheet por Host y se reinicia al archivar", () => {
   assert.match(source, /V4_DEFAULT_GOOGLE_FALLBACK_SETTING = "defaultGoogleFallback"/);
   assert.match(source, /function provisionGoogleFallbackV43_\(body\)/);
+  assert.match(source, /function googleFallbackReusableFileV43_\(folder, title, mimeType\)/);
+  assert.match(source, /form\.supportsAdvancedResponderPermissions\(\)/);
+  const provisionBody = source.slice(
+    source.indexOf("function provisionGoogleFallbackV43_(body)"),
+    source.indexOf("function googleFallbackPublicAssetV43_(master, mapping)")
+  );
+  assert.doesNotMatch(provisionBody, /setRequireLogin/);
   assert.match(source, /FormApp\.DestinationType\.SPREADSHEET/);
   assert.match(source, /function googleFallbackSnapshotV43_\(master, mapping, reason\)/);
   assert.match(source, /resetGoogleFallbackForArchiveV43_\(payload\)/);
@@ -131,6 +138,36 @@ test("el respaldo Google reutiliza un Form y Sheet por Host y se reinicia al arc
   assert.match(source, /setDefaultGoogleFallback:\s*function\(\)/);
   assert.match(source, /googleFallback:\s*\{/);
   assert.match(source, /https:\/\/www\.googleapis\.com\/auth\/forms/);
+});
+
+test("recupera los archivos parciales más recientes sin duplicar Form ni Sheet", () => {
+  const makeFile = (id, mimeType, createdAt) => ({
+    getId: () => id,
+    getMimeType: () => mimeType,
+    getDateCreated: () => new Date(createdAt)
+  });
+  const files = [
+    makeFile("old-form", "form", "2026-08-25T14:01:52Z"),
+    makeFile("sheet", "sheet", "2026-08-25T14:02:38Z"),
+    makeFile("new-form", "form", "2026-08-25T14:02:40Z")
+  ];
+  const folder = {
+    getFilesByName: () => {
+      let index = 0;
+      return {
+        hasNext: () => index < files.length,
+        next: () => files[index++]
+      };
+    }
+  };
+  assert.equal(
+    context.googleFallbackReusableFileV43_(folder, "Guest Star Requests - Superhost", "form").getId(),
+    "new-form"
+  );
+  assert.equal(
+    context.googleFallbackReusableFileV43_(folder, "Guest Star Requests - Superhost", "sheet").getId(),
+    "sheet"
+  );
 });
 
 test("advierte repeticiones antes de crear una fila y permite confirmarlas", () => {
@@ -1050,7 +1087,7 @@ test("el registro maestro vive en la cuenta Superhost y enruta cada solicitud a 
 
 test("las sesiones web informan la versión exacta de Code.gs", () => {
   assert.match(source, /const BRIDGE_API_VERSION = "4\.2\.0"/);
-  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.3\.1-google-fallback"/);
+  assert.match(source, /const GUEST_STAR_CODE_BUILD = "4\.3\.2-google-fallback"/);
   assert.match(source, /const V4_SCHEMA_VERSION = "4\.2\.0"/);
   const dispatchBody = source.slice(
     source.indexOf("function dispatchV4Action_"),
