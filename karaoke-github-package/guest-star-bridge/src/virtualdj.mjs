@@ -63,6 +63,13 @@ export function normalizeVdjSinger(value) {
   return normalizedQueryValue(value).replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+export function visibleVdjSinger(value) {
+  return normalizedQueryValue(value)
+    .replace(/\s*[·•]\s*G-[A-Z0-9]{4}\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function parseVdjDuration(value) {
   const text = normalizedQueryValue(value)
     .replace(/\s*(?:ms|milliseconds?)$/i, "")
@@ -145,15 +152,30 @@ export function duplicateKaraokeIndices(entries = []) {
   return duplicates.sort((left, right) => right - left);
 }
 
+function sameQueueSong(candidate, target) {
+  const candidatePath = normalizeVdjPath(candidate?.filePath);
+  const targetPath = normalizeVdjPath(target?.filePath);
+  if (candidatePath && targetPath && candidatePath === targetPath) return true;
+  return sameMetadataPair(candidate, target);
+}
+
+function compatibleInsertIdentity(candidate, target) {
+  if (sameKaraokeIdentity(candidate, target)) return true;
+  const candidateSinger = normalizeVdjSinger(visibleVdjSinger(candidate?.singer));
+  const targetSinger = normalizeVdjSinger(visibleVdjSinger(target?.singer));
+  return Boolean(
+    candidateSinger &&
+    targetSinger &&
+    candidateSinger === targetSinger &&
+    sameQueueSong(candidate, target)
+  );
+}
+
 export function sameKaraokeIdentity(candidate, target) {
   const sameSinger =
     normalizeVdjSinger(candidate?.singer) === normalizeVdjSinger(target?.singer);
   if (!sameSinger) return false;
-  const candidatePath = normalizeVdjPath(candidate?.filePath);
-  const targetPath = normalizeVdjPath(target?.filePath);
-  if (candidatePath && targetPath) return candidatePath === targetPath;
-
-  return sameMetadataPair(candidate, target);
+  return sameQueueSong(candidate, target);
 }
 
 export function buildKaraokeRemoveScript(index) {
@@ -172,7 +194,17 @@ function networkUrl(config, endpoint) {
   return `http://${host}:${port}/${endpoint}`;
 }
 
-async function request(config, endpoint, script) {
+function retryDelay(attempt) {
+  return new Promise((resolveDelay) =>
+    setTimeout(resolveDelay, Math.min(500, 80 * (attempt + 1)))
+  );
+}
+
+function retryableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+async function requestOnce(config, endpoint, script) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(config.timeoutMs) || 3500);
   try {
@@ -186,12 +218,26 @@ async function request(config, endpoint, script) {
     });
     const text = (await response.text()).trim();
     if (!response.ok) {
-      throw new Error(`VirtualDJ returned ${response.status}: ${text || "no details"}`);
+      const error = new Error(
+        `VirtualDJ returned ${response.status}: ${text || "no details"}`
+      );
+      error.retryable = retryableStatus(response.status);
+      error.deliveryUncertain = false;
+      throw error;
     }
     return text;
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error("VirtualDJ did not respond in time. Check Network Control and the port.");
+      const timeoutError = new Error(
+        "VirtualDJ did not respond in time. Check Network Control and the port."
+      );
+      timeoutError.retryable = true;
+      timeoutError.deliveryUncertain = true;
+      throw timeoutError;
+    }
+    if (error?.retryable === undefined && error instanceof TypeError) {
+      error.retryable = true;
+      error.deliveryUncertain = true;
     }
     throw error;
   } finally {
@@ -199,8 +245,23 @@ async function request(config, endpoint, script) {
   }
 }
 
+async function request(config, endpoint, script, options = {}) {
+  const attempts = Math.max(1, Math.min(4, Number(options.attempts) || 1));
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await requestOnce(config, endpoint, script);
+    } catch (error) {
+      lastError = error;
+      if (error?.retryable !== true || attempt + 1 >= attempts) throw error;
+      await retryDelay(attempt);
+    }
+  }
+  throw lastError;
+}
+
 export async function executeVdj(config, script) {
-  const result = await request(config, "execute", script);
+  const result = await request(config, "execute", script, { attempts: 1 });
   if (result.toLowerCase() === "false") {
     throw new Error("VirtualDJ rejected the command.");
   }
@@ -208,7 +269,7 @@ export async function executeVdj(config, script) {
 }
 
 export async function queryVdj(config, script) {
-  return request(config, "query", script);
+  return request(config, "query", script, { attempts: 3 });
 }
 
 function karaokeSongQuery(property, index) {
@@ -216,34 +277,68 @@ function karaokeSongQuery(property, index) {
   return `get_next_karaoke_song "${property}"${position}`;
 }
 
-export async function listKaraokeEntries(config) {
-  const countResponse = await queryVdj(config, "file_count karaoke");
-  assertReadableQueueValue(countResponse, "the Karaoke queue size");
+async function readQueueValue(config, script, property, index = -1) {
+  let value = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    value = await queryVdj(config, script);
+    if (!isVirtualDjTechnicalError(value)) return value;
+    if (attempt < 2) await retryDelay(attempt);
+  }
+  assertReadableQueueValue(value, property, index);
+  return value;
+}
+
+async function readQueueCount(config) {
+  const countResponse = await readQueueValue(
+    config,
+    "file_count karaoke",
+    "the Karaoke queue size"
+  );
   const rawCount = normalizedQueryValue(countResponse);
   if (!/^\d+$/.test(rawCount)) {
     throw new Error(
       "VirtualDJ did not return the Karaoke queue size. Check that Network Control is up to date."
     );
   }
-  const count = Math.min(500, Number.parseInt(rawCount, 10));
+  return Math.min(500, Number.parseInt(rawCount, 10));
+}
+
+async function readKaraokeSnapshot(config) {
+  const count = await readQueueCount(config);
   const entries = [];
 
   for (let index = 0; index < count; index++) {
-    const [filePath, singer, song, artist, length] = await Promise.all([
-      queryVdj(config, karaokeSongQuery("filepath", index)),
-      queryVdj(config, karaokeSongQuery("singer", index)),
-      queryVdj(config, karaokeSongQuery("title", index)),
-      queryVdj(config, karaokeSongQuery("artist", index)),
-      queryVdj(config, karaokeSongQuery("length", index))
-    ]);
-    [
-      [filePath, "file path"],
-      [singer, "singer"],
-      [song, "title"],
-      [artist, "artist"],
-      [length, "duration"]
-    ].forEach(([value, property]) =>
-      assertReadableQueueValue(value, property, index)
+    // Network Control is substantially more stable when queue properties are
+    // read in order. Concurrent POSTs can return stale rows or HRESULT values.
+    const filePath = await readQueueValue(
+      config,
+      karaokeSongQuery("filepath", index),
+      "file path",
+      index
+    );
+    const singer = await readQueueValue(
+      config,
+      karaokeSongQuery("singer", index),
+      "singer",
+      index
+    );
+    const song = await readQueueValue(
+      config,
+      karaokeSongQuery("title", index),
+      "title",
+      index
+    );
+    const artist = await readQueueValue(
+      config,
+      karaokeSongQuery("artist", index),
+      "artist",
+      index
+    );
+    const length = await readQueueValue(
+      config,
+      karaokeSongQuery("length", index),
+      "duration",
+      index
     );
     const entry = {
       index,
@@ -261,7 +356,29 @@ export async function listKaraokeEntries(config) {
     entries.push(entry);
   }
 
+  const confirmedCount = await readQueueCount(config);
+  if (confirmedCount !== count) {
+    const error = new Error(
+      "The VirtualDJ Karaoke queue changed while it was being read."
+    );
+    error.queueChanged = true;
+    throw error;
+  }
+
   return entries;
+}
+
+export async function listKaraokeEntries(config) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await readKaraokeSnapshot(config);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await retryDelay(attempt);
+    }
+  }
+  throw lastError;
 }
 
 export async function removeDuplicateKaraokeEntries(config, suppliedEntries = null) {
@@ -300,7 +417,7 @@ export async function insertKaraokeEntry(
 
   const before = await listKaraokeEntries(config);
   const existing = before.find((candidate) =>
-    sameKaraokeIdentity(candidate, entry)
+    compatibleInsertIdentity(candidate, entry)
   );
   if (existing) {
     return {
@@ -316,10 +433,15 @@ export async function insertKaraokeEntry(
     before.length,
     Math.max(0, Math.floor(Number(targetIndex) || 0))
   );
-  await executeVdj(
-    config,
-    buildKaraokeInsertScript(filePath, singer, desired, before.length)
-  );
+  try {
+    await executeVdj(
+      config,
+      buildKaraokeInsertScript(filePath, singer, desired, before.length)
+    );
+  } catch (error) {
+    if (error?.deliveryUncertain === true) error.commandAccepted = true;
+    throw error;
+  }
   const attempts = Math.max(1, Math.min(6, Number(options.attempts) || 3));
   const retryDelayMs = Math.max(
     0,
@@ -327,31 +449,51 @@ export async function insertKaraokeEntry(
   );
   let after = [];
   let restored = null;
+  let confirmationError = null;
+  const beforeSongMatches = before.filter((candidate) =>
+    sameQueueSong(candidate, entry)
+  ).length;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    after = await listKaraokeEntries(config);
-    restored = after.find((candidate) =>
-      sameKaraokeIdentity(candidate, entry)
-    );
+    try {
+      after = await listKaraokeEntries(config);
+      confirmationError = null;
+      restored = after.find((candidate) =>
+        compatibleInsertIdentity(candidate, entry)
+      );
+      if (!restored) {
+        const afterSongMatches = after.filter((candidate) =>
+          sameQueueSong(candidate, entry)
+        );
+        if (afterSongMatches.length > beforeSongMatches) {
+          restored = [...afterSongMatches].sort(
+            (left, right) =>
+              Math.abs(Number(left.index) - desired) -
+              Math.abs(Number(right.index) - desired)
+          )[0] || null;
+        }
+      }
+    } catch (error) {
+      confirmationError = error;
+    }
     if (restored) break;
     if (attempt + 1 < attempts && retryDelayMs > 0) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs));
     }
   }
   if (!restored) {
-    throw new Error(
-      "VirtualDJ received the command but did not confirm the restored song."
+    const error = new Error(
+      "VirtualDJ received the command but did not confirm the restored song." +
+      (confirmationError ? ` ${confirmationError.message}` : "")
     );
-  }
-  if (restored.index !== desired) {
-    throw new Error(
-      `VirtualDJ added the song at position ${restored.index + 1} instead of ${desired + 1}.`
-    );
+    error.commandAccepted = true;
+    throw error;
   }
   return {
     inserted: true,
     alreadyQueued: false,
     index: restored.index,
     verified: true,
+    positionAdjusted: restored.index !== desired,
     entry: restored
   };
 }

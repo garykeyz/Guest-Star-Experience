@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 4.3.4 UNIVERSAL PARA MAC
+GUEST STAR BRIDGE 4.3.5 UNIVERSAL PARA MAC
 
 Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
 
@@ -8,7 +8,8 @@ Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
 4. Selecciona el hotel, sede y actividad asignados.
 5. Lee GUIA-MAC-SOLO-BRIDGE.txt para configurar VirtualDJ y la biblioteca.
 
-No necesitas la cuenta Google, Sheets, Apps Script, Node, npm ni Terminal.
+No necesitas abrir Sheets, Apps Script, Node, npm ni Terminal. La cuenta Google
+es opcional y puede usarse para iniciar sesión si el Superhost la registró.
 Las credenciales del Bridge se guardan en macOS Keychain.
 
 La aplicación recibe solicitudes, muestra comentarios, reconcilia la cola real

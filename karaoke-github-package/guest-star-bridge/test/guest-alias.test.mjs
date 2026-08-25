@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   alphabeticalGuestAlias,
-  assignGuestAliases
+  assignGuestAliases,
+  virtualDjSingerLabel
 } from "../src/guest-alias.mjs";
 
 test("asigna Alex A y Alex B por dispositivo y conserva la letra en otras canciones", () => {
@@ -69,4 +70,16 @@ test("continúa después de Z sin repetir identificadores", () => {
   assert.equal(alphabeticalGuestAlias(0), "A");
   assert.equal(alphabeticalGuestAlias(25), "Z");
   assert.equal(alphabeticalGuestAlias(26), "AA");
+});
+
+test("VirtualDJ recibe el alias humano y nunca el código técnico del dispositivo", () => {
+  assert.equal(virtualDjSingerLabel({
+    singer: "Alex",
+    guestAlias: "B",
+    guestCode: "G-19AF"
+  }), "Alex B");
+  assert.equal(virtualDjSingerLabel({
+    singer: "Summer Collis",
+    guestCode: "G-9D21"
+  }), "Summer Collis");
 });

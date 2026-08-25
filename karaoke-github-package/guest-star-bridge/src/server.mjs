@@ -31,7 +31,7 @@ import {
   requestOutcome,
   safeTransitionSeconds
 } from "./activity-summary.mjs";
-import { assignGuestAliases } from "./guest-alias.mjs";
+import { assignGuestAliases, virtualDjSingerLabel } from "./guest-alias.mjs";
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
 import { clearBridgeSecrets } from "./keychain.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
@@ -61,8 +61,8 @@ import {
   normalizeVdjPath,
   normalizeVdjSinger,
   queryVdj,
-  removeDuplicateKaraokeEntries,
-  removeKaraokeEntry
+  removeKaraokeEntry,
+  visibleVdjSinger
 } from "./virtualdj.mjs";
 import {
   copyMacClipboard,
@@ -72,7 +72,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.4";
+const BRIDGE_VERSION = "4.3.5";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -160,6 +160,7 @@ let vdjQueueHasSnapshot = false;
 let vdjQueueCount = 0;
 let lastVdjQueueAt = null;
 let vdjQueueEntries = [];
+let vdjQueueConsecutiveFailures = 0;
 let vdjAvailablePaths = new Set();
 let vdjRequestFilePaths = new Map();
 let clipboardState = {
@@ -542,6 +543,7 @@ function clearTransientCaches() {
   vdjQueueCount = 0;
   lastVdjQueueAt = null;
   vdjQueueEntries = [];
+  vdjQueueConsecutiveFailures = 0;
   vdjAvailablePaths = new Set();
   vdjRequestFilePaths = new Map();
   clipboardState = {
@@ -618,9 +620,7 @@ function bridgeRequests(data = {}) {
 }
 
 function vdjSingerForRequest(item) {
-  const singer = String(item?.singer || "").trim();
-  const guestCode = String(item?.guestCode || "").trim();
-  return guestCode ? `${singer} · ${guestCode}` : singer;
+  return virtualDjSingerLabel(item);
 }
 
 function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
@@ -858,11 +858,22 @@ function sheetMarksVirtualDj(item) {
 }
 
 function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
-  const targetSinger = normalizeText(normalizeVdjSinger(vdjSingerForRequest(item)));
+  const targetSingers = new Set([
+    vdjSingerForRequest(item),
+    String(item?.singer || "").trim(),
+    item?.guestCode
+      ? `${String(item?.singer || "").trim()} · ${String(item.guestCode).trim()}`
+      : ""
+  ].filter(Boolean).map((value) => normalizeText(normalizeVdjSinger(value))));
   const candidates = actualEntries.filter(
     (entry) =>
       !claimedIndices.has(entry.index) &&
-      normalizeText(normalizeVdjSinger(entry.singer)) === targetSinger
+      (
+        targetSingers.has(normalizeText(normalizeVdjSinger(entry.singer))) ||
+        targetSingers.has(
+          normalizeText(normalizeVdjSinger(visibleVdjSinger(entry.singer)))
+        )
+      )
   );
   if (!candidates.length) return null;
 
@@ -903,18 +914,9 @@ async function reconcileVirtualDjQueue(force = false) {
   vdjQueueCheckPromise = (async () => {
     broadcastState();
     try {
-      const initialActualEntries = await listKaraokeEntries(config.virtualDJ);
-      const duplicateCleanup = await removeDuplicateKaraokeEntries(
-        config.virtualDJ,
-        initialActualEntries
-      );
-      const rawActualEntries = duplicateCleanup.entries;
-      if (duplicateCleanup.removedCount > 0) {
-        recordReconciliation({
-          newStatus: "VirtualDJ duplicates removed",
-          reason: `removed_${duplicateCleanup.removedCount}_duplicate_queue_entries`
-        });
-      }
+      // Every physical row in VirtualDJ is authoritative. Never remove a row
+      // merely because its singer and metadata look like another row.
+      const rawActualEntries = await listKaraokeEntries(config.virtualDJ);
       const actualEntries = stabilizeVirtualDjEntries(
         rawActualEntries,
         vdjQueueEntries
@@ -1113,6 +1115,7 @@ async function reconcileVirtualDjQueue(force = false) {
         }
       }
       lastVdjQueueAt = new Date().toISOString();
+      vdjQueueConsecutiveFailures = 0;
       vdjError = "";
       if (adopted) await persistQueuedEntries();
       broadcastState();
@@ -1202,7 +1205,10 @@ async function reconcileVirtualDjQueue(force = false) {
         }
       }
     } catch (error) {
-      vdjError = `The Karaoke queue could not be checked: ${errorMessage(error)}`;
+      vdjQueueConsecutiveFailures += 1;
+      if (!vdjQueueHasSnapshot || vdjQueueConsecutiveFailures >= 3) {
+        vdjError = `The Karaoke queue could not be checked: ${errorMessage(error)}`;
+      }
     }
   })();
 
@@ -1292,7 +1298,7 @@ function stateView() {
       entries: vdjQueueEntries.map((entry) => ({
         virtualDJItemId: entry.virtualDJItemId,
         position: entry.index + 1,
-        singer: entry.singer || "No singer",
+        singer: visibleVdjSinger(entry.singer) || "No singer",
         song:
           entry.song || basename(entry.filePath || "") || "Untitled track",
         artist: entry.artist || "",
@@ -1648,6 +1654,14 @@ async function queueRequest(id, requestedPath, options = {}) {
     throw new Error("This request was already marked completed or skipped.");
   }
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
+  if (pendingInsertions.has(id) && !options.requeue) {
+    return {
+      ok: true,
+      confirmationPending: true,
+      warning:
+        "VirtualDJ accepted the song. Guest Star is confirming the live queue and will not send a second copy."
+    };
+  }
   const wasQueued = !suppressedQueueIds.has(id) && queuedIds.has(id);
   const wasRemovedExternally = removedExternallyIds.has(id);
   const requeue = Boolean(options.requeue) && wasQueued;
@@ -1697,11 +1711,32 @@ async function queueRequest(id, requestedPath, options = {}) {
       ...trackingEntryFromRequest(item),
       filePath
     };
-    const result = await insertKaraokeEntry(
-      config.virtualDJ,
-      insertionEntry,
-      Number.MAX_SAFE_INTEGER
-    );
+    let result;
+    try {
+      result = await insertKaraokeEntry(
+        config.virtualDJ,
+        insertionEntry,
+        Number.MAX_SAFE_INTEGER
+      );
+    } catch (error) {
+      if (error?.commandAccepted !== true) throw error;
+      const uncertainEntry = queuedEntryFromRequest(item, filePath);
+      if (uncertainEntry) {
+        queuedEntries.set(id, uncertainEntry);
+        await persistQueuedEntries();
+      }
+      pendingInsertions.set(id, {
+        phase: "confirming",
+        startedAt: Date.now()
+      });
+      vdjError = "";
+      return {
+        ok: true,
+        confirmationPending: true,
+        warning:
+          "VirtualDJ accepted the song. Guest Star is confirming the live queue and will not send a second copy."
+      };
+    }
     if (!result.verified || !result.entry) {
       throw new Error(
         "VirtualDJ received the command but did not confirm the song in the queue."
@@ -2152,6 +2187,7 @@ async function autoQueueExactMatches() {
       queuedIds.has(item.id) ||
       removedExternallyIds.has(item.id) ||
       suppressedQueueIds.has(item.id) ||
+      pendingInsertions.has(item.id) ||
       queueLocks.has(item.id)
     ) {
       continue;
