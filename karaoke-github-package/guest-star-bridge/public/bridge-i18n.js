@@ -133,6 +133,7 @@ const PHRASES = [
   ["Saved link copied.", "Enlace guardado copiado."], ["Song restored", "Canción restaurada"],
   ["Song requeued", "Canción reenviada a la cola"], ["Song added to VirtualDJ", "Canción agregada a VirtualDJ"],
   ["Song removed from VirtualDJ", "Canción eliminada de VirtualDJ"], ["Song outside the rotation", "Canción fuera de la rotación"],
+  ["VirtualDJ accepted the song. Guest Star is confirming the live queue and will not send a second copy.", "VirtualDJ aceptó la canción. Guest Star está confirmando la cola en vivo y no enviará una segunda copia."],
   ["Mark as Skipped", "Marcar como omitida"], ["Mark Skipped", "Marcar omitida"],
   ["Singer completed", "Cantante completado"], ["Song skipped", "Canción omitida"],
   ["Action undone", "Acción deshecha"], ["Searching for Karaoke/Lyrics versions…", "Buscando versiones Karaoke/Lyrics…"],

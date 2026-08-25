@@ -14,9 +14,15 @@ y el formulario permanecen en la nube.
 6. Los cambios enviados desde `/host` llegan como comandos idempotentes al
    dispositivo correcto.
 
+Bridge consulta las propiedades de Network Control en serie, reintenta solo las
+lecturas seguras y confirma nuevamente el número de pistas al terminar. Si la
+cola cambia durante la captura, descarta esa vista parcial y vuelve a leerla.
+Los comandos de escritura nunca se reintentan automáticamente.
+
 Bridge espera tres lecturas ausentes antes de declarar retirada una pista y
-aplica una ventana de gracia después de insertar. Esto evita duplicados y falsos
-“falta local” causados por demoras de VirtualDJ.
+aplica una ventana de gracia después de insertar. Mientras VirtualDJ confirma,
+la solicitud queda bloqueada contra un segundo envío. Esto evita duplicados y
+falsos “falta local” causados por demoras o respuestas perdidas.
 
 Si una Mac se pierde o cambia de operador, el Superhost debe revocar el
 dispositivo y autorizar uno nuevo.

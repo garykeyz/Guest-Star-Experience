@@ -64,3 +64,9 @@ export function assignGuestAliases(items = [], toneCount = 6) {
     };
   });
 }
+
+export function virtualDjSingerLabel(item = {}) {
+  const singer = String(item?.singer || item?.name || "").trim();
+  const alias = String(item?.guestAlias || "").trim();
+  return alias ? `${singer} ${alias}`.trim() : singer;
+}

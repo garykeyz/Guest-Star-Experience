@@ -195,3 +195,24 @@ test("prefiere el vínculo estable y expone pistas externas sin perder duplicado
   assert.equal(result.unmatched.length, 1);
   assert.match(result.unmatched[0].filePath, /External/);
 });
+
+test("la cola de cuatro filas conserva tres pistas propias y vincula una sola solicitud", () => {
+  const actual = stabilizeVirtualDjEntries([
+    { index: 0, filePath: "/Music/Que Dios Decida.mp4", singer: "", song: "Que Dios Decida", artist: "El Gary", durationSeconds: 252 },
+    { index: 1, filePath: "/Music/Todo Contigo.mp4", singer: "", song: "Todo Contigo", artist: "El Gary", durationSeconds: 280 },
+    { index: 2, filePath: "/Music/Midnight Sun.mp4", singer: "Summer Collis", song: "Midnight Sun", artist: "Zara Larsson", durationSeconds: 190 },
+    { index: 3, filePath: "/Music/External.mp4", singer: "Guest", song: "External", artist: "Artist", durationSeconds: 210 }
+  ]);
+  const result = reconcileTrackedQueue([{
+    id: "summer-request",
+    filePath: "/Music/Midnight Sun.mp4",
+    singer: "Summer Collis",
+    song: "Midnight Sun",
+    artist: "Zara Larsson",
+    durationSeconds: 190
+  }], actual);
+
+  assert.equal(actual.length, 4);
+  assert.equal(result.matched.get("summer-request").index, 2);
+  assert.deepEqual(result.unmatched.map((entry) => entry.index), [0, 1, 3]);
+});

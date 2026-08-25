@@ -15,7 +15,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.3.4"
+      "X-Guest-Star-Bridge-Proxy": "4.3.5"
     }
   });
 }
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
         clientType: "bridge",
         deviceId: String(payload.deviceId || ""),
         deviceName: String(payload.deviceName || "Guest Star Bridge"),
-        bridgeVersion: String(payload.bridgeVersion || "4.3.4"),
+        bridgeVersion: String(payload.bridgeVersion || "4.3.5"),
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {
