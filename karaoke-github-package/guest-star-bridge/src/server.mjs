@@ -72,7 +72,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.4";
+const BRIDGE_VERSION = "4.3.3";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
