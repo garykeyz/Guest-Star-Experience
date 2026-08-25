@@ -1,4 +1,4 @@
-import KaraokeExperience from "@/components/KaraokeExperience";
+import KaraokeExperienceClient from "@/components/KaraokeExperienceClient";
 
 export default async function HotelRequestPage({
   params
@@ -6,5 +6,5 @@ export default async function HotelRequestPage({
   params: Promise<{ hotel: string }>;
 }) {
   const { hotel } = await params;
-  return <KaraokeExperience hotelCode={hotel} />;
+  return <KaraokeExperienceClient hotelCode={hotel} />;
 }

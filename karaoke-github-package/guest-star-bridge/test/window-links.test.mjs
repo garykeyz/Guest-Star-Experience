@@ -15,6 +15,12 @@ const formSource = await readFile(
   resolve(root, "../components/KaraokeExperience.tsx"),
   "utf8"
 );
+const formClientSource = await readFile(
+  resolve(root, "../components/KaraokeExperienceClient.tsx"),
+  "utf8"
+);
+const rootPageSource = await readFile(resolve(root, "../app/page.tsx"), "utf8");
+const hotelPageSource = await readFile(resolve(root, "../app/h/[hotel]/page.tsx"), "utf8");
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
 const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
 const googleSignInHtml = await readFile(resolve(root, "public/google-sign-in.html"), "utf8");
@@ -125,6 +131,33 @@ test("el selector universal está en inglés sin cambiar el idioma guardado", ()
   assert.match(formSource, /\["es","🇪🇸","Spanish","Español"\]/);
   assert.match(formSource, /\["fr","🇫🇷","French","Français"\]/);
   assert.match(formSource, /language:active\[3\]/);
+});
+
+test("después de elegir idioma, todos los módulos públicos usan el mismo idioma", () => {
+  assert.match(formSource, /const moduleText=moduleCopy\[lang\|\|"en"\]/);
+  assert.match(formSource, /<span>\{active\[3\]\}<\/span>/);
+  assert.match(formSource, /\{moduleText\.startsIn\}/);
+  assert.match(formSource, /\{moduleText\.nextActivity\}/);
+  assert.match(formSource, /\{moduleText\.addCalendar\}/);
+  assert.match(formSource, /\{moduleText\.reviewLabel\}/);
+  assert.match(formSource, /placeholder=\{moduleText\.optionalComment\}/);
+  assert.match(formSource, /\{moduleText\.submitReview\}/);
+  const localizedModules = formSource.slice(formSource.indexOf("{nextActivity&&"));
+  assert.doesNotMatch(localizedModules, />OPTIONAL REVIEW</);
+  assert.doesNotMatch(localizedModules, />NEXT ACTIVITY</);
+  assert.doesNotMatch(localizedModules, />Add to Calendar</);
+  assert.doesNotMatch(localizedModules, /placeholder="Optional comment"/);
+  assert.doesNotMatch(localizedModules, />Submit Optional Review</);
+});
+
+test("la experiencia pública pesada se hidrata en el cliente sin gastar CPU del Worker", () => {
+  assert.match(formClientSource, /dynamic\(/);
+  assert.match(formClientSource, /ssr:\s*false/);
+  assert.match(formClientSource, /import\("@\/components\/KaraokeExperience"\)/);
+  assert.match(rootPageSource, /KaraokeExperienceClient/);
+  assert.match(hotelPageSource, /KaraokeExperienceClient/);
+  assert.doesNotMatch(rootPageSource, /from "@\/components\/KaraokeExperience"/);
+  assert.doesNotMatch(hotelPageSource, /from "@\/components\/KaraokeExperience"/);
 });
 
 test("pedir otra canción obliga a elegir nuevamente el idioma", () => {
@@ -311,8 +344,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.3"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.3/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.4"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.4/);
   assert.match(hostPanelSource, /Service v/);
 });
 

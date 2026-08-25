@@ -57,7 +57,7 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.3\.3"/);
+  assert.match(shellSource, /APP_VERSION="4\.3\.4"/);
   assert.match(shellSource, /\.bundle-build/);
   assert.match(shellSource, /installed_build.*bundled_build/s);
   assert.match(buildSource, /def write_bundle_build_id/);
@@ -75,7 +75,7 @@ test("la barra nativa se identifica como Guest Star Bridge y ofrece acciones út
   assert.match(windowSource, /reloadPage:/);
 });
 
-test("la publicación deriva el paquete Universal de la versión 4.3.3", () => {
+test("la publicación deriva el paquete Universal de la versión 4.3.4", () => {
   assert.match(workflowSource, /release_meta\.outputs\.version/);
   assert.match(workflowSource, /Guest-Star-Bridge-Universal-v\$\{VERSION\}-app\.zip/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);

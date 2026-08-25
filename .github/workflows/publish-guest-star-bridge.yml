@@ -76,6 +76,17 @@ jobs:
         working-directory: karaoke-github-package
         run: npx opennextjs-cloudflare build
 
+      - name: Keep the public UI outside the Cloudflare Worker CPU path
+        working-directory: karaoke-github-package
+        run: |
+          if rg -q 'RESEÑA OPCIONAL|OPTIONALE BEWERTUNG|AVIS FACULTATIF' \
+            .open-next/server-functions/default/handler.mjs; then
+            echo "Public translation bundle leaked into the Worker runtime"
+            exit 1
+          fi
+          handler_bytes="$(wc -c < .open-next/server-functions/default/handler.mjs)"
+          test "$handler_bytes" -lt 3350000
+
       - name: Validate Cloudflare bindings and upload bundle without deploying
         working-directory: karaoke-github-package
         run: npx wrangler deploy --dry-run
@@ -250,5 +261,5 @@ jobs:
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
               --title "Guest Star Experience ${VERSION} Universal" \
-              --notes "Guest Star ${VERSION} keeps Google Sign-In and the linked Form/Sheet available in every fresh Cloudflare session by reading the live Worker binding with a safe local fallback; it does not require another Code.gs update or create extra Drive files. This release also separates online requests from VirtualDJ-only tracks, rejects technical Network Control error rows, prevents duplicate insertion loops and recognizes unique songs even when title and artist arrive inverted. Same-name guests remain distinguishable as stable colored aliases such as Alex A and Alex B. The Bridge is fully selectable in Spanish or English, legacy controls remain automated and hidden, and activity buttons only show a spinner while a real operation is running. Superhosts can select the default request.gstarxp.com experience and optionally assign a verified Google Form/Sheet backup that is reused, snapshotted and reset per Host activity. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
+              --notes "Guest Star ${VERSION} keeps every public guest module in the language selected by the guest, including countdowns, upcoming activities, calendar actions, reminders, reviews, validation and external-review links. It also keeps Google Sign-In and the linked Form/Sheet available in every fresh Cloudflare session by reading the live Worker binding with a safe local fallback; it does not require another Code.gs update or create extra Drive files. This release separates online requests from VirtualDJ-only tracks, rejects technical Network Control error rows, prevents duplicate insertion loops and recognizes unique songs even when title and artist arrive inverted. Same-name guests remain distinguishable as stable colored aliases such as Alex A and Alex B. The Bridge is fully selectable in Spanish or English, legacy controls remain automated and hidden, and activity buttons only show a spinner while a real operation is running. Superhosts can select the default request.gstarxp.com experience and optionally assign a verified Google Form/Sheet backup that is reused, snapshotted and reset per Host activity. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
           fi
