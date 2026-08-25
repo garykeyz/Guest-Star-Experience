@@ -127,6 +127,23 @@ test("el selector universal está en inglés sin cambiar el idioma guardado", ()
   assert.match(formSource, /language:active\[3\]/);
 });
 
+test("después de elegir idioma, todos los módulos públicos usan el mismo idioma", () => {
+  assert.match(formSource, /const moduleText=moduleCopy\[lang\|\|"en"\]/);
+  assert.match(formSource, /<span>\{active\[3\]\}<\/span>/);
+  assert.match(formSource, /\{moduleText\.startsIn\}/);
+  assert.match(formSource, /\{moduleText\.nextActivity\}/);
+  assert.match(formSource, /\{moduleText\.addCalendar\}/);
+  assert.match(formSource, /\{moduleText\.reviewLabel\}/);
+  assert.match(formSource, /placeholder=\{moduleText\.optionalComment\}/);
+  assert.match(formSource, /\{moduleText\.submitReview\}/);
+  const localizedModules = formSource.slice(formSource.indexOf("{nextActivity&&"));
+  assert.doesNotMatch(localizedModules, />OPTIONAL REVIEW</);
+  assert.doesNotMatch(localizedModules, />NEXT ACTIVITY</);
+  assert.doesNotMatch(localizedModules, />Add to Calendar</);
+  assert.doesNotMatch(localizedModules, /placeholder="Optional comment"/);
+  assert.doesNotMatch(localizedModules, />Submit Optional Review</);
+});
+
 test("pedir otra canción obliga a elegir nuevamente el idioma", () => {
   const resetSource = formSource.slice(
     formSource.indexOf("const reset="),
@@ -311,8 +328,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.3"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.3/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.4"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.4/);
   assert.match(hostPanelSource, /Service v/);
 });
 
