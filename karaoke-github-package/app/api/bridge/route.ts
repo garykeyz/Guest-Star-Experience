@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { backendMode, ensureD1Schema, getGuestStarD1, getMeta, type JsonObject } from "@/lib/guest-star/d1-store";
 import { handleD1HostAction, loginD1WithVerifiedGoogle } from "@/lib/guest-star/d1-actions";
 import { verifyGoogleIdentityToken } from "@/lib/guest-star/google-identity";
+import { runtimeEnvString } from "@/lib/guest-star/runtime-env";
 import { callAppsScript, scheduleD1Backup } from "@/lib/guest-star/upstream";
 
 const MAX_BODY_BYTES = 512 * 1024;
@@ -14,7 +15,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.3.2"
+      "X-Guest-Star-Bridge-Proxy": "4.3.3"
     }
   });
 }
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
   try {
     const db = getGuestStarD1();
     const action = String(payload.action || "");
-    const googleClientId = String(process.env.GOOGLE_OAUTH_CLIENT_ID || "");
+    const googleClientId = runtimeEnvString("GOOGLE_OAUTH_CLIENT_ID");
     if (action === "googleLoginConfig") {
       return response({
         ok: Boolean(googleClientId),
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
         clientType: "bridge",
         deviceId: String(payload.deviceId || ""),
         deviceName: String(payload.deviceName || "Guest Star Bridge"),
-        bridgeVersion: String(payload.bridgeVersion || "4.3.2"),
+        bridgeVersion: String(payload.bridgeVersion || "4.3.3"),
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {

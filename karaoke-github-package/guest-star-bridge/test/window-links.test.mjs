@@ -38,6 +38,10 @@ const bridgeApiSource = await readFile(
   resolve(root, "../app/api/bridge/route.ts"),
   "utf8"
 );
+const runtimeEnvSource = await readFile(
+  resolve(root, "../lib/guest-star/runtime-env.ts"),
+  "utf8"
+);
 
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.doesNotMatch(appSource, /window\.open/);
@@ -96,6 +100,16 @@ test("Google inicia la sesión del Bridge en el navegador del sistema y solo con
   assert.match(googleSignInSource, /credential: response\.credential/);
   assert.match(googleSignInSource, /jsonRequest\("\/api\/auth\/google"/);
   assert.doesNotMatch(googleSignInSource, /localStorage|sessionStorage|document\.cookie/);
+});
+
+test("Google usa el binding real de Cloudflare y conserva el fallback local", () => {
+  assert.match(runtimeEnvSource, /getCloudflareContext/);
+  assert.match(runtimeEnvSource, /context\.env/);
+  assert.match(runtimeEnvSource, /process\.env\[key\]/);
+  assert.match(hostApiSource, /runtimeEnvString\("GOOGLE_OAUTH_CLIENT_ID"\)/);
+  assert.match(bridgeApiSource, /runtimeEnvString\("GOOGLE_OAUTH_CLIENT_ID"\)/);
+  assert.doesNotMatch(hostApiSource, /process\.env\.GOOGLE_OAUTH_CLIENT_ID/);
+  assert.doesNotMatch(bridgeApiSource, /process\.env\.GOOGLE_OAUTH_CLIENT_ID/);
 });
 
 test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {
@@ -297,8 +311,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.2"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.2/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.3"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.3/);
   assert.match(hostPanelSource, /Service v/);
 });
 
