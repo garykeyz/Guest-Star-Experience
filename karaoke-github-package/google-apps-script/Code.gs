@@ -12,7 +12,7 @@ const HEADERS = [
 ];
 const MAX_ACTIVITY_SECONDS = 7 * 24 * 60 * 60;
 const BRIDGE_API_VERSION = "4.2.0";
-const GUEST_STAR_CODE_BUILD = "4.3.1-google-fallback";
+const GUEST_STAR_CODE_BUILD = "4.3.2-google-fallback";
 const V4_SCHEMA_VERSION = "4.2.0";
 const V4_PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const V4_DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
@@ -3853,6 +3853,25 @@ function googleFallbackFormItemsV43_(form) {
   form.addParagraphTextItem().setTitle("Comentario opcional / Optional note").setRequired(false);
 }
 
+function googleFallbackReusableFileV43_(folder, title, mimeType) {
+  const files = folder.getFilesByName(title);
+  const matches = [];
+  while (files.hasNext()) {
+    const file = files.next();
+    try {
+      if (String(file.getMimeType() || "") === String(mimeType || "")) matches.push(file);
+    } catch (error) {}
+  }
+  matches.sort(function(left, right) {
+    let leftTime = 0;
+    let rightTime = 0;
+    try { leftTime = left.getDateCreated().getTime(); } catch (error) {}
+    try { rightTime = right.getDateCreated().getTime(); } catch (error) {}
+    return rightTime - leftTime;
+  });
+  return matches.length ? matches[0] : null;
+}
+
 function provisionGoogleFallbackV43_(body) {
   const auth = googleFallbackServiceAuthV43_(body);
   const email = String(body.email || "").trim().toLowerCase();
@@ -3871,8 +3890,18 @@ function provisionGoogleFallbackV43_(body) {
   const folder = googleFallbackFolderV43_();
   const displayName = String(auth.user.displayName || auth.user.username || body.displayName || "Guest Star Host");
   const baseTitle = ("Guest Star Requests - " + displayName).slice(0, 180);
+  let reusedExistingFiles = false;
   let spreadsheet;
   try { spreadsheet = mapping.spreadsheetId ? SpreadsheetApp.openById(mapping.spreadsheetId) : null; } catch (error) { spreadsheet = null; }
+  if (!spreadsheet) {
+    const reusableSpreadsheet = googleFallbackReusableFileV43_(folder, baseTitle, MimeType.GOOGLE_SHEETS);
+    if (reusableSpreadsheet) {
+      try {
+        spreadsheet = SpreadsheetApp.openById(reusableSpreadsheet.getId());
+        reusedExistingFiles = true;
+      } catch (error) { spreadsheet = null; }
+    }
+  }
   if (!spreadsheet) {
     spreadsheet = SpreadsheetApp.create(baseTitle);
     DriveApp.getFileById(spreadsheet.getId()).moveTo(folder);
@@ -3880,9 +3909,34 @@ function provisionGoogleFallbackV43_(body) {
   let form;
   try { form = mapping.formId ? FormApp.openById(mapping.formId) : null; } catch (error) { form = null; }
   if (!form) {
+    const reusableForm = googleFallbackReusableFileV43_(folder, baseTitle, MimeType.GOOGLE_FORMS);
+    if (reusableForm) {
+      try {
+        form = FormApp.openById(reusableForm.getId());
+        reusedExistingFiles = true;
+      } catch (error) { form = null; }
+    }
+  }
+  if (!form) {
     form = FormApp.create(baseTitle);
     DriveApp.getFileById(form.getId()).moveTo(folder);
   }
+  mapping = {
+    userId: auth.user.userId,
+    displayName: displayName,
+    email: email,
+    spreadsheetId: spreadsheet.getId(),
+    formId: form.getId(),
+    sheetUrl: spreadsheet.getUrl(),
+    formUrl: String(mapping.formUrl || ""),
+    formEditUrl: String(mapping.formEditUrl || ""),
+    currentHotelId: context.hotel.hotelId,
+    currentVenueId: context.venue ? context.venue.venueId : "",
+    currentActivityId: context.activity.activityId,
+    lastResetAt: changedActivity ? isoNowV4_() : String(mapping.lastResetAt || ""),
+    updatedAt: isoNowV4_()
+  };
+  saveGlobalSettingJsonV43_(auth.master, V4_GOOGLE_FALLBACK_PREFIX + auth.user.userId, mapping);
   googleFallbackFormItemsV43_(form);
   form.setTitle(baseTitle + " - " + context.activity.name);
   form.setDescription([
@@ -3892,10 +3946,13 @@ function provisionGoogleFallbackV43_(body) {
     "Guest Star Experience secure operational backup."
   ].filter(String).join(" · "));
   form.setCollectEmail(false).setLimitOneResponsePerUser(false).setShowLinkToRespondAgain(true);
-  if (typeof form.setRequireLogin === "function") form.setRequireLogin(false);
   form.setConfirmationMessage("Solicitud recibida. Request received.");
+  let supportsPublishing = false;
+  if (typeof form.supportsAdvancedResponderPermissions === "function") {
+    try { supportsPublishing = form.supportsAdvancedResponderPermissions() === true; } catch (error) {}
+  }
+  if (supportsPublishing && typeof form.setPublished === "function") form.setPublished(true);
   form.setAcceptingResponses(true);
-  if (typeof form.setPublished === "function") form.setPublished(true);
   let destinationId = "";
   try { destinationId = String(form.getDestinationId() || ""); } catch (error) {}
   if (destinationId !== spreadsheet.getId()) {
@@ -3917,11 +3974,15 @@ function provisionGoogleFallbackV43_(body) {
     currentHotelId: context.hotel.hotelId,
     currentVenueId: context.venue ? context.venue.venueId : "",
     currentActivityId: context.activity.activityId,
-    lastResetAt: changedActivity ? isoNowV4_() : String(mapping.lastResetAt || ""),
+    lastResetAt: String(mapping.lastResetAt || ""),
     updatedAt: isoNowV4_()
   };
   saveGlobalSettingJsonV43_(auth.master, V4_GOOGLE_FALLBACK_PREFIX + auth.user.userId, mapping);
-  return { ok: true, asset: googleFallbackPublicAssetV43_(auth.master, mapping), reused: Boolean(stored.record) };
+  return {
+    ok: true,
+    asset: googleFallbackPublicAssetV43_(auth.master, mapping),
+    reused: Boolean(stored.record || reusedExistingFiles)
+  };
 }
 
 function googleFallbackPublicAssetV43_(master, mapping) {
