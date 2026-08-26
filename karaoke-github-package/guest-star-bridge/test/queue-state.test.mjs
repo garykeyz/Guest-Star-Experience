@@ -7,6 +7,7 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
     activityId: "activity-1",
     activityStartedAt: "2026-07-29T20:00:00.000Z",
     suppressedIds: ["request-3", "", "request-3"],
+    removedIds: ["request-2", "request-2", ""],
     entries: [
       {
         id: "request-1",
@@ -39,6 +40,7 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
   assert.equal(state.entries.length, 1);
   assert.equal(state.entries[0].id, "request-1");
   assert.deepEqual(state.suppressedIds, ["request-3"]);
+  assert.deepEqual(state.removedIds, ["request-2"]);
   assert.equal(state.recoveries.length, 1);
   assert.equal(state.recoveries[0].originalPosition, 2);
   assert.equal(state.recoveries[0].entry.singer, "Ana");

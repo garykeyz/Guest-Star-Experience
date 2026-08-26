@@ -72,7 +72,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.6";
+const BRIDGE_VERSION = "4.3.7";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -132,7 +132,7 @@ const suppressedQueueIds = new Set(storedQueueState.suppressedIds);
 const outcomeRecoveries = new Map(
   storedQueueState.recoveries.map((recovery) => [recovery.id, recovery])
 );
-const removedExternallyIds = new Set();
+const removedExternallyIds = new Set(storedQueueState.removedIds);
 const queueLocks = new Set();
 const pendingInsertions = new Map();
 let queuePresenceMisses = new Map();
@@ -163,6 +163,7 @@ let vdjQueueEntries = [];
 let vdjQueueConsecutiveFailures = 0;
 let vdjAvailablePaths = new Set();
 let vdjRequestFilePaths = new Map();
+let lastExternalSyncSignature = "";
 let clipboardState = {
   requestId: "",
   url: "",
@@ -176,6 +177,16 @@ function requireSignedInBridge() {
   if (!identityState.authenticated || !hasV4Session(config)) {
     throw new Error("Sign in to Guest Star first.");
   }
+}
+
+function effectiveRequestOutcome(item) {
+  const id = String(item?.id || "").trim();
+  return outcomeRecoveries.get(id)?.outcome || requestOutcome(item?.status);
+}
+
+function sheetMarksOutsideVirtualDj(item) {
+  const status = normalizeText(item?.status);
+  return status.includes("fuera") || status.includes("retirada");
 }
 
 function requireLocalSuperhost() {
@@ -373,7 +384,7 @@ function requestView(item) {
       (!vdjQueueHasSnapshot &&
         (queuedEntries.has(item.id) || sheetMarksVirtualDj(item))));
   const queueIndex = vdjQueuePositions.get(item.id);
-  const outcome = requestOutcome(item.status);
+  const outcome = effectiveRequestOutcome(item);
   if (outcome) {
     const recovery = outcomeRecoveries.get(item.id);
     const recoveryEntry = recovery?.entry || queuedEntry;
@@ -530,6 +541,7 @@ function clearTransientCaches() {
   externalQueueEntries = [];
   knownExternalEntries.clear();
   externalQueueMisses.clear();
+  lastExternalSyncSignature = "";
   queuedIds.clear();
   youtubeCache.clear();
   youtubeSearchAt.clear();
@@ -619,6 +631,27 @@ function bridgeRequests(data = {}) {
   });
 }
 
+function seedKnownExternalEntries(data = {}) {
+  const rows = Array.isArray(data.requests) ? data.requests : [];
+  for (const item of rows) {
+    if (String(item?.sourceType || "").trim().toLowerCase() !== "virtualdj_external") {
+      continue;
+    }
+    if (sheetMarksOutsideVirtualDj(item)) continue;
+    const virtualDJItemId = String(item?.virtualDJItemId || "").trim();
+    if (!virtualDJItemId || knownExternalEntries.has(virtualDJItemId)) continue;
+    knownExternalEntries.set(virtualDJItemId, {
+      virtualDJItemId,
+      filePath: String(item.fileName || "").trim(),
+      singer: String(item.singer || item.name || "VirtualDJ").trim(),
+      song: String(item.song || "").trim(),
+      artist: String(item.artist || "").trim(),
+      durationSeconds: Math.max(0, numberOr(item.durationSeconds, 0)),
+      sourceType: "virtualdj_external"
+    });
+  }
+}
+
 function vdjSingerForRequest(item) {
   return virtualDjSingerLabel(item);
 }
@@ -684,12 +717,14 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
     queuedEntries.values(),
     suppressedQueueIds.values(),
     outcomeRecoveries.values(),
-    activityState.activityStartedAt
+    activityState.activityStartedAt,
+    removedExternallyIds.values()
   );
 }
 
 async function resetLocalActivity(activityId) {
   requests = [];
+  queuedEntries.clear();
   queuedIds.clear();
   suppressedQueueIds.clear();
   removedExternallyIds.clear();
@@ -710,22 +745,31 @@ async function reconcileDeletedRequests(
   const activeIds = new Set(nextRequests.map((item) => item.id));
   const previousById = new Map(requests.map((item) => [item.id, item]));
   const trackedIds = new Set([...queuedIds, ...queuedEntries.keys()]);
+  const activityChanged = Boolean(
+    queueActivityId &&
+    nextActivity.activityId &&
+    queueActivityId !== nextActivity.activityId
+  );
+  const shouldDiscardMissing = removeFromVirtualDJ || activityChanged;
   let changed = false;
 
-  for (const id of [...suppressedQueueIds]) {
-    if (activeIds.has(id)) continue;
-    suppressedQueueIds.delete(id);
-    changed = true;
-  }
-  for (const id of [...removedExternallyIds]) {
-    if (activeIds.has(id)) continue;
-    removedExternallyIds.delete(id);
-    vdjQueuePositions.delete(id);
-  }
-  for (const id of [...outcomeRecoveries.keys()]) {
-    if (activeIds.has(id)) continue;
-    outcomeRecoveries.delete(id);
-    changed = true;
+  if (shouldDiscardMissing) {
+    for (const id of [...suppressedQueueIds]) {
+      if (!activityChanged && activeIds.has(id)) continue;
+      suppressedQueueIds.delete(id);
+      changed = true;
+    }
+    for (const id of [...removedExternallyIds]) {
+      if (!activityChanged && activeIds.has(id)) continue;
+      removedExternallyIds.delete(id);
+      vdjQueuePositions.delete(id);
+      changed = true;
+    }
+    for (const id of [...outcomeRecoveries.keys()]) {
+      if (!activityChanged && activeIds.has(id)) continue;
+      outcomeRecoveries.delete(id);
+      changed = true;
+    }
   }
   for (const id of [...youtubeCache.keys()]) {
     if (activeIds.has(id)) continue;
@@ -739,7 +783,17 @@ async function reconcileDeletedRequests(
   }
 
   for (const id of trackedIds) {
-    if (activeIds.has(id)) continue;
+    if (!activityChanged && activeIds.has(id)) continue;
+    if (!shouldDiscardMissing) {
+      recordReconciliation({
+        requestId: id,
+        virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId,
+        previousStatus: previousById.get(id)?.status,
+        newStatus: "locally_preserved",
+        reason: "request_temporarily_missing_from_sync"
+      });
+      continue;
+    }
     const entry =
       queuedEntries.get(id) || queuedEntryFromRequest(previousById.get(id));
     if (!entry) {
@@ -796,12 +850,17 @@ async function reconcileDeletedRequests(
 async function reconcileTerminalRequests(nextRequests) {
   let changed = false;
   for (const item of nextRequests) {
-    const outcome = requestOutcome(item.status);
+    const outcome = effectiveRequestOutcome(item);
     if (!outcome) continue;
     const id = item.id;
+    const existingRecovery = outcomeRecoveries.get(id);
     const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
     let originalPosition = vdjQueuePositions.get(id);
-    if (entry && (queuedIds.has(id) || queuedEntries.has(id))) {
+    if (
+      !existingRecovery &&
+      entry &&
+      (queuedIds.has(id) || queuedEntries.has(id))
+    ) {
       try {
         const result = await removeKaraokeEntry(config.virtualDJ, entry);
         if (Number.isInteger(result.index)) originalPosition = result.index;
@@ -814,7 +873,7 @@ async function reconcileTerminalRequests(nextRequests) {
           `The status was saved, but “${item.song}” could not be removed from VirtualDJ: ${errorMessage(error)}`;
       }
     }
-    if (!outcomeRecoveries.has(id)) {
+    if (!existingRecovery) {
       outcomeRecoveries.set(id, {
         id,
         outcome,
@@ -940,14 +999,12 @@ async function reconcileVirtualDjQueue(force = false) {
           .filter((entry) => entry.localAvailable && entry.filePath)
           .map((entry) => normalizeVdjPath(entry.filePath))
       );
-      const activeIds = new Set(requests.map((item) => item.id));
       const trackedById = new Map();
       for (const entry of queuedEntries.values()) {
         const item = requests.find((request) => request.id === entry.id);
         if (
-          activeIds.has(entry.id) &&
           !suppressedQueueIds.has(entry.id) &&
-          !requestOutcome(item?.status)
+          !effectiveRequestOutcome(item || { id: entry.id, status: "" })
         ) {
           trackedById.set(entry.id, {
             ...entry,
@@ -957,7 +1014,7 @@ async function reconcileVirtualDjQueue(force = false) {
       }
       for (const item of requests) {
         if (
-          requestOutcome(item.status) ||
+          effectiveRequestOutcome(item) ||
           !sheetMarksVirtualDj(item) ||
           suppressedQueueIds.has(item.id) ||
           trackedById.has(item.id)
@@ -1117,7 +1174,9 @@ async function reconcileVirtualDjQueue(force = false) {
       lastVdjQueueAt = new Date().toISOString();
       vdjQueueConsecutiveFailures = 0;
       vdjError = "";
-      if (adopted) await persistQueuedEntries();
+      if (adopted || newlyMissing.length || restored.length) {
+        await persistQueuedEntries();
+      }
       broadcastState();
 
       for (const id of newlyMissing) {
@@ -1185,21 +1244,30 @@ async function reconcileVirtualDjQueue(force = false) {
         }
       }
       if (hasV4Session(config)) {
+        const externalEntriesPayload = externalQueueEntries.map((entry) => ({
+          virtualDJItemId: entry.virtualDJItemId,
+          index: entry.index,
+          filePath: entry.filePath,
+          singer: entry.singer,
+          song: entry.song,
+          artist: entry.artist,
+          durationSeconds: entry.durationSeconds,
+          sourceType: "virtualdj_external"
+        }));
+        const externalSyncSignature = JSON.stringify({
+          activityId: activityState.activityId,
+          entries: externalEntriesPayload,
+          confirmedMissingIds: [...confirmedMissingExternalIds].sort()
+        });
         try {
-          await syncExternalVirtualDjEntries(
-            config,
-            externalQueueEntries.map((entry) => ({
-              virtualDJItemId: entry.virtualDJItemId,
-              index: entry.index,
-              filePath: entry.filePath,
-              singer: entry.singer,
-              song: entry.song,
-              artist: entry.artist,
-              durationSeconds: entry.durationSeconds,
-              sourceType: "virtualdj_external"
-            })),
-            confirmedMissingExternalIds
-          );
+          if (externalSyncSignature !== lastExternalSyncSignature) {
+            await syncExternalVirtualDjEntries(
+              config,
+              externalEntriesPayload,
+              confirmedMissingExternalIds
+            );
+            lastExternalSyncSignature = externalSyncSignature;
+          }
         } catch {
           // The real VirtualDJ queue remains authoritative; retry on the next scan.
         }
@@ -1322,7 +1390,7 @@ function stateView() {
     singerCandidates: [
       ...new Set(
         requests
-          .filter((item) => requestOutcome(item.status) !== "skipped")
+          .filter((item) => effectiveRequestOutcome(item) !== "skipped")
           .map(vdjSingerForRequest)
           .filter(Boolean)
       )
@@ -1493,17 +1561,26 @@ async function syncNow() {
       queueActivityId &&
       nextActivity.activityId &&
       queueActivityId !== nextActivity.activityId;
-    if (activityChanged) suppressedQueueIds.clear();
     await reconcileDeletedRequests(nextRequests, nextActivity);
     if (activityChanged) clearTransientCaches();
+    seedKnownExternalEntries(data);
     requests = nextRequests;
+    for (const item of requests) {
+      if (effectiveRequestOutcome(item)) continue;
+      if (sheetMarksOutsideVirtualDj(item)) {
+        removedExternallyIds.add(item.id);
+        if (normalizeText(item.status).includes("retirada")) {
+          suppressedQueueIds.add(item.id);
+        }
+      }
+    }
     refreshLocalAvailability();
     applyActivityState(data);
     await reconcileTerminalRequests(nextRequests);
     lastSyncAt = new Date().toISOString();
     broadcastState();
     for (const item of requests) {
-      if (requestOutcome(item.status)) continue;
+      if (effectiveRequestOutcome(item)) continue;
       if (!sheetMarksVirtualDj(item)) continue;
       if (suppressedQueueIds.has(item.id)) continue;
       if (!queuedEntries.has(item.id)) {
@@ -1554,7 +1631,7 @@ async function syncNow() {
 async function reportLocalStates() {
   if (!guestStarConfigured()) return;
   for (const item of requests) {
-    if (requestOutcome(item.status)) continue;
+    if (effectiveRequestOutcome(item)) continue;
     if (queuedIds.has(item.id) || removedExternallyIds.has(item.id)) continue;
     if (
       !vdjQueueHasSnapshot &&
@@ -1650,7 +1727,7 @@ function appendQueuePosition(id) {
 async function queueRequest(id, requestedPath, options = {}) {
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
-  if (requestOutcome(item.status)) {
+  if (effectiveRequestOutcome(item)) {
     throw new Error("This request was already marked completed or skipped.");
   }
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
@@ -1966,7 +2043,7 @@ async function setRequestOutcome(id, outcome) {
 async function undoRequestOutcome(id, placement) {
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
-  if (!requestOutcome(item.status)) {
+  if (!effectiveRequestOutcome(item)) {
     throw new Error("This request is no longer marked completed or skipped.");
   }
   if (!["original", "end", "pending"].includes(placement)) {
@@ -2153,7 +2230,7 @@ async function queueHitSuggestion(body = {}) {
     const candidates = [
       ...new Set(
         requests
-          .filter((item) => requestOutcome(item.status) !== "skipped")
+          .filter((item) => effectiveRequestOutcome(item) !== "skipped")
           .map((item) => item.singer)
           .filter(Boolean)
       )
@@ -2182,7 +2259,7 @@ async function queueHitSuggestion(body = {}) {
 async function autoQueueExactMatches() {
   if (!config.autoQueueExact) return;
   for (const item of requests) {
-    if (requestOutcome(item.status)) continue;
+    if (effectiveRequestOutcome(item)) continue;
     if (
       queuedIds.has(item.id) ||
       removedExternallyIds.has(item.id) ||
@@ -2246,7 +2323,7 @@ async function prepareMissingYoutube() {
   if (!guestStarConfigured()) return;
   const missing = requests.filter(
     (item) =>
-      !requestOutcome(item.status) &&
+      !effectiveRequestOutcome(item) &&
       !findMatches(
         libraryFiles,
         item.song,

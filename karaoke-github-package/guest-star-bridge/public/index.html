@@ -102,14 +102,6 @@
         <p id="eventEndDetail">EMCEE: respect the event end time when organizing the rotation.</p>
       </section>
 
-      <details id="vdjQueuePanel" class="vdj-queue-panel">
-        <summary>
-          <span><b>Current VirtualDJ queue</b><small id="vdjQueueSummary">Checking…</small></span>
-          <i aria-hidden="true">⌄</i>
-        </summary>
-        <div id="vdjQueueList" class="vdj-live-list"></div>
-      </details>
-
       <section class="toolbar">
         <div>
           <p class="eyebrow" id="tenantPath">SELECT AN ACTIVITY</p>
@@ -137,7 +129,20 @@
       </section>
 
       <section id="notice" class="notice hidden" role="status"></section>
-      <section id="requests" class="request-groups" aria-live="polite"></section>
+      <section class="live-queue-workspace" aria-label="Live Karaoke operation">
+        <section id="requests" class="request-groups" aria-live="polite"></section>
+        <section id="vdjQueuePanel" class="vdj-queue-panel">
+          <header class="queue-panel-head">
+            <div>
+              <h3>Live VirtualDJ Queue</h3>
+              <small id="vdjQueueSummary">Checking…</small>
+            </div>
+            <span class="live-queue-dot" aria-hidden="true"></span>
+          </header>
+          <div id="vdjQueueList" class="vdj-live-list"></div>
+        </section>
+      </section>
+      <section id="finishedRequests" class="request-results" aria-live="polite"></section>
       <section id="randomRotation" class="hit-suggestions rotation-panel hidden">
         <div class="hit-header rotation-header">
           <div>

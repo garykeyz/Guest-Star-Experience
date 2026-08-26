@@ -81,6 +81,37 @@ export async function flushD1BackupFully(db: D1DatabaseLike, maxBatches = 10) {
 }
 
 const scheduledBackups = new WeakMap<object, Promise<unknown>>();
+const BACKUP_LEASE_KEY = "sheets_backup_delivery_lease";
+const BACKUP_LEASE_MS = 90_000;
+
+async function acquireD1BackupLease(db: D1DatabaseLike) {
+  const token = crypto.randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + BACKUP_LEASE_MS).toISOString();
+  const result = await db.prepare(`
+    INSERT INTO guest_star_meta (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+    WHERE guest_star_meta.updated_at <= ?
+  `).bind(BACKUP_LEASE_KEY, token, expiresAt, now.toISOString()).run();
+  const changes = Number(result.meta?.changes);
+  if (Number.isFinite(changes)) return changes > 0;
+  const row = await db.prepare(
+    "SELECT value FROM guest_star_meta WHERE key = ? LIMIT 1"
+  ).bind(BACKUP_LEASE_KEY).first<{ value: string }>();
+  return row?.value === token;
+}
+
+async function flushLeasedD1Backup(db: D1DatabaseLike) {
+  if (!await acquireD1BackupLease(db)) {
+    return { ok: true, delivered: 0, deferred: true };
+  }
+  // The D1 lease remains until its expiry. Besides protecting concurrent
+  // isolates, this creates a short global cooldown for the slow Sheets mirror.
+  return flushD1Backup(db, 20);
+}
 
 export function scheduleD1Backup(db: D1DatabaseLike) {
   const key = db as object;
@@ -89,7 +120,7 @@ export function scheduleD1Backup(db: D1DatabaseLike) {
     // A normal request only drains one small batch. Read-only polling never
     // calls this function, and concurrent mutations in the same isolate share
     // the same operation instead of multiplying Apps Script/D1 work.
-    operation = flushD1Backup(db, 20)
+    operation = flushLeasedD1Backup(db)
       .catch(() => ({ ok: false }))
       .finally(() => scheduledBackups.delete(key));
     scheduledBackups.set(key, operation);

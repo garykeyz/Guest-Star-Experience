@@ -11,6 +11,7 @@ const READ_ONLY_D1_ACTIONS = new Set([
   "me", "adminState", "activityState", "listReviews", "hotelShare",
   "youtubeSearchV4", "pollBridgeCommands", "bridgeHeartbeat"
 ]);
+const BACKUP_MAINTENANCE_ACTIONS = new Set(["bridgeHeartbeat"]);
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.3.6"
+      "X-Guest-Star-Bridge-Proxy": "4.3.7"
     }
   });
 }
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
         clientType: "bridge",
         deviceId: String(payload.deviceId || ""),
         deviceName: String(payload.deviceName || "Guest Star Bridge"),
-        bridgeVersion: String(payload.bridgeVersion || "4.3.6"),
+        bridgeVersion: String(payload.bridgeVersion || "4.3.7"),
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {
@@ -84,7 +85,10 @@ export async function POST(request: NextRequest) {
           ok: false,
           code: "D1_ACTION_NOT_IMPLEMENTED"
         };
-        if (data.ok === true && !READ_ONLY_D1_ACTIONS.has(action)) {
+        if (data.ok === true && (
+          BACKUP_MAINTENANCE_ACTIONS.has(action) ||
+          (data.backupNeeded !== false && !READ_ONLY_D1_ACTIONS.has(action))
+        )) {
           scheduleD1Backup(db);
         }
         return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);

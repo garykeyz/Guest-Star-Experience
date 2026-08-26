@@ -1,4 +1,4 @@
-# Guest Star Bridge 4.3.6
+# Guest Star Bridge 4.3.7
 
 Aplicación local Universal para Mac que conecta Guest Star con la biblioteca de
 karaoke y la cola Karaoke real de VirtualDJ.
@@ -17,7 +17,7 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Bridge-Universal-v4.3.6-app.zip` o abre el DMG.
+1. Descomprime `Guest-Star-Bridge-Universal-v4.3.7-app.zip` o abre el DMG.
 2. Mueve **Guest Star Bridge.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
@@ -43,8 +43,9 @@ los secretos se guardan en macOS Keychain.
 - **Aleatorio · Random** genera rondas en español, inglés, ambas listas o los
   favoritos del hotel sin repetir antes de completar cada vuelta.
 
-Las solicitudes se separan en pendientes, cola VDJ y completadas, sin perder su
-número de llegada. Cada tarjeta muestra idioma, duración, transición,
+Las solicitudes activas y la cola real de VirtualDJ aparecen lado a lado; las
+completadas y omitidas se agrupan debajo, sin perder su número de llegada. Cada
+tarjeta muestra idioma, duración, transición,
 dedicatoria, acumulado y turno estimado. Las pistas externas agregadas
 directamente a VirtualDJ permanecen en una sección separada y cuentan en el
 tiempo confirmado sin convertirse en solicitudes en línea.
@@ -53,9 +54,14 @@ La interfaz puede cambiarse completamente entre Español e English. Los valores
 técnicos de error de VirtualDJ nunca se convierten en solicitudes y el último
 estado válido de la cola se conserva si Network Control devuelve un error.
 
-En 4.3.6, la sincronización operativa queda separada del respaldo histórico:
-las lecturas y latidos no disparan copias hacia Google Sheets, reduciendo carga
-sin cambiar la cola autoritativa ni la conexión en tiempo real con VirtualDJ.
+En 4.3.7, una canción marcada como cantada, omitida o retirada conserva esa
+decisión aunque el servidor entregue una lectura atrasada o el Bridge reinicie.
+Solo **Deshacer** permite restaurarla. La réplica hacia Google Sheets se agrupa
+globalmente para que una ráfaga de solicitudes no multiplique el trabajo.
+
+Desde 4.3.6, la sincronización operativa queda separada del respaldo histórico:
+las lecturas normales no crean eventos históricos ni bloquean la cola
+autoritativa o la conexión en tiempo real con VirtualDJ.
 
 Desde 4.3.5, las propiedades de cada fila se leen en orden para mantener estable
 Network Control. El conteo se verifica al terminar y se repite la captura si la

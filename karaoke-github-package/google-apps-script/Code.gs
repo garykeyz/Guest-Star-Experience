@@ -363,6 +363,12 @@ function doPost(e) {
         state: publicState_()
       });
     }
+    if (
+      publicContext &&
+      !publicRequestRateLimitV4_(publicContext.hotel.hotelId, body.name)
+    ) {
+      return json_({ ok: false, code: "RATE_LIMITED" });
+    }
 
     const requestedLanguage = body.languageCode || body.language;
     if (publicContext && publicContext.activity) {
@@ -4759,9 +4765,6 @@ function configurePublicRequestContextV4_(body) {
   ) {
     return { error: "CLOSED" };
   }
-  if (!publicRequestRateLimitV4_(hotel.hotelId, body.name)) {
-    return { error: "RATE_LIMITED" };
-  }
   REQUEST_DATA_SHEET_ID_ = hotel.dataSheetId;
   return tenant;
 }
@@ -6130,7 +6133,8 @@ function bridgeRequestUpdateV4_(auth, body) {
   const previousStatus = String(rows[index][11] || "Pendiente");
   const allowedStatuses = [
     "Pendiente", "Agregada a VirtualDJ", "Ya cantó", "Saltado",
-    "Fuera de VirtualDJ", "No está local"
+    "Fuera de VirtualDJ", "No está local", "Reagregada a VirtualDJ",
+    "Reenviada a VirtualDJ", "Retirada de rotación"
   ];
   const status = allowedStatuses.indexOf(body.status) >= 0 ? body.status : previousStatus;
   sheet.getRange(rowNumber, 12).setValue(status);
@@ -6191,6 +6195,7 @@ function bridgeExternalSyncV4_(auth, body) {
     }
   });
   const seen = {};
+  let changed = 0;
   entries.forEach(function(entry, index) {
     const virtualDJItemId = clean_(entry.virtualDJItemId || entry.id);
     if (!virtualDJItemId) return;
@@ -6198,13 +6203,37 @@ function bridgeExternalSyncV4_(auth, body) {
     const existing = byVdjId[virtualDJItemId];
     const durationSeconds = Math.max(0, Math.round(Number(entry.durationSeconds) || 0));
     if (existing) {
+      const nextSinger = clean_(entry.singer || entry.name || existing.values[1]);
+      const nextSong = clean_(entry.song || entry.title || existing.values[2]);
+      const nextArtist = clean_(entry.artist || existing.values[3]);
+      const nextFilePath = clean_(entry.filePath || entry.fileName || existing.values[13]);
+      const nextPosition = Math.max(0, Number(entry.index) || index);
+      const previousDuration = durationCellSeconds_(existing.values[6], existing.values[6]);
+      const nextDuration = durationSeconds > 0 ? durationSeconds : previousDuration;
+      if (
+        String(existing.values[11] || "") === "Agregada a VirtualDJ" &&
+        String(existing.values[1] || "") === nextSinger &&
+        String(existing.values[2] || "") === nextSong &&
+        String(existing.values[3] || "") === nextArtist &&
+        String(existing.values[13] || "") === nextFilePath &&
+        Math.max(0, Number(existing.values[22]) || 0) === nextPosition &&
+        String(existing.values[23] || "") === "confirmed" &&
+        Math.abs(previousDuration - nextDuration) < 1
+      ) return;
+      sheet.getRange(existing.row, 2).setValue(nextSinger);
+      sheet.getRange(existing.row, 3).setValue(nextSong);
+      sheet.getRange(existing.row, 4).setValue(nextArtist);
+      if (durationSeconds > 0) {
+        sheet.getRange(existing.row, 7).setValue(durationSeconds / 86400).setNumberFormat("[h]:mm:ss");
+      }
       sheet.getRange(existing.row, 12).setValue("Agregada a VirtualDJ");
-      sheet.getRange(existing.row, 14).setValue(clean_(entry.filePath));
+      sheet.getRange(existing.row, 14).setValue(nextFilePath);
       sheet.getRange(existing.row, 15).setValue(new Date());
-      sheet.getRange(existing.row, 23).setValue(Math.max(0, Number(entry.index) || index));
+      sheet.getRange(existing.row, 23).setValue(nextPosition);
       sheet.getRange(existing.row, 24).setValue("confirmed");
       sheet.getRange(existing.row, 25).setValue(isoNowV4_());
       sheet.getRange(existing.row, 26).setValue(Math.max(0, Number(existing.values[25]) || 0) + 1);
+      changed += 1;
       return;
     }
     const requestId = "vdj-" + virtualDJItemId;
@@ -6220,15 +6249,26 @@ function bridgeExternalSyncV4_(auth, body) {
     ]);
     const addedRow = sheet.getLastRow();
     sheet.getRange(addedRow, 7, 1, 4).setNumberFormat("[h]:mm:ss");
+    changed += 1;
   });
   confirmedMissingIds.forEach(function(virtualDJItemId) {
     const existing = byVdjId[virtualDJItemId];
     if (!existing || seen[virtualDJItemId]) return;
+    if (
+      String(existing.values[11] || "") === "Fuera de VirtualDJ" &&
+      String(existing.values[23] || "") === "confirmed_missing"
+    ) return;
     sheet.getRange(existing.row, 12).setValue("Fuera de VirtualDJ");
     sheet.getRange(existing.row, 15).setValue(new Date());
     sheet.getRange(existing.row, 24).setValue("confirmed_missing");
     sheet.getRange(existing.row, 26).setValue(Math.max(0, Number(existing.values[25]) || 0) + 1);
+    changed += 1;
   });
-  if (entries.length) recalculateActivity_();
-  return { ok: true, externalCount: Object.keys(seen).length };
+  if (changed) recalculateActivity_();
+  return {
+    ok: true,
+    externalCount: Object.keys(seen).length,
+    changed: changed,
+    backupNeeded: changed > 0
+  };
 }
