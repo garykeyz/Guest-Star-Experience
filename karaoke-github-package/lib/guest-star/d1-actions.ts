@@ -21,7 +21,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.3.6";
+export const GUEST_STAR_D1_VERSION = "4.3.7";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -520,9 +520,18 @@ async function recalculateQueue(
   return accumulated;
 }
 
-async function stateFor(db: D1DatabaseLike, hotel: JsonObject, activity: JsonObject) {
+async function stateFor(
+  db: D1DatabaseLike,
+  hotel: JsonObject,
+  activity: JsonObject,
+  knownRequests?: GuestStarRequest[]
+) {
   const runtime = await runtimeFor(db, activity, hotel);
-  const requests = await activeRequests(db, text(hotel.hotelId), text(activity.activityId));
+  const requests = knownRequests || await activeRequests(
+    db,
+    text(hotel.hotelId),
+    text(activity.activityId)
+  );
   const accumulatedSeconds = requests.reduce((total, request) => {
     if (["Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status)) return total;
     return total + Math.max(0, request.durationSeconds) + Math.max(0, request.transitionSeconds || numberValue(activity.defaultTransitionSeconds, 30));
@@ -618,7 +627,7 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
       venueId: context.venue?.venueId || "",
       activityId: freshActivity.activityId
     }),
-    state: await stateFor(db, freshHotel, freshActivity),
+    state: await stateFor(db, freshHotel, freshActivity, requests),
     config: {
       activityHours: numberValue(freshActivity.defaultDurationSeconds, 7200) / 3600,
       transitionSeconds: numberValue(freshActivity.defaultTransitionSeconds, 30)
@@ -2036,18 +2045,45 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
   if (!request || (activityId && request.activityId !== activityId)) return { ok: false, code: "REQUEST_NOT_FOUND" };
   const allowedStatuses = new Set([
     "Pendiente", "Agregada a VirtualDJ", "Ya cantó", "Saltado",
-    "Fuera de VirtualDJ", "No está local", "Eliminada", "Cancelada"
+    "Fuera de VirtualDJ", "No está local", "Eliminada", "Cancelada",
+    "Reagregada a VirtualDJ", "Reenviada a VirtualDJ", "Retirada de rotación"
   ]);
   const requestedStatus = text(body.status);
+  const nextStatus = allowedStatuses.has(requestedStatus) ? requestedStatus : request.status;
+  const nextFileName = body.fileName === undefined ? request.fileName : text(body.fileName);
+  const nextDurationSeconds = body.durationSeconds === undefined
+    ? request.durationSeconds
+    : Math.max(0, numberValue(body.durationSeconds));
+  const nextSourceUrl = body.sourceUrl === undefined ? request.sourceUrl : text(body.sourceUrl);
+  const nextVirtualDJItemId = body.virtualDJItemId === undefined
+    ? request.virtualDJItemId
+    : text(body.virtualDJItemId);
+  const nextQueuePosition = body.queuePosition === undefined
+    ? request.queuePosition
+    : Math.max(0, numberValue(body.queuePosition));
+  const nextSyncState = body.syncState === undefined ? request.syncState : text(body.syncState);
+  const nextLastSeenAt = body.lastSeenAt === undefined ? request.lastSeenAt : text(body.lastSeenAt);
+  if (
+    request.status === nextStatus &&
+    request.fileName === nextFileName &&
+    request.durationSeconds === nextDurationSeconds &&
+    request.sourceUrl === nextSourceUrl &&
+    request.virtualDJItemId === nextVirtualDJItemId &&
+    request.queuePosition === nextQueuePosition &&
+    request.syncState === nextSyncState &&
+    request.lastSeenAt === nextLastSeenAt
+  ) {
+    return { ok: true, request: bridgeRequest(request), backupNeeded: false };
+  }
   const changes: Partial<GuestStarRequest> = {
-    status: allowedStatuses.has(requestedStatus) ? requestedStatus : request.status,
-    fileName: body.fileName === undefined ? request.fileName : text(body.fileName),
-    durationSeconds: body.durationSeconds === undefined ? request.durationSeconds : Math.max(0, numberValue(body.durationSeconds)),
-    sourceUrl: body.sourceUrl === undefined ? request.sourceUrl : text(body.sourceUrl),
-    virtualDJItemId: body.virtualDJItemId === undefined ? request.virtualDJItemId : text(body.virtualDJItemId),
-    queuePosition: body.queuePosition === undefined ? request.queuePosition : Math.max(0, numberValue(body.queuePosition)),
-    syncState: body.syncState === undefined ? request.syncState : text(body.syncState),
-    lastSeenAt: body.lastSeenAt === undefined ? request.lastSeenAt : text(body.lastSeenAt),
+    status: nextStatus,
+    fileName: nextFileName,
+    durationSeconds: nextDurationSeconds,
+    sourceUrl: nextSourceUrl,
+    virtualDJItemId: nextVirtualDJItemId,
+    queuePosition: nextQueuePosition,
+    syncState: nextSyncState,
+    lastSeenAt: nextLastSeenAt,
     stateRevision: request.stateRevision + 1,
     updatedAt: nowIso()
   };
@@ -2056,7 +2092,11 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
   const activity = activityId ? await getRecord(db, "Activities", activityId) : null;
   if (activity) await recalculateQueue(db, hotelId, activity);
   const refreshed = await findActiveRequest(db, hotelId, request.requestId);
-  return { ok: true, request: refreshed ? bridgeRequest(refreshed) : null };
+  return {
+    ok: true,
+    request: refreshed ? bridgeRequest(refreshed) : null,
+    backupNeeded: Boolean(updated)
+  };
 }
 
 async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -2069,7 +2109,13 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
     ? body.confirmedMissingIds.map(text)
     : [];
   const existing = await activeRequests(db, hotelId, activityId);
+  const existingByVirtualId = new Map(
+    existing
+      .filter((item) => item.virtualDJItemId)
+      .map((item) => [item.virtualDJItemId, item])
+  );
   let imported = 0;
+  let changed = 0;
   const seen = new Set<string>();
   const technicalError = (value: unknown) => /^error\s*:\s*-?\d+$/i.test(text(value));
   for (const [entryIndex, entry] of entries.slice(0, 100).entries()) {
@@ -2081,57 +2127,90 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
       technicalError(entry.artist) || technicalError(entry.fileName)
     ) continue;
     seen.add(virtualId);
-    const match = existing.find((item) => item.virtualDJItemId === virtualId);
+    const match = existingByVirtualId.get(virtualId);
     const stamp = nowIso();
+    const nextStatus = text(entry.status) || "Agregada a VirtualDJ";
+    const nextFileName = text(entry.filePath || entry.fileName) || match?.fileName || "";
+    const nextQueuePosition = numberValue(
+      entry.index ?? entry.queuePosition,
+      match?.queuePosition ?? entryIndex
+    );
+    const nextSinger = text(entry.singer || entry.name) || match?.singer || "VirtualDJ";
+    const nextSong = text(entry.song || entry.title) || match?.song || nextFileName || "Untitled";
+    const nextArtist = text(entry.artist) || match?.artist || "";
+    const reportedDuration = numberValue(entry.durationSeconds, 0);
+    const nextDuration = reportedDuration > 0
+      ? reportedDuration
+      : match?.durationSeconds || 0;
+    const unchanged = match !== undefined &&
+      match.status === nextStatus &&
+      match.fileName === nextFileName &&
+      match.queuePosition === nextQueuePosition &&
+      match.syncState === "confirmed" &&
+      match.singer === nextSinger &&
+      match.song === nextSong &&
+      match.artist === nextArtist &&
+      match.durationSeconds === nextDuration;
+    if (unchanged) continue;
     const request: GuestStarRequest = match ? {
       ...match,
-      status: text(entry.status) || "Agregada a VirtualDJ",
-      fileName: text(entry.filePath || entry.fileName) || match.fileName,
-      queuePosition: numberValue(entry.index ?? entry.queuePosition, match.queuePosition),
+      singer: nextSinger,
+      song: nextSong,
+      artist: nextArtist,
+      durationSeconds: nextDuration,
+      status: nextStatus,
+      fileName: nextFileName,
+      queuePosition: nextQueuePosition,
       syncState: "confirmed", lastSeenAt: stamp, updatedAt: stamp,
       stateRevision: match.stateRevision + 1
     } : {
       rowId: randomId(), requestId: `vdj-${virtualId}`, hotelId,
       venueId: text(auth.device.venueId), activityId, cycleId: "",
-      singer: text(entry.singer || entry.name) || "VirtualDJ",
-      song: text(entry.song || entry.title) || text(entry.fileName) || "Untitled",
-      artist: text(entry.artist), comment: "", language: text(entry.language),
+      singer: nextSinger,
+      song: nextSong,
+      artist: nextArtist, comment: "", language: text(entry.language),
       languageCode: languageCode(entry.languageCode || entry.language),
-      durationSeconds: numberValue(entry.durationSeconds), transitionSeconds: 0,
+      durationSeconds: nextDuration, transitionSeconds: 0,
       accumulatedSeconds: 0, remainingSeconds: 0,
-      sourceUrl: text(entry.sourceUrl), status: text(entry.status) || "Agregada a VirtualDJ",
-      fileName: text(entry.filePath || entry.fileName), sourceType: "virtualdj_external",
-      virtualDJItemId: virtualId, queuePosition: numberValue(entry.index ?? entry.queuePosition, entryIndex),
+      sourceUrl: text(entry.sourceUrl), status: nextStatus,
+      fileName: nextFileName, sourceType: "virtualdj_external",
+      virtualDJItemId: virtualId, queuePosition: nextQueuePosition,
       syncState: "confirmed", lastSeenAt: stamp, stateRevision: 1,
       createdAt: stamp, updatedAt: stamp, archivedAt: ""
     };
     await upsertRequest(db, request);
     await appendOutbox(db, "request.upsert", { request });
-    imported += 1;
+    existingByVirtualId.set(virtualId, request);
+    if (!match) imported += 1;
+    changed += 1;
   }
-  const missingIds = new Set([
-    ...confirmedMissingIds,
-    ...existing
-      .filter((item) =>
-        item.sourceType === "virtualdj_external" &&
-        item.virtualDJItemId &&
-        !seen.has(item.virtualDJItemId)
-      )
-      .map((item) => item.virtualDJItemId)
-  ]);
+  const missingIds = new Set(confirmedMissingIds);
   for (const virtualId of missingIds) {
     if (seen.has(virtualId)) continue;
-    const match = existing.find((item) => item.virtualDJItemId === virtualId);
-    if (!match) continue;
+    const match = existingByVirtualId.get(virtualId);
+    if (!match || match.sourceType !== "virtualdj_external") continue;
+    if (
+      match.status === "Fuera de VirtualDJ" &&
+      match.syncState === "confirmed_missing"
+    ) continue;
     const updated = await updateActiveRequest(db, hotelId, match.requestId, {
       status: "Fuera de VirtualDJ", syncState: "confirmed_missing",
       stateRevision: match.stateRevision + 1, updatedAt: nowIso()
     });
-    if (updated) await appendOutbox(db, "request.upsert", { request: updated });
+    if (updated) {
+      await appendOutbox(db, "request.upsert", { request: updated });
+      changed += 1;
+    }
   }
   const activity = await getRecord(db, "Activities", activityId);
-  if (activity) await recalculateQueue(db, hotelId, activity);
-  return { ok: true, imported, externalCount: seen.size, requests: (await activeRequests(db, hotelId, activityId)).map(bridgeRequest) };
+  if (changed && activity) await recalculateQueue(db, hotelId, activity);
+  return {
+    ok: true,
+    imported,
+    changed,
+    externalCount: seen.size,
+    backupNeeded: changed > 0
+  };
 }
 
 async function changePassword(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -2472,12 +2551,9 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
       ok: true,
       id: exactExisting.requestId,
       deduplicated: true,
-      state: await publicExperience(db, hotel, publicActivityId)
+      backupNeeded: false
     };
   }
-  const requestFingerprint = guestIdentity || limitedText(body._requestFingerprint, 240) || duplicateKey(singer);
-  const rateKey = `request:${(await sha256Hex(`${hotelId}:${requestFingerprint}`)).slice(0, 32)}`;
-  if (!await checkRateLimit(db, rateKey, 8, 60)) return { ok: false, code: "RATE_LIMITED" };
   const repeatedSinger = requests.some((request) => {
     const existingIdentity = publicGuestIdentityFromSource(request.sourceType);
     if (guestIdentity && existingIdentity) return guestIdentity === existingIdentity;
@@ -2493,6 +2569,9 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
       state: await publicExperience(db, hotel, publicActivityId)
     };
   }
+  const requestFingerprint = guestIdentity || limitedText(body._requestFingerprint, 240) || duplicateKey(singer);
+  const rateKey = `request:${(await sha256Hex(`${hotelId}:${requestFingerprint}`)).slice(0, 32)}`;
+  if (!await checkRateLimit(db, rateKey, 8, 60)) return { ok: false, code: "RATE_LIMITED" };
   const durationSeconds = Math.max(0, numberValue(body.durationSeconds));
   const transitionSeconds = Math.max(0, numberValue(activity.defaultTransitionSeconds, 30));
   const previousAccumulated = requests.reduce((maximum, request) => Math.max(maximum, request.accumulatedSeconds), 0);
@@ -2518,8 +2597,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   };
   await upsertRequest(db, request);
   await appendOutbox(db, "request.upsert", { request });
-  await recalculateQueue(db, hotelId, activity);
-  return { ok: true, id: request.requestId, state: await publicExperience(db, hotel, publicActivityId) };
+  return { ok: true, id: request.requestId, backupNeeded: true };
 }
 
 export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): Promise<JsonObject | null> {

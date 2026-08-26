@@ -49,12 +49,16 @@ export function normalizeQueueState(value = {}) {
   const recoveries = Array.isArray(value.recoveries)
     ? value.recoveries.map(cleanRecovery).filter(Boolean)
     : [];
+  const removedIds = Array.isArray(value.removedIds)
+    ? [...new Set(value.removedIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    : [];
   return {
     activityId: String(value.activityId || "").trim(),
     activityStartedAt: String(value.activityStartedAt || "").trim(),
     entries,
     suppressedIds,
-    recoveries
+    recoveries,
+    removedIds
   };
 }
 
@@ -72,14 +76,16 @@ export async function saveQueueState(
   entries,
   suppressedIds = [],
   recoveries = [],
-  activityStartedAt = ""
+  activityStartedAt = "",
+  removedIds = []
 ) {
   const clean = normalizeQueueState({
     activityId,
     activityStartedAt,
     entries: Array.from(entries || []),
     suppressedIds: Array.from(suppressedIds || []),
-    recoveries: Array.from(recoveries || [])
+    recoveries: Array.from(recoveries || []),
+    removedIds: Array.from(removedIds || [])
   });
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");

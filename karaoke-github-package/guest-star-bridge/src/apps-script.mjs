@@ -9,7 +9,7 @@ async function parseResponse(response) {
 }
 
 const REQUIRED_CODE_VERSION = "4.2.0";
-const BRIDGE_APP_VERSION = "4.3.6";
+const BRIDGE_APP_VERSION = "4.3.7";
 const APPS_SCRIPT_TIMEOUT_MS = 70000;
 
 function endpoint(config) {

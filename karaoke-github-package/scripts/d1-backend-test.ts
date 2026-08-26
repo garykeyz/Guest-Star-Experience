@@ -116,6 +116,10 @@ const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
 const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
 assert.match(rootPageSource, /isHostPanelHostname\(hostname\)/,
   "the production host domain root must render the Host Panel");
+assert.match(rootPageSource, /"use client"/,
+  "the root experience must be prerenderable as a static Cloudflare asset");
+assert.doesNotMatch(rootPageSource, /from "next\/headers"/,
+  "root navigation must not spend Worker CPU resolving the hostname");
 assert.match(hostPanelSource, /name="venueId" required/,
   "activity creation must require an explicit venue selection");
 assert.match(hostPanelSource, /action:"updateVenue"/,
@@ -161,19 +165,29 @@ assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1
 assert.match(hostRouteSource, /READ_ONLY_D1_ACTIONS\.has\(action\)/,
   "read-only Host polling must never start a background backup");
 assert.match(bridgeRouteSource, /"pollBridgeCommands", "bridgeHeartbeat"/,
-  "Bridge polling and heartbeats must stay out of the Sheets backup pipeline");
-assert.match(karaokeRouteSource, /if \(data\.ok === true\) scheduleD1Backup\(db\)/,
-  "successful public mutations must still schedule a small backup batch");
+  "Bridge polling and heartbeats must remain classified as read-only actions");
+assert.match(bridgeRouteSource, /BACKUP_MAINTENANCE_ACTIONS = new Set\(\["bridgeHeartbeat"\]\)/,
+  "a heartbeat may drain an existing backlog through the global backup lease");
+assert.match(karaokeRouteSource, /data\.ok === true && data\.backupNeeded !== false/,
+  "successful public mutations must schedule backup only when data changed");
 assert.doesNotMatch(karaokeRouteSource.split("export async function POST")[0], /scheduleD1Backup\(db\)/,
   "public status polling must never trigger Sheets backup work");
-assert.match(upstreamSource, /flushD1Backup\(db, 20\)/,
+assert.match(upstreamSource, /return flushD1Backup\(db, 20\)/,
   "background backup must drain only one bounded batch per mutation");
 assert.match(upstreamSource, /new WeakMap<object, Promise<unknown>>\(\)/,
   "concurrent mutation backups must be coalesced per D1 binding");
+assert.match(upstreamSource, /sheets_backup_delivery_lease/,
+  "backup delivery must be coalesced globally across Worker isolates");
+assert.match(upstreamSource, /BACKUP_LEASE_MS = 90_000/,
+  "the Sheets mirror must have a global cooldown against request bursts");
 assert.match(publicExperienceSource, /setInterval\(refreshStatus,15000\)/,
   "public status polling must use the Worker-safe interval");
 assert.match(publicExperienceSource, /!hasLoadedPublicState\.current&&code==="PUBLIC_LINK_NOT_FOUND"/,
   "a transient poll failure must not replace valid public state with a false inactive-link banner");
+assert.match(publicExperienceSource, /unavailableConfirmations\.current>=3/,
+  "an inactive-link banner must require three confirmed responses");
+assert.match(publicExperienceSource, /transientRetries:5/,
+  "song submissions must retry transient Worker or network failures safely");
 
 const googleClientId = "guest-star-test.apps.googleusercontent.com";
 const googleKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -287,7 +301,7 @@ await setD1BackendMode(db, "d1_primary");
 assert.equal(await backendMode(db), "d1_primary");
 
 const googleBridgeLogin = await loginD1WithVerifiedGoogle(db, verifiedGoogle.email, {
-  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.6",
+  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.7",
   rememberLogin: true
 }) as Record<string, unknown>;
 assert.equal(googleBridgeLogin?.ok, true,
@@ -295,7 +309,7 @@ assert.equal(googleBridgeLogin?.ok, true,
 assert.ok(String(googleBridgeLogin?.authToken || "").length >= 40);
 assert.ok(String(googleBridgeLogin?.deviceToken || "").length >= 40);
 assert.equal(((await loginD1WithVerifiedGoogle(db, "unknown@example.com", {
-  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.6"
+  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.7"
 })) as Record<string, unknown>).code, "GOOGLE_ACCOUNT_NOT_REGISTERED",
 "Google login must never create an unregistered Guest Star account implicitly");
 
@@ -353,7 +367,14 @@ externalRows = await activeRequests(db, hotelId, activityId);
 assert.equal(externalRows.some((item) => item.virtualDJItemId === "error-entry"), false,
   "Network Control HRESULT values must never be stored as requests");
 assert.equal(externalRows.find((item) => item.virtualDJItemId === "external-vdj-1")?.status,
-  "Fuera de VirtualDJ", "a complete VDJ snapshot must retire stale external rows after a restart");
+  "Agregada a VirtualDJ", "one incomplete VDJ snapshot must not retire a live row");
+assert.equal((await handleD1HostAction(db, {
+  action: "bridgeExternalSync", ...bridgeAuth,
+  entries: [], confirmedMissingIds: ["external-vdj-1"]
+}))?.ok, true);
+externalRows = await activeRequests(db, hotelId, activityId);
+assert.equal(externalRows.find((item) => item.virtualDJItemId === "external-vdj-1")?.status,
+  "Fuera de VirtualDJ", "only a locally confirmed absence may retire an external VDJ row");
 const oneTimeCode = await handleD1HostAction(db, {
   action: "createOneTimeLoginCode", ...bridgeAuth
 });
@@ -498,6 +519,43 @@ assert.equal(alexRequests.length, 2,
   "an idempotent retry must stay single while a second Alex on another device remains distinct");
 assert.notEqual(alexRequests[0].sourceType, alexRequests[1].sourceType,
   "different guest devices must receive different anonymous identities");
+const burstStartedAt = performance.now();
+const burstResults = await Promise.all(
+  Array.from({ length: 200 }, (_, index) => handleD1PublicPost(db, {
+    publicCode: "moon-palace-public-test-code",
+    guestDeviceId: `burst-device-${String(index).padStart(6, "0")}`,
+    name: `Burst Guest ${index + 1}`,
+    song: `Burst Song ${index + 1}`,
+    artist: `Burst Artist ${index + 1}`,
+    language: "Español",
+    languageCode: "es",
+    comment: ""
+  }))
+);
+const burst200Ms = performance.now() - burstStartedAt;
+assert.equal(burstResults.filter((result) => result.ok === true).length, 200,
+  "two hundred independent guests must be accepted in one simultaneous burst");
+assert.equal((await activeRequests(db, hotelId, activityId))
+  .filter((request) => request.singer.startsWith("Burst Guest ")).length, 200,
+  "a simultaneous burst must not lose or merge requests from different devices");
+const sameDeviceResults = [];
+for (let index = 0; index < 9; index += 1) {
+  sameDeviceResults.push(await handleD1PublicPost(db, {
+    publicCode: "moon-palace-public-test-code",
+    guestDeviceId: "same-device-rate-limit-1234567890",
+    name: "Rate Test Guest",
+    song: `Rate Test Song ${index + 1}`,
+    artist: `Rate Test Artist ${index + 1}`,
+    language: "Español",
+    languageCode: "es",
+    confirmDuplicate: true,
+    comment: ""
+  }));
+}
+assert.equal(sameDeviceResults.slice(0, 8).every((result) => result.ok === true), true,
+  "one device must be able to complete eight distinct requests per minute");
+assert.equal(sameDeviceResults[8].code, "RATE_LIMITED",
+  "the ninth completed request from one device in a minute must be rate-limited");
 assert.equal((await handleD1HostAction(db, {
   action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
 }))?.ok, true, "starting a new cycle must archive the previous D1 queue");
@@ -767,5 +825,6 @@ console.log("D1 backend tests passed", {
   users: health.counts.users,
   pendingBackupEvents: health.backup.pending,
   publicRequestId: publicRequest.id,
+  burst200Ms: Number(burst200Ms.toFixed(1)),
   sessionP95Ms: Number(sessionP95.toFixed(3))
 });

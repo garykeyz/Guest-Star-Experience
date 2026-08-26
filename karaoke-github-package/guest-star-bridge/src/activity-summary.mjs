@@ -58,7 +58,7 @@ export function buildActivitySummary(
 
   for (const item of requests) {
     const seconds = requestPlannedSeconds(item, fallbackTransition);
-    const outcome = requestOutcome(item?.status);
+    const outcome = item?.outcome || requestOutcome(item?.status);
     if (outcome === "skipped") {
       skippedSeconds += seconds;
       continue;

@@ -85,6 +85,8 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     lastAction: "setup",
     lastSource: "sheet"
   };
+  let ignoreNextTerminalUpdate = true;
+  let omitRequestsOnce = false;
   const sheetServer = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -95,8 +97,9 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
         ok: true,
         codeVersion: "4.2.0",
         state: { ...activity },
-        requests
+        requests: omitRequestsOnce ? [] : requests
       };
+      omitRequestsOnce = false;
     } else if (body.action === "bridgeControl") {
       activity.stateRevision += 1;
       activity.lastAction = body.control;
@@ -118,7 +121,12 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     } else if (body.action === "bridgeUpdate") {
       const item = requests.find((entry) => entry.id === body.id);
       if (item) {
-        item.status = body.status;
+        const terminalUpdate = ["Ya cantó", "Saltado"].includes(body.status);
+        if (terminalUpdate && ignoreNextTerminalUpdate) {
+          ignoreNextTerminalUpdate = false;
+        } else {
+          item.status = body.status;
+        }
         item.fileName = body.fileName || item.fileName;
         if (Number(body.durationSeconds) > 0) {
           item.durationSeconds = Number(body.durationSeconds);
@@ -346,6 +354,37 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     true
   );
   assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
+
+  omitRequestsOnce = true;
+  await fetch(`${bridgeUrl}/api/requests/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  });
+  state = await fetch(`${bridgeUrl}/api/requests/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  assert.equal(
+    state.requests.find((item) => item.id === "request-1").outcome,
+    "completed",
+    "a stale non-terminal response must not erase the local terminal tombstone"
+  );
+  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);
+  const blockedTerminalRequeue = await fetch(
+    `${bridgeUrl}/api/requests/request-1/queue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: localSong })
+    }
+  );
+  assert.equal(blockedTerminalRequeue.status, 400);
+  assert.match(
+    (await blockedTerminalRequeue.json()).error,
+    /already marked completed or skipped/
+  );
 
   const undoneToOriginalTurn = await fetch(
     `${bridgeUrl}/api/requests/request-1/undo-outcome`,

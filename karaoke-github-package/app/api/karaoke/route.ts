@@ -113,7 +113,9 @@ export async function POST(request: NextRequest) {
       await ensureD1Schema(db);
       if (await backendMode(db) === "d1_primary") {
         const data = await handleD1PublicPost(db, parsed);
-        if (data.ok === true) scheduleD1Backup(db);
+        if (data.ok === true && data.backupNeeded !== false) {
+          scheduleD1Backup(db);
+        }
         return NextResponse.json(data, {
           status: 200,
           headers: { "Cache-Control": "no-store" }

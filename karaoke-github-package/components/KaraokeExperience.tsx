@@ -64,6 +64,7 @@ type ApiResponse = ApiState & {
   duplicates?: DuplicateWarning;
   externalReview?: { provider?: string; url?: string; guestCanChoose?: boolean } | null;
 };
+type ApiOptions = { transientRetries?: number };
 type DuplicateWarning = {
   repeatedSinger?: boolean;
   duplicateSong?: boolean;
@@ -102,6 +103,7 @@ type ModuleCopy = {
 
 const ENDPOINT = "/api/karaoke";
 const GUEST_DEVICE_STORAGE_KEY = "guest-star-public-device-v1";
+const TRANSIENT_RETRY_DELAYS_MS = [200, 500, 1000, 2000, 4000, 6000];
 let ephemeralGuestDeviceId = "";
 
 function newGuestDeviceId() {
@@ -243,26 +245,58 @@ const copy: Record<Lang, Copy> = {
 };
 const icons = { name: UserRound, song: Music2, artist: Mic2, comment: MessageCircleMore };
 
-async function api(url = ENDPOINT, init?: RequestInit): Promise<ApiResponse> {
-  const response = await fetch(url, {
-    ...init,
-    cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {})
-    }
-  });
-  const data = await response.json().catch(() => ({})) as ApiResponse;
-  if (!response.ok || data.ok === false) {
-    const error = new Error(data.error || data.code || "REQUEST_FAILED");
-    Object.assign(error, data);
-    throw error;
-  }
-  return data;
+function retryDelay(attempt: number) {
+  const base = TRANSIENT_RETRY_DELAYS_MS[Math.min(attempt, TRANSIENT_RETRY_DELAYS_MS.length - 1)];
+  return base + Math.floor(Math.random() * Math.max(50, base * .2));
 }
 
-function post(data: Record<string, unknown>) {
-  return api(ENDPOINT, { method: "POST", body: JSON.stringify(data) });
+function wait(milliseconds: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function api(url = ENDPOINT, init?: RequestInit, options: ApiOptions = {}): Promise<ApiResponse> {
+  const retries = Math.max(0, Math.min(6, Math.floor(options.transientRetries || 0)));
+  let lastError: Error = new Error("REQUEST_FAILED");
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          ...(init?.headers || {})
+        }
+      });
+      let data: ApiResponse;
+      try {
+        data = await response.json() as ApiResponse;
+      } catch {
+        const invalid = new Error("INVALID_SERVER_RESPONSE");
+        Object.assign(invalid, { transient: true, httpStatus: response.status });
+        throw invalid;
+      }
+      if (!response.ok || data.ok === false) {
+        const error = new Error(data.error || data.code || "REQUEST_FAILED");
+        Object.assign(error, data, {
+          httpStatus: response.status,
+          transient: response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500
+        });
+        throw error;
+      }
+      return data;
+    } catch (caught) {
+      const error = caught instanceof Error ? caught : new Error(String(caught || "REQUEST_FAILED"));
+      lastError = error;
+      const transient = (error as Error & { transient?: boolean }).transient !== false;
+      if (!transient || attempt >= retries) throw error;
+      await wait(retryDelay(attempt));
+    }
+  }
+  throw lastError;
+}
+
+function post(data: Record<string, unknown>, options: ApiOptions = {}) {
+  return api(ENDPOINT, { method: "POST", body: JSON.stringify(data) }, options);
 }
 
 function acceptingFrom(data: ApiResponse) {
@@ -304,6 +338,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const [reminderSent,setReminderSent]=useState(false);
   const [moduleError,setModuleError]=useState("");
   const hasLoadedPublicState=useRef(false);
+  const unavailableConfirmations=useRef(0);
   const [externalReview,setExternalReview]=useState<{provider?:string;url?:string}|null>(null);
   const text=copy[lang||"en"];
   const warningText=duplicateCopy[lang||"en"];
@@ -388,9 +423,10 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
           t:String(Date.now())
         });
         if(hotelCode)query.set("hotel",hotelCode);
-        const data=await api(`${ENDPOINT}?${query.toString()}`);
+        const data=await api(`${ENDPOINT}?${query.toString()}`,undefined,{transientRetries:2});
         if(mounted){
           hasLoadedPublicState.current=true;
+          unavailableConfirmations.current=0;
           setAccepting(acceptingFrom(data));
           setActivity(stateFrom(data));
           setBootstrapError("");
@@ -398,7 +434,8 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       }catch(error){
         const code=String((error as ApiResponse)?.code||"");
         if(mounted&&!hasLoadedPublicState.current&&code==="PUBLIC_LINK_NOT_FOUND"){
-          setBootstrapError(hotelCode?"UNAVAILABLE":"");
+          unavailableConfirmations.current+=1;
+          if(unavailableConfirmations.current>=3)setBootstrapError(hotelCode?"UNAVAILABLE":"");
         }
       }
     };
@@ -445,9 +482,9 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
           active[0] === "de" ? "german" :
           active[0] === "ru" ? "russian" : "portuguese",
         confirmDuplicate
-      });
+      },{transientRetries:5});
       setAccepting(acceptingFrom(data));
-      setActivity(stateFrom(data));
+      setActivity(previous=>({...previous,...stateFrom(data)}));
       setDuplicateWarning(null);
       setDone(true);
     }catch(error){

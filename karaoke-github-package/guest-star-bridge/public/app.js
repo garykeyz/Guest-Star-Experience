@@ -10,6 +10,7 @@ const ACTIVITY_LANGUAGES = [
   ["pt", "#activityLanguagePt"]
 ];
 const requestsEl = $("#requests");
+const finishedRequestsEl = $("#finishedRequests");
 const noticeEl = $("#notice");
 const settingsDialog = $("#settingsDialog");
 const successDialog = $("#successDialog");
@@ -953,19 +954,14 @@ function requestTimelines(items) {
 
 function renderRequests() {
   requestsEl.innerHTML = "";
-  if (!state.requests.length) {
-    requestsEl.innerHTML =
-      '<div class="empty-state"><span>🎤</span><strong>No active requests.</strong><p>Guest song requests will appear here.</p></div>';
-    return;
-  }
+  finishedRequestsEl.innerHTML = "";
   const template = $("#requestTemplate");
   const timelines = requestTimelines(state.requests);
   const groups = new Map();
   [
-    ["pending", "Waiting to Enter the Queue", "In arrival order"],
-    ["queued", "In the VirtualDJ Queue", "Verified in real time"],
-    ["finished", "Completed / Finished", "Actions can be undone and restored"]
-  ].forEach(([key, title, detail]) => {
+    ["active", "Active Requests", "Pending and linked, in arrival order", requestsEl],
+    ["finished", "Completed / Skipped", "Only Undo can return them to the rotation", finishedRequestsEl]
+  ].forEach(([key, title, detail, target]) => {
     const section = document.createElement("section");
     section.className = `request-group ${key}`;
     const header = document.createElement("header");
@@ -983,7 +979,7 @@ function renderRequests() {
     const list = document.createElement("div");
     list.className = "request-list";
     section.append(header, list);
-    requestsEl.append(section);
+    target.append(section);
     groups.set(key, { list, count, total: 0 });
   });
   state.requests.forEach((item, index) => {
@@ -1254,7 +1250,7 @@ function renderRequests() {
         element.disabled = true;
       });
     }
-    const groupKey = isTerminal ? "finished" : item.queued === true ? "queued" : "pending";
+    const groupKey = isTerminal ? "finished" : "active";
     const group = groups.get(groupKey);
     group.total += 1;
     group.count.textContent = group.total;

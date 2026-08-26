@@ -271,12 +271,16 @@ test("identifica al huésped por dispositivo y suprime solicitudes repetidas", (
   assert.match(serverSource, /virtualDjSingerLabel/);
 });
 
-test("separa solicitudes compactas por estado sin perder el orden de llegada", () => {
-  assert.match(appSource, /Waiting to Enter the Queue/);
-  assert.match(appSource, /In the VirtualDJ Queue/);
-  assert.match(appSource, /Completed \/ Finished/);
+test("muestra solicitudes y VDJ lado a lado con resultados compactos debajo", () => {
+  assert.match(appSource, /Active Requests/);
+  assert.match(appSource, /Completed \/ Skipped/);
+  assert.match(appSource, /const groupKey = isTerminal \? "finished" : "active"/);
   assert.match(appSource, /Arrival #\$\{arrival\.number\}/);
   assert.match(appSource, /requested total at arrival/);
+  assert.match(bridgeHtml, /class="live-queue-workspace"/);
+  assert.match(bridgeHtml, /id="finishedRequests"/);
+  assert.match(bridgeStyles, /\.live-queue-workspace\s*\{[^}]*grid-template-columns/);
+  assert.match(bridgeStyles, /\.request-results \.request-list\s*\{[^}]*grid-template-columns/);
   assert.match(bridgeHtml, /class="request-details"/);
   assert.match(bridgeHtml, /id="primaryActivity"/);
   assert.match(bridgeHtml, /id="requestsToggle"/);
@@ -345,8 +349,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.6"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.6/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.7"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.7/);
   assert.match(hostPanelSource, /Service v/);
 });
 
@@ -354,6 +358,15 @@ test("si una canción desaparece, pregunta si fue intencional", () => {
   assert.match(appSource, /Did you remove it intentionally\?/);
   assert.match(appSource, /No — Re-add at the End/);
   assert.match(appSource, /Yes — Keep It Outside/);
+});
+
+test("las decisiones terminales sobreviven lecturas atrasadas y reinicios", () => {
+  assert.match(serverSource, /function effectiveRequestOutcome/);
+  assert.match(serverSource, /storedQueueState\.removedIds/);
+  assert.match(serverSource, /request_temporarily_missing_from_sync/);
+  assert.match(serverSource, /lastExternalSyncSignature/);
+  assert.match(serverSource, /if \(effectiveRequestOutcome\(item\)\) continue/);
+  assert.match(serverSource, /This request was already marked completed or skipped/);
 });
 
 test("la página incluye un favicon propio de Guest Star", () => {
