@@ -109,6 +109,8 @@ const hostPanelSource = readFileSync("components/HostPanel.tsx", "utf8");
 const publicExperienceSource = readFileSync("components/KaraokeExperience.tsx", "utf8");
 const globalCssSource = readFileSync("app/globals.css", "utf8");
 const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
+const bridgeRouteSource = readFileSync("app/api/bridge/route.ts", "utf8");
+const karaokeRouteSource = readFileSync("app/api/karaoke/route.ts", "utf8");
 const appsScriptSource = readFileSync("google-apps-script/Code.gs", "utf8");
 const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
 const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
@@ -156,10 +158,22 @@ assert.match(globalCssSource, /filter:brightness\(\.58\) contrast\(1\.85\)/,
   "very pale hotel logos must receive enough contrast to remain visible");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
   "migration, backup, and legacy storage controls must stay out of the operational panel");
-assert.doesNotMatch(hostRouteSource, /!\["me", "adminState"\]\.includes\(action\)/,
-  "opening the panel must also trigger a non-blocking automatic backup");
-assert.match(upstreamSource, /flushD1BackupFully\(db, 4\)/,
-  "background backup must drain multiple batches without requiring a user button");
+assert.match(hostRouteSource, /READ_ONLY_D1_ACTIONS\.has\(action\)/,
+  "read-only Host polling must never start a background backup");
+assert.match(bridgeRouteSource, /"pollBridgeCommands", "bridgeHeartbeat"/,
+  "Bridge polling and heartbeats must stay out of the Sheets backup pipeline");
+assert.match(karaokeRouteSource, /if \(data\.ok === true\) scheduleD1Backup\(db\)/,
+  "successful public mutations must still schedule a small backup batch");
+assert.doesNotMatch(karaokeRouteSource.split("export async function POST")[0], /scheduleD1Backup\(db\)/,
+  "public status polling must never trigger Sheets backup work");
+assert.match(upstreamSource, /flushD1Backup\(db, 20\)/,
+  "background backup must drain only one bounded batch per mutation");
+assert.match(upstreamSource, /new WeakMap<object, Promise<unknown>>\(\)/,
+  "concurrent mutation backups must be coalesced per D1 binding");
+assert.match(publicExperienceSource, /setInterval\(refreshStatus,15000\)/,
+  "public status polling must use the Worker-safe interval");
+assert.match(publicExperienceSource, /!hasLoadedPublicState\.current&&code==="PUBLIC_LINK_NOT_FOUND"/,
+  "a transient poll failure must not replace valid public state with a false inactive-link banner");
 
 const googleClientId = "guest-star-test.apps.googleusercontent.com";
 const googleKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -273,7 +287,7 @@ await setD1BackendMode(db, "d1_primary");
 assert.equal(await backendMode(db), "d1_primary");
 
 const googleBridgeLogin = await loginD1WithVerifiedGoogle(db, verifiedGoogle.email, {
-  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.5",
+  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.6",
   rememberLogin: true
 }) as Record<string, unknown>;
 assert.equal(googleBridgeLogin?.ok, true,
@@ -281,7 +295,7 @@ assert.equal(googleBridgeLogin?.ok, true,
 assert.ok(String(googleBridgeLogin?.authToken || "").length >= 40);
 assert.ok(String(googleBridgeLogin?.deviceToken || "").length >= 40);
 assert.equal(((await loginD1WithVerifiedGoogle(db, "unknown@example.com", {
-  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.5"
+  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.6"
 })) as Record<string, unknown>).code, "GOOGLE_ACCOUNT_NOT_REGISTERED",
 "Google login must never create an unregistered Guest Star account implicitly");
 

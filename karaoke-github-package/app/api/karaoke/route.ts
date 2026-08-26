@@ -70,7 +70,6 @@ export async function GET(request: NextRequest) {
       await ensureD1Schema(db);
       if (await backendMode(db) === "d1_primary") {
         const data = await handleD1PublicGet(db, request.nextUrl.searchParams);
-        scheduleD1Backup(db);
         return NextResponse.json(data, {
           status: 200,
           headers: { "Cache-Control": "no-store" }
@@ -114,7 +113,7 @@ export async function POST(request: NextRequest) {
       await ensureD1Schema(db);
       if (await backendMode(db) === "d1_primary") {
         const data = await handleD1PublicPost(db, parsed);
-        scheduleD1Backup(db);
+        if (data.ok === true) scheduleD1Backup(db);
         return NextResponse.json(data, {
           status: 200,
           headers: { "Cache-Control": "no-store" }

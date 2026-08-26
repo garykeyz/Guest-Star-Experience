@@ -34,6 +34,9 @@ const DEFAULT_APPS_SCRIPT_TIMEOUT_MS = 30_000;
 const HOTEL_PROVISIONING_TIMEOUT_MS = 120_000;
 const MIGRATION_TIMEOUT_MS = 180_000;
 const MAX_HOST_BODY_BYTES = 128 * 1024;
+const READ_ONLY_D1_ACTIONS = new Set([
+  "me", "adminState", "activityState", "listReviews", "hotelShare", "youtubeSearchV4"
+]);
 
 export const dynamic = "force-dynamic";
 
@@ -264,7 +267,7 @@ export async function POST(request: NextRequest) {
         ok: false,
         code: "D1_ACTION_NOT_IMPLEMENTED"
       };
-      scheduleD1Backup(db);
+      if (data.ok === true && !READ_ONLY_D1_ACTIONS.has(action)) scheduleD1Backup(db);
     } else {
       const timeoutMs = action === "createHotel"
         ? HOTEL_PROVISIONING_TIMEOUT_MS
