@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, FormEvent, useEffect, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { normalizeBrandImageUrl } from "@/lib/guest-star/media-url";
 import {
@@ -303,6 +303,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const [reminderConsent,setReminderConsent]=useState(false);
   const [reminderSent,setReminderSent]=useState(false);
   const [moduleError,setModuleError]=useState("");
+  const hasLoadedPublicState=useRef(false);
   const [externalReview,setExternalReview]=useState<{provider?:string;url?:string}|null>(null);
   const text=copy[lang||"en"];
   const warningText=duplicateCopy[lang||"en"];
@@ -389,16 +390,22 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
         if(hotelCode)query.set("hotel",hotelCode);
         const data=await api(`${ENDPOINT}?${query.toString()}`);
         if(mounted){
+          hasLoadedPublicState.current=true;
           setAccepting(acceptingFrom(data));
           setActivity(stateFrom(data));
           setBootstrapError("");
         }
-      }catch{
-        if(mounted)setBootstrapError(hotelCode?"UNAVAILABLE":"");
+      }catch(error){
+        const code=String((error as ApiResponse)?.code||"");
+        if(mounted&&!hasLoadedPublicState.current&&code==="PUBLIC_LINK_NOT_FOUND"){
+          setBootstrapError(hotelCode?"UNAVAILABLE":"");
+        }
       }
     };
     refreshStatus();
-    const id=window.setInterval(refreshStatus,5000);
+    // Fifteen seconds is responsive for request-open/closed changes while
+    // keeping the public page comfortably below Workers Free request limits.
+    const id=window.setInterval(refreshStatus,15000);
     return()=>{mounted=false;clearInterval(id);};
   },[hotelCode]);
 

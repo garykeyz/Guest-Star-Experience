@@ -21,7 +21,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.3.5";
+export const GUEST_STAR_D1_VERSION = "4.3.6";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -1944,7 +1944,7 @@ async function bridgeHeartbeat(db: D1DatabaseLike, auth: Auth, body: JsonObject)
     bridgeVersion: text(body.bridgeVersion) || text(auth.device.bridgeVersion),
     virtualDJConnected: body.virtualDJConnected === true,
     lastHeartbeatAt: nowIso(), updatedAt: nowIso()
-  }) || auth.device;
+  }, "master", false) || auth.device;
   return { ok: true, serverNow: nowIso(), deviceId: device.deviceId };
 }
 
@@ -2366,7 +2366,6 @@ export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchPar
   let context = await resolvePublicContext(db, identifier);
   if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   await processD1ActivitySchedules(db, text(context.hotel.hotelId));
-  context = await resolvePublicContext(db, identifier) || context;
   return publicExperience(db, context.hotel, context.activityId);
 }
 
@@ -2382,7 +2381,6 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   let publicContext = await resolvePublicContext(db, identifier);
   if (!publicContext) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   await processD1ActivitySchedules(db, text(publicContext.hotel.hotelId));
-  publicContext = await resolvePublicContext(db, identifier) || publicContext;
   const hotel = publicContext.hotel;
   const publicActivityId = publicContext.activityId;
   const hotelId = text(hotel.hotelId);

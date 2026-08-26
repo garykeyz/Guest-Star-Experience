@@ -40,10 +40,10 @@ export async function callAppsScript(
   }
 }
 
-export async function flushD1Backup(db: D1DatabaseLike) {
+export async function flushD1Backup(db: D1DatabaseLike, limit = 20) {
   const secret = await getMeta(db, "sheets_backup_secret");
   if (!secret) return { ok: false, code: "BACKUP_NOT_CONFIGURED" };
-  const events = await pendingOutbox(db, 50);
+  const events = await pendingOutbox(db, Math.max(1, Math.min(20, Math.round(limit))));
   if (!events.length) return { ok: true, delivered: 0 };
   const ids = events.map((event) => event.eventId);
   try {
@@ -80,8 +80,20 @@ export async function flushD1BackupFully(db: D1DatabaseLike, maxBatches = 10) {
     : { ok: true, delivered, pending: 0 };
 }
 
+const scheduledBackups = new WeakMap<object, Promise<unknown>>();
+
 export function scheduleD1Backup(db: D1DatabaseLike) {
-  const operation = flushD1BackupFully(db, 4).catch(() => ({ ok: false }));
+  const key = db as object;
+  let operation = scheduledBackups.get(key);
+  if (!operation) {
+    // A normal request only drains one small batch. Read-only polling never
+    // calls this function, and concurrent mutations in the same isolate share
+    // the same operation instead of multiplying Apps Script/D1 work.
+    operation = flushD1Backup(db, 20)
+      .catch(() => ({ ok: false }))
+      .finally(() => scheduledBackups.delete(key));
+    scheduledBackups.set(key, operation);
+  }
   try {
     getCloudflareContext().ctx.waitUntil(operation);
   } catch {

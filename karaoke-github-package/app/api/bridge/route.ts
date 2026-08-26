@@ -7,6 +7,10 @@ import { callAppsScript, scheduleD1Backup } from "@/lib/guest-star/upstream";
 
 const MAX_BODY_BYTES = 512 * 1024;
 const APPS_SCRIPT_TIMEOUT_MS = 60_000;
+const READ_ONLY_D1_ACTIONS = new Set([
+  "me", "adminState", "activityState", "listReviews", "hotelShare",
+  "youtubeSearchV4", "pollBridgeCommands", "bridgeHeartbeat"
+]);
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +19,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.3.5"
+      "X-Guest-Star-Bridge-Proxy": "4.3.6"
     }
   });
 }
@@ -58,7 +62,7 @@ export async function POST(request: NextRequest) {
         clientType: "bridge",
         deviceId: String(payload.deviceId || ""),
         deviceName: String(payload.deviceName || "Guest Star Bridge"),
-        bridgeVersion: String(payload.bridgeVersion || "4.3.5"),
+        bridgeVersion: String(payload.bridgeVersion || "4.3.6"),
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {
@@ -80,7 +84,7 @@ export async function POST(request: NextRequest) {
           ok: false,
           code: "D1_ACTION_NOT_IMPLEMENTED"
         };
-        if (!["me", "activityState", "pollBridgeCommands"].includes(String(payload.action))) {
+        if (data.ok === true && !READ_ONLY_D1_ACTIONS.has(action)) {
           scheduleD1Backup(db);
         }
         return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);

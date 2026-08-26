@@ -345,8 +345,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.5"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.5/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.6"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.6/);
   assert.match(hostPanelSource, /Service v/);
 });
 
