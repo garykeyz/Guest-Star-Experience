@@ -6,7 +6,7 @@ const KaraokeExperience = dynamic(
   () => import("@/components/KaraokeExperience"),
   {
     ssr: false,
-    loading: () => <main className="page"><div className="brand">✦ GUEST STAR EXPERIENCE</div></main>
+    loading: () => <main className="page"><div className="brand notranslate" translate="no">✦ GUEST STAR EXPERIENCE</div></main>
   }
 );
 

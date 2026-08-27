@@ -54,7 +54,7 @@ const PHRASES = [
   ["Last Change", "Último cambio"], ["Last Action", "Última acción"], ["Source", "Origen"],
   ["Times recalculate automatically. Skipped songs are excluded; completed songs stay included.", "Los tiempos se recalculan automáticamente. Las canciones omitidas se excluyen y las completadas permanecen incluidas."],
   ["Test Guest Star", "Probar Guest Star"], ["Test VirtualDJ", "Probar VirtualDJ"],
-  ["Save Settings", "Guardar configuración"], ["WELCOME TO GUEST STAR BRIDGE ·", "BIENVENIDO A GUEST STAR BRIDGE ·"],
+  ["Save Settings", "Guardar configuración"], ["WELCOME TO", "BIENVENIDO A"],
   ["Sign in", "Iniciar sesión"], ["Use the account created for you by the Superhost.", "Usa la cuenta que creó el Superhost para ti."],
   ["Username or email", "Usuario o correo electrónico"], ["Password", "Contraseña"],
   ["Forgot your username or password, or having trouble signing in?", "¿Olvidaste tu usuario o contraseña, o tienes problemas para iniciar sesión?"],
@@ -93,8 +93,15 @@ const PHRASES = [
   ["✓ Completed", "✓ Completada"], ["− Skipped", "− Omitida"], ["Skipped", "Omitida"],
   ["Processing…", "Procesando…"], ["SAVED SOURCE LINK", "ENLACE DE ORIGEN GUARDADO"], ["Open ↗", "Abrir ↗"],
   ["Check Queue Now", "Verificar cola ahora"], ["No — Re-add at the End", "No — Agregar de nuevo al final"],
-  ["Yes — Keep It Outside", "Sí — Mantener fuera"], ["Resend to the End", "Reenviar al final"],
+  ["Yes — Keep It Outside", "Sí — Mantener fuera"],
   ["Remove from VirtualDJ", "Eliminar de VirtualDJ"], ["Add to VirtualDJ", "Agregar a VirtualDJ"],
+  ["Change linked file", "Cambiar archivo vinculado"], ["Change File", "Cambiar archivo"],
+  ["VirtualDJ file changed", "Archivo de VirtualDJ cambiado"],
+  ["Choose another local file. The current row stays protected unless you confirm a replacement.", "Elige otro archivo local. La fila actual queda protegida hasta que confirmes el reemplazo."],
+  ["No other local candidate is available. Scan the folder after adding the replacement file.", "No hay otro archivo local candidato. Escanea la carpeta después de agregar el reemplazo."],
+  ["This request is in VirtualDJ. Move it directly in VirtualDJ and the Bridge will preserve it at its new position.", "Esta solicitud está en VirtualDJ. Muévela directamente en VirtualDJ y el Bridge la conservará en su nueva posición."],
+  ["Manual link protected.", "Vínculo manual protegido."],
+  ["Match percentages cannot unlink or remove this VirtualDJ row.", "Los porcentajes de coincidencia no pueden desvincular ni eliminar esta fila de VirtualDJ."],
   ["Use This File", "Usar este archivo"], ["Search YouTube Options", "Buscar opciones en YouTube"],
   ["Scan Folder Now", "Escanear carpeta ahora"], ["Undo and Send to End", "Deshacer y enviar al final"],
   ["Undo Only · Keep Outside", "Solo deshacer · Mantener fuera"],
@@ -134,7 +141,8 @@ const PHRASES = [
   ["Activity finished · queue preserved", "Actividad finalizada · cola conservada"],
   ["Link copied.", "Enlace copiado."], ["Copy this link:", "Copia este enlace:"],
   ["Saved link copied.", "Enlace guardado copiado."], ["Song restored", "Canción restaurada"],
-  ["Song requeued", "Canción reenviada a la cola"], ["Song added to VirtualDJ", "Canción agregada a VirtualDJ"],
+  ["Already in VirtualDJ", "Ya está en VirtualDJ"],
+  ["Song added to VirtualDJ", "Canción agregada a VirtualDJ"],
   ["Song removed from VirtualDJ", "Canción eliminada de VirtualDJ"], ["Song outside the rotation", "Canción fuera de la rotación"],
   ["VirtualDJ accepted the song. Guest Star is confirming the live queue and will not send a second copy.", "VirtualDJ aceptó la canción. Guest Star está confirmando la cola en vivo y no enviará una segunda copia."],
   ["Mark as Skipped", "Marcar como omitida"], ["Mark Skipped", "Marcar omitida"],
@@ -231,6 +239,9 @@ function interpolateEnglishToSpanish(value) {
     [/^(.+) · Singer: (.+) · Unmatched VirtualDJ item$/, "$1 · Cantante: $2 · Pista propia de VirtualDJ"],
     [/^(.+) · Singer: (.+) · Linked request$/, "$1 · Cantante: $2 · Solicitud vinculada"],
     [/^Guest (.+)$/, "Huésped $1"], [/^The action could not be completed: (.+)$/, "No se pudo completar la acción: $1"],
+    [/^Replace the current VirtualDJ row for (.+) with (.+)\? If the new insertion fails, the Bridge will restore the original row\.$/, "¿Reemplazar la fila actual de VirtualDJ de $1 con $2? Si falla la nueva inserción, el Bridge restaurará la fila original."],
+    [/^Changing the linked file for (.+)…$/, "Cambiando el archivo vinculado de $1…"],
+    [/^(.+) now uses (.+) in position (\d+)\.$/, "$1 ahora usa $2 en la posición $3."],
     [/^VirtualDJ returned a technical Network Control error while reading (.+)\. The previous valid queue was preserved; restart Network Control or VirtualDJ and synchronize again\.$/, "VirtualDJ devolvió un error técnico de Network Control al leer $1. Se conservó la última cola válida; reinicia Network Control o VirtualDJ y vuelve a sincronizar."],
     [/^Library updated: (\d+) tracks found\.$/, "Biblioteca actualizada: se encontraron $1 pistas."],
     [/^Everything is working\. Service (.+) returned (\d+) active requests\.$/, "Todo funciona. El servicio $1 devolvió $2 solicitudes activas."],
@@ -265,9 +276,21 @@ export function translateBridgeText(rawValue, requestedLanguage = "es") {
   if (!value) return raw;
   const language = normalizeBridgeLanguage(requestedLanguage);
   const exact = EXACT.get(`${language}:${value}`);
-  const translated = exact ?? (language === "es"
-    ? interpolateEnglishToSpanish(value)
-    : interpolateSpanishToEnglish(value));
+  const brandNames = [];
+  const protectedValue = value.replace(
+    /Guest Star (?:Bridge|Experience)/gi,
+    (brandName) => {
+      brandNames.push(brandName);
+      return `__GUEST_STAR_BRAND_${brandNames.length - 1}__`;
+    }
+  );
+  const interpolated = language === "es"
+    ? interpolateEnglishToSpanish(protectedValue)
+    : interpolateSpanishToEnglish(protectedValue);
+  const translated = (exact ?? interpolated).replace(
+    /__GUEST_STAR_BRAND_(\d+)__/g,
+    (_token, index) => brandNames[Number(index)] || ""
+  );
   return `${before}${translated}${after}`;
 }
 
@@ -279,6 +302,7 @@ export function createBridgeI18n({ root = document, language = "es" } = {}) {
   const renderedAttributes = new WeakMap();
   const protectedSelector = [
     "#superhostWorkspace", "#tenantPath", "#selectedActivityName",
+    "[translate='no']", ".notranslate", "[data-brand]",
     ".song", ".artist", ".singer-name", ".request-comment",
     ".source-panel a", ".match-file strong", ".candidate strong",
     ".youtube-item strong", ".hit-card strong", ".hit-card > div > p",
@@ -287,7 +311,7 @@ export function createBridgeI18n({ root = document, language = "es" } = {}) {
 
   function skipped(node) {
     const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-    if (!element || element.closest("script,style,[data-no-i18n]")) return true;
+    if (!element || element.closest("script,style,[data-no-i18n],[translate='no'],.notranslate,[data-brand]")) return true;
     if (element.closest(protectedSelector)) return true;
     return element.tagName === "OPTION" && Boolean(element.value);
   }

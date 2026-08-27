@@ -166,6 +166,9 @@ h1 span { background: linear-gradient(90deg, var(--pink), #db75ff); -webkit-back
 .youtube-item .source-actions { justify-content: flex-end; flex-wrap: wrap; }
 .youtube-option-label { display: block; color: #ff8c98 !important; font-size: .64rem; font-weight: 850; letter-spacing: .09em; margin-bottom: 3px; }
 .queue-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.change-link-panel { margin-top: 10px; border-top: 1px dashed rgba(0,200,255,.2); padding-top: 8px; }
+.change-link-panel > summary { cursor: pointer; color: #8fe7ff; font-size: .68rem; font-weight: 800; }
+.change-link-panel > p { margin: 7px 0 0; color: var(--muted); font-size: .72rem; }
 .outcome-panel { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .outcome-panel:empty { display: none; }
 .outcome-summary { padding: 13px 14px; border-radius: 13px; }

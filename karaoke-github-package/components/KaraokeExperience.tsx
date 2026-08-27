@@ -527,7 +527,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     const fallbackText=fallbackCopy[lang||"en"];
     return <main className="page fallbackPage" style={brandStyle}>
       <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/><ShieldCheck className="ghost microphone"/></div>
-      <div className="brand">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
+      <div className="brand notranslate" translate="no">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
       {!lang?<motion.section className="card languageGate fallbackLanguageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
         <div className="badge"><ShieldCheck size={31}/></div>
         <p className="eyebrow"><Sparkles size={14}/> LANGUAGE / IDIOMA</p>
@@ -555,7 +555,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
 
   return <main className="page" style={brandStyle}>
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
-    <div className="brand">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
+    <div className="brand notranslate" translate="no">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
     <AnimatePresence>{duplicateWarning&&<motion.div className="duplicateBackdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
       <motion.section className="duplicateDialog" role="alertdialog" aria-modal="true" aria-labelledby="duplicate-title" initial={{opacity:0,scale:.94,y:14}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.96,y:10}}>
         <span className="duplicateIcon">!</span><h2 id="duplicate-title">{warningText.title}</h2>

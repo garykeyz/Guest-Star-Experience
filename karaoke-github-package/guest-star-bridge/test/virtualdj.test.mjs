@@ -13,6 +13,7 @@ import {
   queryVdj,
   removeDuplicateKaraokeEntries,
   removeKaraokeEntry,
+  vdjLocalPathCandidates,
   visibleVdjSinger
 } from "../src/virtualdj.mjs";
 
@@ -98,6 +99,19 @@ test("lee duraciones exactas reportadas por VirtualDJ", () => {
   assert.equal(parseVdjDuration("0:04:12.500"), 252);
   assert.equal(parseVdjDuration("245000ms"), 245);
   assert.equal(parseVdjDuration("false"), 0);
+});
+
+test("convierte rutas URI, codificadas y abreviadas de VirtualDJ en rutas locales", () => {
+  assert.ok(vdjLocalPathCandidates(
+    "file:///Users/Yefry/Music/Karaoke/The%20Reason.mp4"
+  ).includes("/Users/Yefry/Music/Karaoke/The Reason.mp4"));
+  assert.ok(vdjLocalPathCandidates(
+    "file://localhost/Users/Yefry/Music/Karaoke/Mi%20vida.mp4"
+  ).includes("/Users/Yefry/Music/Karaoke/Mi vida.mp4"));
+  assert.ok(vdjLocalPathCandidates(
+    "~/Music/Karaoke/Divino.mp4",
+    "/Users/Yefry"
+  ).includes("/Users/Yefry/Music/Karaoke/Divino.mp4"));
 });
 
 test("oculta únicamente el identificador técnico legacy del cantante", () => {
@@ -307,6 +321,52 @@ test("retira por cantante y título cuando VirtualDJ omite la ruta y altera el a
 
   assert.equal(result.removed, true);
   assert.equal(removed.singer, "Gary");
+});
+
+test("no elimina una fila por una ruta sola si el vínculo de cantante no coincide", async (t) => {
+  const queue = [{
+    filepath: "/Music/Possible Match.mp4",
+    singer: "Carlos",
+    title: "Otra canción",
+    artist: "Otro artista"
+  }];
+  let executeCalls = 0;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      executeCalls += 1;
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(
+        /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
+      );
+      response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const result = await removeKaraokeEntry({
+    host: "127.0.0.1",
+    port: server.address().port,
+    password: "",
+    timeoutMs: 1000
+  }, {
+    filePath: "/Music/Possible Match.mp4",
+    singer: "Gina",
+    song: "Yo me llamo cumbia",
+    artist: "La negra de Colombia"
+  });
+
+  assert.equal(result.removed, false);
+  assert.equal(result.reason, "not-found");
+  assert.equal(executeCalls, 0);
+  assert.equal(queue.length, 1);
 });
 
 test("avisa cuando VirtualDJ acepta el comando pero no retira la canción", async (t) => {

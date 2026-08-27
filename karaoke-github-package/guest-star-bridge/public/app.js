@@ -1,6 +1,7 @@
 import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
 import { initSuperhostPanel } from "./superhost.js";
 import { createBridgeI18n } from "./bridge-i18n.js";
+import { preserveBridgeScroll } from "./scroll-preserver.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const ACTIVITY_LANGUAGES = [
@@ -513,24 +514,50 @@ function renderSourceLink(panel, url) {
   panel.append(info, actions);
 }
 
-async function queue(id, filePath, requeue = false) {
+async function queue(id, filePath) {
   const label = requestLabel(id);
   await runAction(
     actionScope(id),
     `Sending ${label} to VirtualDJ…`,
     () => api(`/api/requests/${encodeURIComponent(id)}/queue`, {
       method: "POST",
-      body: JSON.stringify({ filePath, requeue })
+      body: JSON.stringify({ filePath })
     }),
     (data) => ({
       title: data.restored
         ? "Song restored"
-        : data.requeued
-          ? "Song requeued"
+        : data.alreadyQueued
+          ? "Already in VirtualDJ"
           : "Song added to VirtualDJ",
       detail:
         data.warning ||
         `${label} is confirmed in the VirtualDJ Karaoke queue.`
+    })
+  );
+}
+
+async function replaceQueueFile(id, candidate) {
+  const label = requestLabel(id);
+  const confirmed = await confirmAction({
+    title: "Change linked file",
+    detail:
+      `Replace the current VirtualDJ row for ${label} with ${candidate.fileName}? ` +
+      "If the new insertion fails, the Bridge will restore the original row.",
+    confirmLabel: "Change File"
+  });
+  if (!confirmed) return;
+  await runAction(
+    actionScope(id),
+    `Changing the linked file for ${label}…`,
+    () => api(`/api/requests/${encodeURIComponent(id)}/replace`, {
+      method: "POST",
+      body: JSON.stringify({ filePath: candidate.filePath })
+    }),
+    (data) => ({
+      title: "VirtualDJ file changed",
+      detail:
+        data.warning ||
+        `${label} now uses ${data.fileName} in position ${data.queuePosition}.`
     })
   );
 }
@@ -860,6 +887,10 @@ function appendMissingActions(item, match, youtubePanel, message) {
 }
 
 function renderVdjQueue() {
+  return preserveBridgeScroll(renderVdjQueueContents);
+}
+
+function renderVdjQueueContents() {
   const entries = Array.isArray(state?.virtualDJ?.entries)
     ? state.virtualDJ.entries
     : [];
@@ -890,6 +921,10 @@ function renderVdjQueue() {
   entries.forEach((entry) => {
     const row = document.createElement("div");
     row.className = "vdj-live-row";
+    row.dataset.vdjId =
+      entry.virtualDJItemId ||
+      entry.linkedRequestId ||
+      [entry.singer, entry.song, entry.artist].filter(Boolean).join(" · ");
     const position = document.createElement("b");
     position.textContent = entry.position;
     const info = document.createElement("span");
@@ -907,10 +942,7 @@ function renderVdjQueue() {
       .join(" · ");
     info.append(song, detail);
     const durationLabel = document.createElement("span");
-    durationLabel.textContent = entry.localAvailable
-      ? activityDuration(entry.durationSeconds)
-      : `⚠ ${activityDuration(entry.durationSeconds)} · file unavailable`;
-    if (!entry.localAvailable) durationLabel.className = "missing-file";
+    durationLabel.textContent = activityDuration(entry.durationSeconds);
     row.append(position, info, durationLabel);
     list.append(row);
   });
@@ -953,6 +985,10 @@ function requestTimelines(items) {
 }
 
 function renderRequests() {
+  return preserveBridgeScroll(renderRequestContents);
+}
+
+function renderRequestContents() {
   requestsEl.innerHTML = "";
   finishedRequestsEl.innerHTML = "";
   const template = $("#requestTemplate");
@@ -985,6 +1021,7 @@ function renderRequests() {
   state.requests.forEach((item, index) => {
     const fragment = template.content.cloneNode(true);
     const card = $(".request-card", fragment);
+    card.dataset.requestId = item.id;
     const requestPending = actionLocks.has(actionScope(item.id));
     const arrival = timelines.arrival.get(item.id) || {
       number: index + 1,
@@ -1132,21 +1169,55 @@ function renderRequests() {
     } else if (isQueued) {
       match.innerHTML =
         item.localState === "queued"
-          ? '<p class="empty-match">This request is marked as sent. You can move it to the end of the rotation or remove it.</p>'
+          ? item.manualLink
+            ? '<p class="empty-match"><strong>Manual link protected.</strong> Match percentages cannot unlink or remove this VirtualDJ row.</p>'
+            : '<p class="empty-match">This request is in VirtualDJ. Move it directly in VirtualDJ and the Bridge will preserve it at its new position.</p>'
           : '<p class="empty-match missing-warning">The file previously linked to this request no longer exists in the local folder.</p>';
       const actions = document.createElement("div");
       actions.className = "queue-actions";
-      if (item.localAvailable) {
-        actions.append(
-          button("Resend to the End", "primary", () =>
-            queue(item.id, item.queuedFilePath, true)
-          )
-        );
-      }
       actions.append(
         button("Remove from VirtualDJ", "danger", () => removeFromQueue(item.id))
       );
       match.append(actions);
+      const replacementCandidates = item.matches.filter(
+        (candidate) => candidate.filePath !== item.queuedFilePath
+      );
+      const changePanel = document.createElement("details");
+      changePanel.className = "change-link-panel";
+      const changeSummary = document.createElement("summary");
+      changeSummary.textContent = "Change linked file";
+      const changeHelp = document.createElement("p");
+      changeHelp.textContent = replacementCandidates.length
+        ? "Choose another local file. The current row stays protected unless you confirm a replacement."
+        : "No other local candidate is available. Scan the folder after adding the replacement file.";
+      changePanel.append(changeSummary, changeHelp);
+      if (replacementCandidates.length) {
+        const candidates = document.createElement("div");
+        candidates.className = "candidate-list";
+        replacementCandidates.forEach((candidate) => {
+          const option = document.createElement("div");
+          option.className = "candidate";
+          const infoOption = document.createElement("span");
+          const name = document.createElement("strong");
+          name.textContent = candidate.fileName;
+          const score = document.createElement("small");
+          score.textContent = `${Math.round(candidate.score * 100)}% match`;
+          infoOption.append(name, score);
+          option.append(
+            infoOption,
+            button("Use This File", "ghost", () =>
+              replaceQueueFile(item.id, candidate)
+            )
+          );
+          candidates.append(option);
+        });
+        changePanel.append(candidates);
+      } else {
+        changePanel.append(
+          button("Scan Folder Now", "ghost", scan)
+        );
+      }
+      match.append(changePanel);
       if (item.localState === "queued-missing") {
         const recovery = document.createElement("div");
         recovery.className = "missing-recovery";
@@ -2045,30 +2116,34 @@ $("#testVdj").addEventListener("click", async () => {
 });
 
 function applyState(nextState) {
-  state = nextState;
-  bridgeI18n.setLanguage(state.config?.uiLanguage || "es");
-  const versionLabel = $("#bridgeVersion");
-  if (versionLabel) versionLabel.textContent = `v${state.version || "unknown"}`;
-  updateStatus();
-  renderVdjQueue();
-  renderRequests();
-  renderHitSuggestions();
-  renderRandomRotation();
-  updateAuthUi();
-  superhostPanel.sync(state);
-  updateStatus();
-  bridgeI18n.refresh();
+  preserveBridgeScroll(() => {
+    state = nextState;
+    bridgeI18n.setLanguage(state.config?.uiLanguage || "es");
+    const versionLabel = $("#bridgeVersion");
+    if (versionLabel) versionLabel.textContent = `v${state.version || "unknown"}`;
+    updateStatus();
+    renderVdjQueue();
+    renderRequests();
+    renderHitSuggestions();
+    renderRandomRotation();
+    updateAuthUi();
+    superhostPanel.sync(state);
+    updateStatus();
+    bridgeI18n.refresh();
+  });
 }
 
 $("#uiLanguageSelect").addEventListener("change", async (event) => {
   const language = event.target.value === "en" ? "en" : "es";
-  bridgeI18n.setLanguage(language);
-  updateStatus();
-  renderVdjQueue();
-  renderRequests();
-  renderHitSuggestions();
-  renderRandomRotation();
-  bridgeI18n.refresh();
+  preserveBridgeScroll(() => {
+    bridgeI18n.setLanguage(language);
+    updateStatus();
+    renderVdjQueue();
+    renderRequests();
+    renderHitSuggestions();
+    renderRandomRotation();
+    bridgeI18n.refresh();
+  });
   try {
     await api("/api/config/language", {
       method: "POST",

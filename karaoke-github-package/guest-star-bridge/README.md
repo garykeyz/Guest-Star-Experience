@@ -1,4 +1,4 @@
-# Guest Star Bridge 4.3.7
+# Guest Star Bridge 4.3.8
 
 Aplicación local Universal para Mac que conecta Guest Star con la biblioteca de
 karaoke y la cola Karaoke real de VirtualDJ.
@@ -17,7 +17,7 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Bridge-Universal-v4.3.7-app.zip` o abre el DMG.
+1. Descomprime `Guest-Star-Bridge-Universal-v4.3.8-app.zip` o abre el DMG.
 2. Mueve **Guest Star Bridge.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
@@ -54,7 +54,17 @@ La interfaz puede cambiarse completamente entre Español e English. Los valores
 técnicos de error de VirtualDJ nunca se convierten en solicitudes y el último
 estado válido de la cola se conserva si Network Control devuelve un error.
 
-En 4.3.7, una canción marcada como cantada, omitida o retirada conserva esa
+En 4.3.8, Guest Star Experience y Guest Star Bridge permanecen sin traducir.
+Al sincronizar o cambiar estados, cada lista conserva la canción que el operador
+estaba viendo y su desplazamiento. Las rutas que VirtualDJ entrega como URI,
+con espacios codificados, `~` o variantes Unicode de macOS se resuelven contra
+el disco y la biblioteca, por lo que una fila presente en la cola real ya no
+aparece falsamente como archivo no disponible. Cuando el operador elige un
+archivo, ese vínculo manda sobre cualquier porcentaje de coincidencia. El
+Bridge solo lo reemplaza mediante **Cambiar archivo** o lo retira mediante
+**Eliminar de VirtualDJ**, con confirmación explícita.
+
+Desde 4.3.7, una canción marcada como cantada, omitida o retirada conserva esa
 decisión aunque el servidor entregue una lectura atrasada o el Bridge reinicie.
 Solo **Deshacer** permite restaurarla. La réplica hacia Google Sheets se agrupa
 globalmente para que una ráfaga de solicitudes no multiplique el trabajo.

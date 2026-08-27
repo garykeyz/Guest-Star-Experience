@@ -1,4 +1,4 @@
-# Guest Star Experience 4.3.7
+# Guest Star Experience 4.3.8
 
 Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
 sincronización con VirtualDJ.
@@ -18,7 +18,7 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
   se muestran en texto plano.
 - Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
-- Bridge 4.3.7 incluye la administración, agenda recurrente, traducciones y
+- Bridge 4.3.8 incluye la administración, agenda recurrente, traducciones y
   barra nativa actualizadas para esta versión.
 - Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
   `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
@@ -29,7 +29,20 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
   opciones avanzadas plegadas hasta que el usuario las solicite.
 
-## Novedades 4.3.7
+## Novedades 4.3.8
+
+- Guest Star Experience y Guest Star Bridge quedan protegidos como nombres de
+  marca y no se traducen por el selector interno ni por traducción automática;
+- las listas conservan la misma canción visible y la posición de desplazamiento
+  después de sincronizar, cambiar estado o recibir una actualización en vivo;
+- las rutas de VirtualDJ aceptan URI `file://`, espacios codificados, `~` y las
+  variantes Unicode de macOS; una fila confirmada en la cola real ya no aparece
+  falsamente como archivo no disponible;
+- un archivo elegido por el operador queda vinculado como decisión autoritativa:
+  ningún porcentaje bajo puede desvincularlo o retirarlo. Solo **Cambiar archivo**
+  o **Eliminar de VirtualDJ**, ambos confirmados, alteran esa fila.
+
+## Incluido desde 4.3.7
 
 - las decisiones terminales y retiradas de VirtualDJ se guardan localmente por
   actividad: una respuesta atrasada, una ausencia temporal o un reinicio no

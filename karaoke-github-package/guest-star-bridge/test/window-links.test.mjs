@@ -20,6 +20,7 @@ const formClientSource = await readFile(
   "utf8"
 );
 const rootPageSource = await readFile(resolve(root, "../app/page.tsx"), "utf8");
+const layoutSource = await readFile(resolve(root, "../app/layout.tsx"), "utf8");
 const hotelPageSource = await readFile(resolve(root, "../app/h/[hotel]/page.tsx"), "utf8");
 const bridgeHtml = await readFile(resolve(root, "public/index.html"), "utf8");
 const bridgeStyles = await readFile(resolve(root, "public/styles.css"), "utf8");
@@ -296,6 +297,40 @@ test("muestra la cola real de VirtualDJ y la hora final sin saturar la lista", (
   assert.match(appSource, /live VDJ/);
 });
 
+test("conserva el punto visible y nunca marca ausente una fila viva de VirtualDJ", () => {
+  assert.match(appSource, /preserveBridgeScroll/);
+  assert.match(appSource, /card\.dataset\.requestId = item\.id/);
+  assert.match(appSource, /row\.dataset\.vdjId/);
+  assert.doesNotMatch(appSource, /file unavailable/);
+  assert.match(serverSource, /vdjLocalPathCandidates/);
+  assert.match(serverSource, /availableInVirtualDJ: true/);
+  assert.doesNotMatch(appSource, /Resend to the End/);
+  const passiveTerminalSync = serverSource.slice(
+    serverSource.indexOf("async function reconcileTerminalRequests"),
+    serverSource.indexOf("function sheetMarksVirtualDj")
+  );
+  assert.doesNotMatch(passiveTerminalSync, /removeKaraokeEntry/);
+  const queueAction = serverSource.slice(
+    serverSource.indexOf("async function queueRequest"),
+    serverSource.indexOf("async function replaceQueuedRequest")
+  );
+  assert.doesNotMatch(queueAction, /removeKaraokeEntry/);
+  assert.match(appSource, /Change linked file/);
+  assert.match(serverSource, /const replaceMatch = pathname\.match/);
+  assert.match(serverSource, /replaceQueuedRequest/);
+  assert.match(serverSource, /manualLink/);
+});
+
+test("protege Guest Star Experience y Guest Star Bridge como nombres de marca", () => {
+  assert.match(bridgeHtml, /meta name="google" content="notranslate"/);
+  assert.match(googleSignInHtml, /meta name="google" content="notranslate"/);
+  assert.match(layoutSource, /meta name="google" content="notranslate"/);
+  assert.match(bridgeHtml, /translate="no" data-brand>✦ GUEST STAR EXPERIENCE/);
+  assert.match(bridgeHtml, /translate="no" data-brand>GUEST STAR BRIDGE/);
+  assert.match(formSource, /className="brand notranslate" translate="no"/);
+  assert.match(hostPanelSource, /hostEyebrow notranslate/);
+});
+
 test("el formulario confirma repeticiones en el idioma elegido", () => {
   assert.match(formSource, /DUPLICATE_CONFIRMATION_REQUIRED/);
   assert.match(formSource, /duplicateCopy: Record<Lang, DuplicateCopy>/);
@@ -349,8 +384,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.7"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.7/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.8"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.8/);
   assert.match(hostPanelSource, /Service v/);
 });
 
