@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 async function listen(server) {
@@ -48,7 +48,9 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   await mkdir(join(bridgeRoot, "data"), { recursive: true });
   await mkdir(karaokeFolder, { recursive: true });
   const localSong = join(karaokeFolder, "Adele - Hello Karaoke Lyrics.mp4");
+  const replacementSong = join(karaokeFolder, "Adele - Hello Alternate Karaoke.mp4");
   await writeFile(localSong, "");
+  await writeFile(replacementSong, "");
 
   const requests = [
     {
@@ -157,7 +159,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   const otherPath = join(karaokeFolder, "Other Song.mp4");
   const vdjQueue = [
     {
-      filepath: localSong,
+      filepath: pathToFileURL(localSong).href,
       singer: "Ana",
       title: "Hello",
       artist: "Adele",
@@ -270,6 +272,12 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     243
   );
   assert.equal(state.virtualDJ.queueCount, 2);
+  assert.equal(
+    state.requests.find((item) => item.id === "request-1").localAvailable,
+    true
+  );
+  assert.equal(state.virtualDJ.entries[0].localAvailable, true);
+  assert.equal(state.virtualDJ.entries[0].availableInVirtualDJ, true);
   assert.equal(state.activitySummary.queueSongCount, 2);
   assert.equal(state.activitySummary.queuedSeconds, 483);
 
@@ -329,6 +337,23 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   ).then((response) => response.json());
   assert.equal(queuedAgain.ok, true);
   assert.equal(vdjQueue.at(-1).singer, "Ana");
+
+  const replaced = await fetch(
+    `${bridgeUrl}/api/requests/request-1/replace`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: replacementSong })
+    }
+  ).then((response) => response.json());
+  assert.equal(replaced.replaced, true);
+  assert.equal(replaced.fileName, "Adele - Hello Alternate Karaoke.mp4");
+  assert.equal(vdjQueue.find((entry) => entry.singer === "Ana")?.filepath, replacementSong);
+  state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
+  assert.equal(
+    state.requests.find((item) => item.id === "request-1").manualLink,
+    true
+  );
 
   const completed = await fetch(
     `${bridgeUrl}/api/requests/request-1/outcome`,
@@ -432,11 +457,14 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   assert.equal(vdjQueue.at(-1).singer, "Ana");
 
   await unlink(localSong);
+  await unlink(replacementSong);
   state = await waitForState(
     bridgeUrl,
     (candidate) => {
       const item = candidate.requests?.find((entry) => entry.id === "request-1");
-      return item?.localState === "queued-missing" && item.youtube?.length === 1;
+      return item?.localState === "queued" &&
+        item.localAvailable === false &&
+        item.youtube?.length === 1;
     }
   );
   assert.equal(

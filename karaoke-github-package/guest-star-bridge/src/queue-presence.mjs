@@ -6,6 +6,10 @@ function pendingStart(value) {
   return Number(value) || 0;
 }
 
+function acceptedInsertion(value) {
+  return Boolean(value && typeof value === "object" && value.accepted === true);
+}
+
 export function reconcileQueuePresence({
   previous = new Map(),
   trackedIds = [],
@@ -29,6 +33,11 @@ export function reconcileQueuePresence({
       continue;
     }
     const startedAt = pendingStart(pendingInsertions.get(id));
+    if (acceptedInsertion(pendingInsertions.get(id))) {
+      next.set(id, 0);
+      transientMissing.push(id);
+      continue;
+    }
     if (startedAt && now - startedAt < insertionGraceMs) {
       next.set(id, 0);
       transientMissing.push(id);

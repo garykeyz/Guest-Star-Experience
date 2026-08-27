@@ -115,7 +115,9 @@ function candidateMatch(
   tracked,
   actual,
   actualMetadataPopulation,
-  trackedMetadataPopulation
+  trackedMetadataPopulation,
+  actualSingerPopulation,
+  trackedSingerPopulation
 ) {
   const fields = [];
   const linkedId = String(tracked?.virtualDJItemId || "");
@@ -153,6 +155,18 @@ function candidateMatch(
   if (samePath && sameMetadata) return { confidence: 0.9, fields };
   if (samePath) return { confidence: 0.86, fields };
   if (
+    sameSinger && sameDuration &&
+    actualSingerPopulation === 1 && trackedSingerPopulation === 1
+  ) {
+    return { confidence: 0.88, fields: [...fields, "uniqueSingerDuration"] };
+  }
+  if (
+    sameSinger && linkedId &&
+    actualSingerPopulation === 1 && trackedSingerPopulation === 1
+  ) {
+    return { confidence: 0.83, fields: [...fields, "preservedSingerLink"] };
+  }
+  if (
     sameMetadata && sameDuration &&
     actualMetadataPopulation === 1 && trackedMetadataPopulation === 1
   ) {
@@ -179,6 +193,13 @@ export function reconcileTrackedQueue(trackedEntries = [], actualEntries = []) {
     const trackedMetadataPopulation = trackedEntries.filter(
       (entry) => queueMetadataMatches(tracked, entry)
     ).length;
+    const targetSinger = singerKey(tracked?.singer);
+    const actualSingerPopulation = stableActual.filter(
+      (entry) => targetSinger && singerKey(entry?.singer) === targetSinger
+    ).length;
+    const trackedSingerPopulation = trackedEntries.filter(
+      (entry) => targetSinger && singerKey(entry?.singer) === targetSinger
+    ).length;
     const candidates = stableActual
       .filter((entry) => !claimedIndices.has(entry.index))
       .map((entry) => ({
@@ -187,7 +208,9 @@ export function reconcileTrackedQueue(trackedEntries = [], actualEntries = []) {
           tracked,
           entry,
           actualMetadataPopulation,
-          trackedMetadataPopulation
+          trackedMetadataPopulation,
+          actualSingerPopulation,
+          trackedSingerPopulation
         )
       }))
       .filter((candidate) => candidate.confidence >= 0.82)

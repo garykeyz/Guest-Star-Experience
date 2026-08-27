@@ -101,6 +101,46 @@ test("tolera un typo del artista si cantante y canción coinciden", () => {
   assert.deepEqual(result.missing, []);
 });
 
+test("preserva un vínculo manual aunque el título tenga baja coincidencia", () => {
+  const result = reconcileTrackedQueue([{
+    id: "request-gina",
+    manualLink: true,
+    filePath: "",
+    singer: "Gina A",
+    song: "Yo me llamo cumbia",
+    artist: "La negra de Colombia",
+    durationSeconds: 192
+  }], [{
+    index: 4,
+    filePath: "",
+    singer: "Gina A",
+    song: "Leonor González Mina - Karaoke Oficial - Cumbia Colombiana",
+    artist: "",
+    durationSeconds: 192
+  }]);
+
+  assert.equal(result.matched.get("request-gina").index, 4);
+  assert.ok(
+    result.matchDetails.get("request-gina").fields.includes("uniqueSingerDuration")
+  );
+  assert.deepEqual(result.missing, []);
+});
+
+test("no usa solo cantante y duración cuando dos vínculos compiten", () => {
+  const result = reconcileTrackedQueue([
+    { id: "gina-1", manualLink: true, singer: "Gina A", song: "Uno", durationSeconds: 192 },
+    { id: "gina-2", manualLink: true, singer: "Gina A", song: "Dos", durationSeconds: 192 }
+  ], [{
+    index: 0,
+    singer: "Gina A",
+    song: "Metadatos distintos",
+    durationSeconds: 192
+  }]);
+
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.missing, ["gina-1", "gina-2"]);
+});
+
 test("reconoce Mi Vida aunque VirtualDJ invierta título y artista", () => {
   const result = reconcileTrackedQueue([
     {

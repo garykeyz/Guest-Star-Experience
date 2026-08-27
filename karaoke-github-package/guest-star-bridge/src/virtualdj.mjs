@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+
 function safeVdjValue(value) {
   return String(value || "")
     .replace(/[\r\n\t]+/g, " ")
@@ -42,6 +45,49 @@ function normalizedQueryValue(value) {
   return /^(?:false|null|undefined)$/i.test(unquoted) ? "" : unquoted;
 }
 
+function decodeVdjPath(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function vdjLocalPathCandidates(value, homeDirectory = homedir()) {
+  const raw = normalizedQueryValue(value).replace(/\0/g, "").trim();
+  if (!raw) return [];
+
+  const baseCandidates = [];
+  if (/^file:/i.test(raw)) {
+    try {
+      baseCandidates.push(fileURLToPath(raw));
+    } catch {
+      const withoutScheme = raw
+        .replace(/^file:\/\/localhost(?=\/)/i, "")
+        .replace(/^file:\/\//i, "")
+        .replace(/^file:/i, "");
+      if (withoutScheme) baseCandidates.push(withoutScheme);
+    }
+  }
+  baseCandidates.push(raw);
+
+  const candidates = new Set();
+  const addCandidate = (candidate) => {
+    let path = decodeVdjPath(String(candidate || "").trim());
+    if (!path || /^file:/i.test(path)) return;
+    if (path === "~") path = homeDirectory;
+    else if (path.startsWith("~/") || path.startsWith("~\\")) {
+      path = `${homeDirectory}${path.slice(1)}`;
+    }
+    path = path.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+    if (!path) return;
+    candidates.add(path.normalize("NFC"));
+    candidates.add(path.normalize("NFD"));
+  };
+  baseCandidates.forEach(addCandidate);
+  return [...candidates];
+}
+
 export function isVirtualDjTechnicalError(value) {
   return /^error\s*:\s*-?\d+$/i.test(normalizedQueryValue(value));
 }
@@ -56,7 +102,12 @@ function assertReadableQueueValue(value, property, index = -1) {
 }
 
 export function normalizeVdjPath(value) {
-  return normalizedQueryValue(value).replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+  const localPath = vdjLocalPathCandidates(value)[0];
+  return (localPath || normalizedQueryValue(value))
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .normalize("NFC")
+    .toLowerCase();
 }
 
 export function normalizeVdjSinger(value) {
@@ -509,6 +560,7 @@ export async function removeKaraokeEntry(config, entry) {
   const entries = await listKaraokeEntries(config);
   const pathMatches = [];
   const exactMatches = [];
+  const pathMetadataMatches = [];
   const metadataMatches = [];
   const songSingerMatches = [];
 
@@ -520,6 +572,9 @@ export async function removeKaraokeEntry(config, entry) {
     ) {
       pathMatches.push(candidate.index);
       if (sameSinger) exactMatches.push(candidate.index);
+      if (sameMetadataPair(candidate, entry)) {
+        pathMetadataMatches.push(candidate.index);
+      }
     }
     if (sameSinger && targetSong && (
       normalizeVdjMetadata(candidate.song) === targetSong ||
@@ -535,8 +590,8 @@ export async function removeKaraokeEntry(config, entry) {
   const selected =
     exactMatches.length === 1
       ? exactMatches[0]
-      : exactMatches.length === 0 && pathMatches.length === 1
-        ? pathMatches[0]
+      : pathMetadataMatches.length === 1
+        ? pathMetadataMatches[0]
         : metadataMatches.length === 1
           ? metadataMatches[0]
           : metadataMatches.length === 0 && songSingerMatches.length === 1
@@ -547,6 +602,7 @@ export async function removeKaraokeEntry(config, entry) {
       removed: false,
       reason:
         pathMatches.length > 1 ||
+        pathMetadataMatches.length > 1 ||
         metadataMatches.length > 1 ||
         songSingerMatches.length > 1
           ? "ambiguous"

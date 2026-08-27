@@ -15,6 +15,7 @@ function cleanEntry(value = {}) {
     durationSeconds: Math.max(0, Number(value.durationSeconds) || 0),
     virtualDJItemId: String(value.virtualDJItemId || "").trim(),
     fingerprint: String(value.fingerprint || "").trim(),
+    manualLink: value.manualLink === true,
     insertedAt: String(value.insertedAt || "").trim(),
     lastSeenAt: String(value.lastSeenAt || "").trim()
   };

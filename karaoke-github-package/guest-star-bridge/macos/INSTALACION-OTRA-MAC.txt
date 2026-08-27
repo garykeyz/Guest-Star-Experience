@@ -1,4 +1,4 @@
-GUEST STAR BRIDGE 4.3.7 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR BRIDGE 4.3.8 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
 Compatible con Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
 No necesitas instalar Node, npm ni usar Terminal.
@@ -13,14 +13,14 @@ REQUISITOS
 
 INSTALAR
 
-1. Descarga Guest-Star-Bridge-Universal-v4.3.7-app.zip o el DMG.
+1. Descarga Guest-Star-Bridge-Universal-v4.3.8-app.zip o el DMG.
 2. Descomprime y mueve Guest Star Bridge.app a Aplicaciones.
 3. La primera vez, usa clic derecho sobre Guest Star Bridge y elige Abrir.
 4. Si macOS bloquea la app, usa Privacidad y seguridad → Abrir de todos modos.
 
 CONFIGURAR
 
-1. Abre Bridge y confirma que la pantalla de acceso muestre v4.3.7.
+1. Abre Bridge y confirma que la pantalla de acceso muestre v4.3.8.
 2. Inicia sesión con el usuario Host y su contraseña permanente.
 3. Selecciona hotel, sede y actividad asignados.
 4. En Settings, elige la carpeta de karaoke.

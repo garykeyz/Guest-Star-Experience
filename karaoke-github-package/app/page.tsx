@@ -15,5 +15,5 @@ export default function Page() {
 
   if (surface === "host") return <HostPanel />;
   if (surface === "request") return <KaraokeExperienceClient hotelCode="default" />;
-  return <main className="page"><div className="brand">✦ GUEST STAR EXPERIENCE</div></main>;
+  return <main className="page"><div className="brand notranslate" translate="no">✦ GUEST STAR EXPERIENCE</div></main>;
 }

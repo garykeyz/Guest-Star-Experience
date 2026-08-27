@@ -62,6 +62,7 @@ import {
   normalizeVdjSinger,
   queryVdj,
   removeKaraokeEntry,
+  vdjLocalPathCandidates,
   visibleVdjSinger
 } from "./virtualdj.mjs";
 import {
@@ -72,7 +73,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.7";
+const BRIDGE_VERSION = "4.3.8";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -354,6 +355,41 @@ async function readJson(request) {
   }
 }
 
+function localLibraryPathIndex(files) {
+  const byPath = new Map();
+  const byName = new Map();
+  for (const filePath of files) {
+    const normalizedPath = normalizeVdjPath(filePath);
+    if (normalizedPath) byPath.set(normalizedPath, filePath);
+    const name = normalizeText(basename(filePath));
+    if (!name) continue;
+    const matches = byName.get(name) || [];
+    matches.push(filePath);
+    byName.set(name, matches);
+  }
+  return { byPath, byName };
+}
+
+async function resolveVirtualDjLocalFile(entry, libraryIndex) {
+  const candidates = vdjLocalPathCandidates(entry?.filePath);
+  for (const candidate of candidates) {
+    try {
+      if ((await stat(candidate)).isFile()) return candidate;
+    } catch {
+      // VirtualDJ can return a URI, encoded path or a different Unicode form.
+    }
+  }
+  for (const candidate of candidates) {
+    const indexed = libraryIndex.byPath.get(normalizeVdjPath(candidate));
+    if (indexed) return indexed;
+  }
+  for (const candidate of candidates) {
+    const named = libraryIndex.byName.get(normalizeText(basename(candidate))) || [];
+    if (named.length === 1) return named[0];
+  }
+  return "";
+}
+
 function requestView(item) {
   const matches = findMatches(
     libraryFiles,
@@ -395,6 +431,7 @@ function requestView(item) {
       removedExternally: false,
       queueUnverified: false,
       localAvailable,
+      manualLink: recoveryEntry?.manualLink === true,
       localState: outcome,
       matches,
       queuedFilePath:
@@ -419,6 +456,7 @@ function requestView(item) {
     removedExternally,
     queueUnverified,
     localAvailable,
+    manualLink: queuedEntry?.manualLink === true,
     queueSyncState: pendingInsertion?.phase || (transientMissing ? "confirming" : ""),
     localState: pendingInsertion
       ? pendingInsertion.phase === "adding"
@@ -433,9 +471,7 @@ function requestView(item) {
         ? "removed"
         : "removed-missing"
       : isQueued
-        ? localAvailable
-          ? "queued"
-          : "queued-missing"
+        ? "queued"
         : localAvailable
           ? "exact"
           : top
@@ -658,7 +694,7 @@ function vdjSingerForRequest(item) {
 
 function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
   if (!item?.id || !item?.singer) return null;
-  let filePath = String(preferredPath || "").trim();
+  let filePath = String(actualEntry?.filePath || preferredPath || "").trim();
   if (!filePath && item.fileName) {
     const expected = String(item.fileName).trim().toLowerCase();
     const named = libraryFiles.filter(
@@ -680,14 +716,15 @@ function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
   return {
     id: item.id,
     filePath,
-    singer: vdjSingerForRequest(item),
-    song: item.song,
-    artist: item.artist,
+    singer: String(actualEntry?.singer || vdjSingerForRequest(item)).trim(),
+    song: String(actualEntry?.song || item.song).trim(),
+    artist: String(actualEntry?.artist || item.artist).trim(),
     durationSeconds:
       Math.max(0, Number(actualEntry?.durationSeconds) || 0) ||
       Math.max(0, Number(item.durationSeconds) || 0),
     virtualDJItemId: String(actualEntry?.virtualDJItemId || ""),
     fingerprint: String(actualEntry?.fingerprint || ""),
+    manualLink: Boolean(actualEntry),
     insertedAt:
       String(queuedEntries.get(item.id)?.insertedAt || "") ||
       new Date().toISOString(),
@@ -856,23 +893,9 @@ async function reconcileTerminalRequests(nextRequests) {
     const existingRecovery = outcomeRecoveries.get(id);
     const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
     let originalPosition = vdjQueuePositions.get(id);
-    if (
-      !existingRecovery &&
-      entry &&
-      (queuedIds.has(id) || queuedEntries.has(id))
-    ) {
-      try {
-        const result = await removeKaraokeEntry(config.virtualDJ, entry);
-        if (Number.isInteger(result.index)) originalPosition = result.index;
-        if (result.reason === "ambiguous") {
-          vdjError =
-            `VirtualDJ has ambiguous copies of “${item.song}”; remove the correct one manually.`;
-        }
-      } catch (error) {
-        vdjError =
-          `The status was saved, but “${item.song}” could not be removed from VirtualDJ: ${errorMessage(error)}`;
-      }
-    }
+    // A passive cloud/sheet refresh may update the request state, but it must
+    // never issue a destructive VirtualDJ command. Physical removal is limited
+    // to an explicit operator action or an explicit activity archive/reset.
     if (!existingRecovery) {
       outcomeRecoveries.set(id, {
         id,
@@ -980,17 +1003,21 @@ async function reconcileVirtualDjQueue(force = false) {
         rawActualEntries,
         vdjQueueEntries
       );
+      const libraryIndex = localLibraryPathIndex(libraryFiles);
       const inspectedEntries = await Promise.all(
         actualEntries.map(async (entry) => {
-          let localAvailable = false;
-          if (entry.filePath) {
-            try {
-              localAvailable = (await stat(entry.filePath)).isFile();
-            } catch {
-              localAvailable = false;
-            }
-          }
-          return { ...entry, localAvailable };
+          const reportedFilePath = entry.filePath || "";
+          const resolvedFilePath = await resolveVirtualDjLocalFile(
+            entry,
+            libraryIndex
+          );
+          return {
+            ...entry,
+            reportedFilePath,
+            filePath: resolvedFilePath || reportedFilePath,
+            localAvailable: Boolean(resolvedFilePath),
+            availableInVirtualDJ: true
+          };
         })
       );
       vdjQueueEntries = inspectedEntries;
@@ -1054,8 +1081,12 @@ async function reconcileVirtualDjQueue(force = false) {
             ...entry,
             filePath: actual.filePath || entry.filePath,
             singer: actual.singer || entry.singer,
-            song: item?.song || actual.song || entry.song,
-            artist: item?.artist || actual.artist || entry.artist,
+            song: entry.manualLink
+              ? actual.song || entry.song
+              : item?.song || actual.song || entry.song,
+            artist: entry.manualLink
+              ? actual.artist || entry.artist
+              : item?.artist || actual.artist || entry.artist,
             durationSeconds:
               Math.max(0, Number(actual.durationSeconds) || 0) ||
               Math.max(0, Number(item?.durationSeconds) || 0),
@@ -1372,6 +1403,7 @@ function stateView() {
         artist: entry.artist || "",
         durationSeconds: Math.max(0, Number(entry.durationSeconds) || 0),
         localAvailable: entry.localAvailable === true,
+        availableInVirtualDJ: true,
         linkedRequestId: entry.linkedRequestId || "",
         sourceType: entry.sourceType || "virtualdj_external"
       })),
@@ -1724,14 +1756,14 @@ function appendQueuePosition(id) {
   vdjQueueCount = knownEnd + 1;
 }
 
-async function queueRequest(id, requestedPath, options = {}) {
+async function queueRequest(id, requestedPath) {
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (effectiveRequestOutcome(item)) {
     throw new Error("This request was already marked completed or skipped.");
   }
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
-  if (pendingInsertions.has(id) && !options.requeue) {
+  if (pendingInsertions.has(id)) {
     return {
       ok: true,
       confirmationPending: true,
@@ -1741,9 +1773,15 @@ async function queueRequest(id, requestedPath, options = {}) {
   }
   const wasQueued = !suppressedQueueIds.has(id) && queuedIds.has(id);
   const wasRemovedExternally = removedExternallyIds.has(id);
-  const requeue = Boolean(options.requeue) && wasQueued;
-  if (wasQueued && !requeue && vdjQueueHasSnapshot) {
-    return { ok: true, alreadyQueued: true, linked: true };
+  if (wasQueued) {
+    return {
+      ok: true,
+      alreadyQueued: true,
+      linked: true,
+      preserved: true,
+      warning:
+        "The song is already in VirtualDJ. Move it directly in VirtualDJ; the Bridge will preserve the row and follow its new position."
+    };
   }
   if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
@@ -1765,20 +1803,6 @@ async function queueRequest(id, requestedPath, options = {}) {
       exact?.exact ? exact.filePath : "",
       queuedEntries.get(id)?.filePath
     ]);
-    let previousRemoved = false;
-    if (requeue) {
-      const tracked = queuedEntries.get(id) || queuedEntryFromRequest(item, filePath);
-      if (tracked) {
-        const removal = await removeKaraokeEntry(config.virtualDJ, tracked);
-        if (removal.reason === "ambiguous") {
-          throw new Error(
-            "VirtualDJ has more than one identical copy. Remove the correct one directly in VirtualDJ before sending it again."
-          );
-        }
-        previousRemoved = removal.removed === true;
-        if (previousRemoved) removeQueuePosition(id);
-      }
-    }
     pendingInsertions.set(id, {
       phase: "confirming",
       startedAt: pendingInsertions.get(id)?.startedAt || Date.now()
@@ -1799,12 +1823,13 @@ async function queueRequest(id, requestedPath, options = {}) {
       if (error?.commandAccepted !== true) throw error;
       const uncertainEntry = queuedEntryFromRequest(item, filePath);
       if (uncertainEntry) {
-        queuedEntries.set(id, uncertainEntry);
+        queuedEntries.set(id, { ...uncertainEntry, manualLink: true });
         await persistQueuedEntries();
       }
       pendingInsertions.set(id, {
         phase: "confirming",
-        startedAt: Date.now()
+        startedAt: Date.now(),
+        accepted: true
       });
       vdjError = "";
       return {
@@ -1839,9 +1864,7 @@ async function queueRequest(id, requestedPath, options = {}) {
     vdjError = "";
     item.status = wasRemovedExternally
       ? "Reagregada a VirtualDJ"
-      : requeue
-        ? "Reenviada a VirtualDJ"
-        : "Agregada a VirtualDJ";
+      : "Agregada a VirtualDJ";
     let warning = "";
     try {
       await updateBridgeRequest(config, id, item.status, basename(filePath), {
@@ -1859,9 +1882,7 @@ async function queueRequest(id, requestedPath, options = {}) {
       result,
       alreadyQueued: result.alreadyQueued === true,
       linked: result.alreadyQueued === true,
-      requeued: requeue,
       restored: wasRemovedExternally,
-      previousRemoved,
       warning
     };
   } catch (error) {
@@ -1871,6 +1892,119 @@ async function queueRequest(id, requestedPath, options = {}) {
   } finally {
     queueLocks.delete(id);
     broadcastState();
+  }
+}
+
+async function replaceQueuedRequest(id, requestedPath) {
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  if (effectiveRequestOutcome(item)) {
+    throw new Error("This request was already marked completed or skipped.");
+  }
+  if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
+  const current = queuedEntries.get(id);
+  if (!current || !queuedIds.has(id)) {
+    throw new Error("Synchronize first; the linked VirtualDJ row is no longer confirmed.");
+  }
+  const nextFilePath = await firstAllowedFile([requestedPath]);
+  if (normalizeVdjPath(nextFilePath) === normalizeVdjPath(current.filePath)) {
+    return { ok: true, alreadyQueued: true, linked: true };
+  }
+
+  queueLocks.add(id);
+  try {
+    const removal = await removeKaraokeEntry(config.virtualDJ, current);
+    if (removal.reason === "ambiguous") {
+      throw new Error(
+        "VirtualDJ has ambiguous copies; change the correct row directly in VirtualDJ."
+      );
+    }
+    if (removal.removed !== true) {
+      throw new Error(
+        "The linked row could not be identified safely, so the Bridge did not remove or replace anything."
+      );
+    }
+
+    const originalPosition = Number.isInteger(removal.index)
+      ? removal.index
+      : vdjQueuePositions.get(id) || 0;
+    let result;
+    try {
+      result = await insertKaraokeEntry(config.virtualDJ, {
+        ...trackingEntryFromRequest(item),
+        filePath: nextFilePath
+      }, originalPosition);
+    } catch (error) {
+      let restored = false;
+      try {
+        const rollback = await insertKaraokeEntry(
+          config.virtualDJ,
+          current,
+          originalPosition
+        );
+        restored = rollback.verified === true;
+      } catch {
+        restored = false;
+      }
+      throw new Error(
+        restored
+          ? `The replacement failed and the original VirtualDJ row was restored: ${errorMessage(error)}`
+          : `The replacement failed and the original row could not be restored automatically: ${errorMessage(error)}`
+      );
+    }
+
+    const actualEntry = stabilizeVirtualDjEntries(
+      [{ ...result.entry, index: result.index }],
+      vdjQueueEntries
+    )[0];
+    const linkedEntry = queuedEntryFromRequest(
+      item,
+      nextFilePath,
+      actualEntry
+    );
+    if (!linkedEntry) {
+      throw new Error("VirtualDJ confirmed the replacement, but its row could not be linked.");
+    }
+    queuedEntries.set(id, linkedEntry);
+    queuedIds.add(id);
+    suppressedQueueIds.delete(id);
+    removedExternallyIds.delete(id);
+    pendingInsertions.delete(id);
+    queuePresenceMisses.delete(id);
+    transientQueueMissingIds.delete(id);
+    vdjQueuePositions.set(id, result.index);
+    await persistQueuedEntries();
+    item.status = "Reagregada a VirtualDJ";
+    let warning = "";
+    try {
+      await updateBridgeRequest(
+        config,
+        id,
+        item.status,
+        basename(nextFilePath),
+        {
+          durationSeconds: item.durationSeconds,
+          virtualDJItemId: linkedEntry.virtualDJItemId,
+          queuePosition: result.index,
+          syncState: "confirmed",
+          lastSeenAt: new Date().toISOString()
+        }
+      );
+    } catch (error) {
+      warning =
+        `The file was replaced in VirtualDJ, but Guest Star did not confirm the update: ${errorMessage(error)}`;
+    }
+    return {
+      ok: true,
+      replaced: true,
+      queuePosition: result.index + 1,
+      fileName: basename(nextFilePath),
+      warning
+    };
+  } finally {
+    queueLocks.delete(id);
+    await reconcileVirtualDjQueue(true);
   }
 }
 
@@ -2807,14 +2941,24 @@ async function api(request, response, url) {
     const body = await readJson(request);
     const data = await queueRequest(
       decodeURIComponent(queueMatch[1]),
-      body.filePath,
-      { requeue: body.requeue === true }
+      body.filePath
     );
     broadcastState();
     json(response, 200, data);
     return;
   }
   const removeMatch = pathname.match(/^\/api\/requests\/([^/]+)\/remove$/);
+  const replaceMatch = pathname.match(/^\/api\/requests\/([^/]+)\/replace$/);
+  if (request.method === "POST" && replaceMatch) {
+    const body = await readJson(request);
+    const data = await replaceQueuedRequest(
+      decodeURIComponent(replaceMatch[1]),
+      body.filePath
+    );
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
   if (request.method === "POST" && removeMatch) {
     const data = await removeQueuedRequest(decodeURIComponent(removeMatch[1]));
     broadcastState();
@@ -3005,9 +3149,7 @@ async function executeCloudCommand(command) {
     return { synchronized: true };
   }
   if (command.commandType === "addRequest") {
-    return queueRequest(String(payload.requestId || ""), payload.filePath || "", {
-      requeue: payload.requeue === true
-    });
+    return queueRequest(String(payload.requestId || ""), payload.filePath || "");
   }
   if (command.commandType === "removeRequest") {
     return removeQueuedRequest(String(payload.requestId || ""));
@@ -3025,9 +3167,7 @@ async function executeCloudCommand(command) {
     );
   }
   if (command.commandType === "moveRequest") {
-    return queueRequest(String(payload.requestId || ""), payload.filePath || "", {
-      requeue: true
-    });
+    return queueRequest(String(payload.requestId || ""), payload.filePath || "");
   }
   throw new Error("Unsupported Bridge command.");
 }

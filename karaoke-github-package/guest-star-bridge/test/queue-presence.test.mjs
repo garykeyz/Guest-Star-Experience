@@ -46,3 +46,20 @@ test("una coincidencia restablece el contador de ausencias", () => {
   assert.deepEqual(result.matched, ["request-1"]);
   assert.equal(result.next.get("request-1"), 0);
 });
+
+test("un comando aceptado nunca vuelve a pendiente ni se reenvía por baja coincidencia", () => {
+  const result = reconcileQueuePresence({
+    previous: new Map([["request-1", 99]]),
+    trackedIds: ["request-1"],
+    matchedIds: new Set(),
+    pendingInsertions: new Map([[
+      "request-1",
+      { phase: "confirming", startedAt: 1, accepted: true }
+    ]]),
+    now: 60_000
+  });
+
+  assert.deepEqual(result.confirmedMissing, []);
+  assert.deepEqual(result.transientMissing, ["request-1"]);
+  assert.equal(result.next.get("request-1"), 0);
+});

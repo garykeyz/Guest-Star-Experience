@@ -14,7 +14,8 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
         filePath: "/Music/Karaoke/song.mp4",
         singer: "Ana",
         song: "Song",
-        artist: "Artist"
+        artist: "Artist",
+        manualLink: true
       },
       { id: "request-2", filePath: "", singer: "Carlos" }
     ],
@@ -39,6 +40,7 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
   assert.equal(state.activityStartedAt, "2026-07-29T20:00:00.000Z");
   assert.equal(state.entries.length, 1);
   assert.equal(state.entries[0].id, "request-1");
+  assert.equal(state.entries[0].manualLink, true);
   assert.deepEqual(state.suppressedIds, ["request-3"]);
   assert.deepEqual(state.removedIds, ["request-2"]);
   assert.equal(state.recoveries.length, 1);

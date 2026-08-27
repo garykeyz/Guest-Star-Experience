@@ -28,3 +28,11 @@ test("traduce también los marcadores vacíos sin tocar nombres de canciones o a
   assert.match(i18nSource, /\.artist/);
   assert.equal(translateBridgeText("Artist not provided", "es"), "Artista no indicado");
 });
+
+test("Guest Star Experience y Guest Star Bridge son marcas no traducibles", () => {
+  assert.equal(translateBridgeText("GUEST STAR EXPERIENCE", "es"), "GUEST STAR EXPERIENCE");
+  assert.equal(translateBridgeText("Guest Star Bridge", "es"), "Guest Star Bridge");
+  assert.match(i18nSource, /\[translate='no'\]/);
+  assert.match(i18nSource, /\.notranslate/);
+  assert.match(i18nSource, /\[data-brand\]/);
+});
