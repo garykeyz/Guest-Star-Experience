@@ -168,7 +168,7 @@ test("reconoce Mi Vida aunque VirtualDJ invierta título y artista", () => {
   assert.deepEqual(result.missing, []);
 });
 
-test("reconoce metadatos invertidos únicos aunque VirtualDJ haya cambiado el cantante", () => {
+test("no vincula metadatos únicos si el cantante físico de VirtualDJ es otro", () => {
   const result = reconcileTrackedQueue([{
     id: "request-unique", singer: "Alex · G-19AF",
     song: "Valió la pena", artist: "Marc Anthony", durationSeconds: 274
@@ -177,9 +177,133 @@ test("reconoce metadatos invertidos únicos aunque VirtualDJ haya cambiado el ca
     artist: "Valio la pena", durationSeconds: 274
   }]);
 
-  assert.equal(result.matched.get("request-unique").index, 0);
-  assert.equal(result.matchDetails.get("request-unique").fields.includes("metadataReversed"), true);
-  assert.equal(result.matchDetails.get("request-unique").fields.includes("uniqueMetadata"), true);
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.missing, ["request-unique"]);
+  assert.deepEqual(result.unmatched.map((entry) => entry.index), [0]);
+});
+
+test("no vincula una pista propia por ruta, título o identificador si el cantante no coincide", () => {
+  const actual = stabilizeVirtualDjEntries([{
+    index: 0,
+    filePath: "/Music/Oops I Did It Again.mp4",
+    singer: "gary",
+    song: "Oops!...I Did It Again",
+    artist: "Britney Spears",
+    durationSeconds: 239
+  }]);
+  const result = reconcileTrackedQueue([{
+    id: "request-esteban",
+    filePath: "/Music/Oops I Did It Again.mp4",
+    singer: "gary",
+    expectedSinger: "Esteban",
+    song: "Oops!...I Did It Again",
+    artist: "Britney Spears",
+    durationSeconds: 239,
+    virtualDJItemId: actual[0].virtualDJItemId,
+    manualLink: false
+  }], actual);
+
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.missing, ["request-esteban"]);
+  assert.equal(result.unmatched[0].singer, "gary");
+});
+
+test("clasifica como propias las filas de la captura con cantantes distintos", () => {
+  const tracked = [
+    { id: "esteban", singer: "Esteban", song: "Oops!...I Did It Again", artist: "Britney Spears", durationSeconds: 239 },
+    { id: "marcela", singer: "Marcela", song: "Gimme! Gimme! Gimme! (A Man After Midnight)", artist: "ABBA", durationSeconds: 300 },
+    { id: "diana", singer: "Diana", song: "ROSÉ & Bruno Mars", artist: "APT.", durationSeconds: 191 },
+    { id: "moises", singer: "moises", song: "Mr. Brightside", artist: "The Killers", durationSeconds: 235 }
+  ];
+  const actual = [
+    { index: 0, singer: "gary", song: "Oops!...I Did It Again", artist: "Britney Spears", durationSeconds: 239 },
+    { index: 1, singer: "jaf", song: "Gimme! Gimme! Gimme! (A Man After Midnight)", artist: "ABBA", durationSeconds: 300 },
+    { index: 2, singer: "moises", song: "ROSÉ & Bruno Mars", artist: "APT.", durationSeconds: 191 },
+    { index: 3, singer: "alfredo", song: "Mr. Brightside", artist: "The Killers", durationSeconds: 235 }
+  ];
+  const result = reconcileTrackedQueue(tracked, actual);
+
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.missing, ["esteban", "marcela", "diana", "moises"]);
+  assert.deepEqual(result.unmatched.map((entry) => entry.singer), [
+    "gary", "jaf", "moises", "alfredo"
+  ]);
+});
+
+test("un vínculo manual estable sigue protegido aunque cambien cantante y metadatos", () => {
+  const actual = stabilizeVirtualDjEntries([{
+    index: 3,
+    filePath: "/Music/Selected.mp4",
+    singer: "VDJ edited singer",
+    song: "VDJ edited title",
+    artist: "",
+    durationSeconds: 210
+  }]);
+  const result = reconcileTrackedQueue([{
+    id: "manual-request",
+    manualLink: true,
+    expectedSinger: "Gina",
+    singer: "Gina",
+    song: "Requested title",
+    artist: "Requested artist",
+    durationSeconds: 192,
+    virtualDJItemId: actual[0].virtualDJItemId
+  }], actual);
+
+  assert.equal(result.matched.get("manual-request").index, 3);
+  assert.deepEqual(
+    result.matchDetails.get("manual-request").fields,
+    ["manualVirtualDJItemId"]
+  );
+});
+
+test("una pista ya reconocida como propia de VirtualDJ no se adopta por coincidencia", () => {
+  const actual = stabilizeVirtualDjEntries([{
+    index: 0,
+    filePath: "/Music/Native New Yorker.mp4",
+    singer: "Gari Inirio",
+    song: "Native New Yorker",
+    artist: "Odyssey",
+    durationSeconds: 239
+  }]).map((entry) => ({ ...entry, knownExternal: true }));
+  const result = reconcileTrackedQueue([{
+    id: "same-looking-request",
+    singer: "Gari Inirio",
+    song: "Native New Yorker",
+    artist: "Odyssey",
+    durationSeconds: 239,
+    filePath: "/Music/Native New Yorker.mp4",
+    virtualDJItemId: actual[0].virtualDJItemId
+  }], actual);
+
+  assert.equal(result.matched.size, 0);
+  assert.deepEqual(result.unmatched.map((entry) => entry.index), [0]);
+});
+
+test("solo el vínculo manual exacto puede reclamar una pista externa conocida", () => {
+  const actual = stabilizeVirtualDjEntries([{
+    index: 2,
+    filePath: "/Music/Selected.mp4",
+    singer: "Gina",
+    song: "Selected song",
+    artist: "Selected artist",
+    durationSeconds: 210
+  }]).map((entry) => ({ ...entry, knownExternal: true }));
+  const result = reconcileTrackedQueue([{
+    id: "manual-request",
+    manualLink: true,
+    singer: "Gina",
+    song: "Requested song",
+    artist: "Requested artist",
+    durationSeconds: 192,
+    virtualDJItemId: actual[0].virtualDJItemId
+  }], actual);
+
+  assert.equal(result.matched.get("manual-request").index, 2);
+  assert.deepEqual(
+    result.matchDetails.get("manual-request").fields,
+    ["manualVirtualDJItemId"]
+  );
 });
 
 test("no adivina por metadatos cuando dos solicitudes compiten por la misma canción", () => {

@@ -319,6 +319,9 @@ test("conserva el punto visible y nunca marca ausente una fila viva de VirtualDJ
   assert.match(serverSource, /const replaceMatch = pathname\.match/);
   assert.match(serverSource, /replaceQueuedRequest/);
   assert.match(serverSource, /manualLink/);
+  assert.match(serverSource, /expectedSinger: item \? vdjSingerForRequest\(item\) : entry\.singer/);
+  assert.match(serverSource, /expectedSinger: vdjSingerForRequest\(item\)/);
+  assert.match(serverSource, /knownExternal: knownExternalEntries\.has\(entry\.virtualDJItemId\)/);
 });
 
 test("protege Guest Star Experience y Guest Star Bridge como nombres de marca", () => {
@@ -384,8 +387,8 @@ test("el Bridge usa un proxy dedicado sin quitar los tokens de su sesión", () =
   assert.doesNotMatch(bridgeApiSource, /delete payload\.authToken/);
   assert.match(bridgeHtml, /id="bridgeVersion"/);
   assert.match(appSource, /state\.version \|\| "unknown"/);
-  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.8"/);
-  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.8/);
+  assert.match(bridgeApiSource, /X-Guest-Star-Bridge-Proxy": "4\.3\.9"/);
+  assert.match(hostPanelSource, /GUEST STAR EXPERIENCE 4\.3\.9/);
   assert.match(hostPanelSource, /Service v/);
 });
 
