@@ -114,22 +114,30 @@ export function queueMetadataMatches(tracked, actual) {
 function candidateMatch(
   tracked,
   actual,
-  actualMetadataPopulation,
-  trackedMetadataPopulation,
   actualSingerPopulation,
   trackedSingerPopulation
 ) {
   const fields = [];
+  const manualLink = tracked?.manualLink === true;
   const linkedId = String(tracked?.virtualDJItemId || "");
   const actualId = String(actual?.virtualDJItemId || "");
-  if (linkedId && actualId && linkedId === actualId) {
-    return { confidence: 1, fields: ["virtualDJItemId"] };
-  }
-
-  const targetSinger = singerKey(tracked?.singer);
+  const targetSinger = singerKey(tracked?.expectedSinger || tracked?.singer);
   const actualSinger = singerKey(actual?.singer);
   const sameSinger = Boolean(targetSinger && actualSinger && targetSinger === actualSinger);
   if (sameSinger) fields.push("singer");
+
+  // An explicit Bridge insertion/replacement owns its stable physical row.
+  // Inferred links never get this exception: a different singer means a
+  // different performance, even when the song, path or duration is identical.
+  if (manualLink && linkedId && actualId && linkedId === actualId) {
+    return { confidence: 1, fields: ["manualVirtualDJItemId"] };
+  }
+  if (actual?.knownExternal === true) {
+    return { confidence: 0, fields: ["knownExternal"] };
+  }
+  if (linkedId && actualId && linkedId === actualId && sameSinger) {
+    return { confidence: 0.995, fields: ["virtualDJItemId", "singer"] };
+  }
 
   const targetPath = normalizeVdjPath(tracked?.filePath);
   const actualPath = normalizeVdjPath(actual?.filePath);
@@ -147,30 +155,24 @@ function candidateMatch(
     Math.abs(trackedDuration - actualDuration) <= 3;
   if (sameDuration) fields.push("duration");
 
+  if (!sameSinger) return { confidence: 0, fields };
+
   if (samePath && sameSinger) return { confidence: 0.99, fields };
   if (sameSinger && sameMetadata && sameDuration) {
     return { confidence: 0.96, fields };
   }
   if (sameSinger && sameMetadata) return { confidence: 0.91, fields };
-  if (samePath && sameMetadata) return { confidence: 0.9, fields };
-  if (samePath) return { confidence: 0.86, fields };
   if (
-    sameSinger && sameDuration &&
+    manualLink && sameDuration &&
     actualSingerPopulation === 1 && trackedSingerPopulation === 1
   ) {
     return { confidence: 0.88, fields: [...fields, "uniqueSingerDuration"] };
   }
   if (
-    sameSinger && linkedId &&
+    manualLink && linkedId &&
     actualSingerPopulation === 1 && trackedSingerPopulation === 1
   ) {
     return { confidence: 0.83, fields: [...fields, "preservedSingerLink"] };
-  }
-  if (
-    sameMetadata && sameDuration &&
-    actualMetadataPopulation === 1 && trackedMetadataPopulation === 1
-  ) {
-    return { confidence: 0.84, fields: [...fields, "uniqueMetadata"] };
   }
   return { confidence: 0, fields };
 }
@@ -187,13 +189,7 @@ export function reconcileTrackedQueue(trackedEntries = [], actualEntries = []) {
   for (const tracked of trackedEntries) {
     const id = String(tracked?.id || "");
     if (!id) continue;
-    const actualMetadataPopulation = stableActual.filter(
-      (entry) => queueMetadataMatches(tracked, entry)
-    ).length;
-    const trackedMetadataPopulation = trackedEntries.filter(
-      (entry) => queueMetadataMatches(tracked, entry)
-    ).length;
-    const targetSinger = singerKey(tracked?.singer);
+    const targetSinger = singerKey(tracked?.expectedSinger || tracked?.singer);
     const actualSingerPopulation = stableActual.filter(
       (entry) => targetSinger && singerKey(entry?.singer) === targetSinger
     ).length;
@@ -207,8 +203,6 @@ export function reconcileTrackedQueue(trackedEntries = [], actualEntries = []) {
         ...candidateMatch(
           tracked,
           entry,
-          actualMetadataPopulation,
-          trackedMetadataPopulation,
           actualSingerPopulation,
           trackedSingerPopulation
         )

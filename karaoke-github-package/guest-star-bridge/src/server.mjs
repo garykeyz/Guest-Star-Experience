@@ -73,7 +73,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.8";
+const BRIDGE_VERSION = "4.3.9";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
@@ -1035,6 +1035,10 @@ async function reconcileVirtualDjQueue(force = false) {
         ) {
           trackedById.set(entry.id, {
             ...entry,
+            // Old inferred matches may have copied the physical VDJ singer
+            // into local state. Always reconcile a non-manual link against
+            // the singer who actually submitted the request.
+            expectedSinger: item ? vdjSingerForRequest(item) : entry.singer,
             queuePosition: vdjQueuePositions.get(entry.id)
           });
         }
@@ -1050,11 +1054,18 @@ async function reconcileVirtualDjQueue(force = false) {
         }
         trackedById.set(item.id, {
           ...trackingEntryFromRequest(item),
+          expectedSinger: vdjSingerForRequest(item),
           queuePosition: vdjQueuePositions.get(item.id)
         });
       }
       const tracked = [...trackedById.values()];
-      const reconciliation = reconcileTrackedQueue(tracked, inspectedEntries);
+      const reconciliation = reconcileTrackedQueue(
+        tracked,
+        inspectedEntries.map((entry) => ({
+          ...entry,
+          knownExternal: knownExternalEntries.has(entry.virtualDJItemId)
+        }))
+      );
       const presence = reconcileQueuePresence({
         previous: queuePresenceMisses,
         trackedIds: tracked.map((entry) => entry.id),
@@ -1080,7 +1091,9 @@ async function reconcileVirtualDjQueue(force = false) {
           const linkedEntry = {
             ...entry,
             filePath: actual.filePath || entry.filePath,
-            singer: actual.singer || entry.singer,
+            singer: entry.manualLink
+              ? actual.singer || entry.singer
+              : vdjSingerForRequest(item) || entry.singer,
             song: entry.manualLink
               ? actual.song || entry.song
               : item?.song || actual.song || entry.song,
