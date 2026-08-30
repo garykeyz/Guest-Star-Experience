@@ -2171,7 +2171,7 @@ async function prepareStemJob(job) {
     job.progress = 3;
     await runStemCommand(stemFfmpegPath, [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-      "-i", job.filePath, "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_f32le", wavPath
+      "-i", job.filePath, "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", wavPath
     ], job, "Extrayendo audio");
     job.progress = 10;
     await runStemCommand(process.execPath, [

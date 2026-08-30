@@ -53,7 +53,7 @@ try {
     "-f", "lavfi", "-i", "sine=frequency=220:duration=12",
     "-f", "lavfi", "-i", "sine=frequency=880:duration=12",
     "-filter_complex", "[0:a][1:a]amix=inputs=2:normalize=0[a]",
-    "-map", "[a]", "-ac", "2", "-ar", "44100", "-c:a", "pcm_f32le",
+    "-map", "[a]", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le",
     input
   ], 30_000);
 

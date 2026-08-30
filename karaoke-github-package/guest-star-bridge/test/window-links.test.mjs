@@ -65,6 +65,13 @@ const d1ActionsSource = await readFile(
   "utf8"
 );
 
+test("el motor de stems recibe WAV PCM compatible en macOS y Linux", () => {
+  assert.match(serverSource, /"-c:a", "pcm_s16le"/);
+  assert.match(stemsSmokeTest, /"-c:a", "pcm_s16le"/);
+  assert.doesNotMatch(serverSource, /pcm_f32le/);
+  assert.doesNotMatch(stemsSmokeTest, /pcm_f32le/);
+});
+
 test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.doesNotMatch(appSource, /window\.open/);
   assert.match(appSource, /\/api\/external\/open/);
