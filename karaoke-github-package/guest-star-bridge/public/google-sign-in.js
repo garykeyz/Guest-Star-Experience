@@ -35,7 +35,7 @@ function loadGoogleIdentity() {
 async function finishGoogleLogin(response) {
   if (!response?.credential) return;
   button.setAttribute("aria-busy", "true");
-  message("Validando la cuenta y conectando Guest Star Bridge…");
+  message("Validando la cuenta y conectando Guest Star…");
   try {
     const data = await jsonRequest("/api/auth/google", {
       method: "POST",
@@ -43,8 +43,8 @@ async function finishGoogleLogin(response) {
     });
     const name = String(data.user?.displayName || data.user?.email || "");
     button.replaceChildren();
-    message(`Listo${name ? `, ${name}` : ""}. Guest Star Bridge ya inició sesión.`);
-    document.title = "Guest Star Bridge · Conectado";
+    message(`Listo${name ? `, ${name}` : ""}. Guest Star ya inició sesión.`);
+    document.title = "Guest Star · Conectado";
   } catch (error) {
     message(error instanceof Error ? error.message : String(error), true);
     button.removeAttribute("aria-busy");

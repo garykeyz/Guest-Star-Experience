@@ -351,7 +351,7 @@ function doPost(e) {
       return json_({ ok: false, code: "MISSING_FIELDS" });
     }
 
-    const duplicateWarning = requestDuplicateWarning_(body);
+    const duplicateWarning = requestDuplicateWarning_(body, publicContext);
     if (
       !body.confirmDuplicate &&
       (duplicateWarning.repeatedSinger || duplicateWarning.duplicateSong)
@@ -511,7 +511,7 @@ function hostAction_(body) {
   return json_({ ok: true, state: publicState_() });
 }
 
-function requestDuplicateWarning_(body) {
+function requestDuplicateWarning_(body, publicContext) {
   const sheet = spreadsheet_().getSheetByName(REQUESTS);
   const last = sheet.getLastRow();
   const targetSinger = normalizeYoutubeText_(body.name);
@@ -524,12 +524,17 @@ function requestDuplicateWarning_(body) {
   };
   if (last < 2 || !targetSinger || !targetSong) return warning;
 
-  const rows = sheet.getRange(2, 2, last - 1, 11).getDisplayValues();
+  const rows = sheet.getRange(2, 1, last - 1, HEADERS.length).getDisplayValues();
+  const activityId = String(publicContext && publicContext.activity ? publicContext.activity.activityId || "" : "");
+  const cycleId = String(publicContext && publicContext.activity ? publicContext.activity.currentCycleId || "" : "");
   rows.forEach(function(row) {
-    const singer = normalizeYoutubeText_(row[0]);
-    const song = normalizeYoutubeText_(row[1]);
-    const artist = normalizeYoutubeText_(row[2]);
-    const status = normalizeYoutubeText_(row[10]);
+    if (activityId && String(row[17] || "") && String(row[17]) !== activityId) return;
+    if (cycleId && String(row[18] || "") !== cycleId) return;
+    const singer = normalizeYoutubeText_(row[1]);
+    const song = normalizeYoutubeText_(row[2]);
+    const artist = normalizeYoutubeText_(row[3]);
+    const status = normalizeYoutubeText_(row[11]);
+    if (status === "retirada del player" || status === "eliminada" || status === "cancelada") return;
     if (singer && singer === targetSinger) warning.repeatedSinger = true;
 
     const artistMatches =
@@ -830,7 +835,8 @@ function activeQueuePeopleCount_() {
       status === "ya canto" ||
       status === "completada" ||
       status === "saltado" ||
-      status === "omitida"
+      status === "omitida" ||
+      status === "retirada del player"
     ) return;
     people[singer] = true;
   });
@@ -928,7 +934,8 @@ function durationCellSeconds_(value, displayValue) {
 }
 
 function skippedStatus_(value) {
-  return normalizeYoutubeText_(value) === "saltado";
+  const status = normalizeYoutubeText_(value);
+  return status === "saltado" || status === "retirada del player";
 }
 
 function recalculateActivity_() {
@@ -6133,7 +6140,7 @@ function bridgeRequestUpdateV4_(auth, body) {
   const previousStatus = String(rows[index][11] || "Pendiente");
   const allowedStatuses = [
     "Pendiente", "Agregada a VirtualDJ", "Ya cantó", "Saltado",
-    "Fuera de VirtualDJ", "No está local", "Reagregada a VirtualDJ",
+    "Retirada del Player", "Fuera de VirtualDJ", "No está local", "Reagregada a VirtualDJ",
     "Reenviada a VirtualDJ", "Retirada de rotación"
   ];
   const status = allowedStatuses.indexOf(body.status) >= 0 ? body.status : previousStatus;

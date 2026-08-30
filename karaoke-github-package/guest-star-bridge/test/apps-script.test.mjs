@@ -10,7 +10,19 @@ import {
   updateBridgeRequest
 } from "../src/apps-script.mjs";
 
-test("espera el arranque lento de Apps Script al iniciar sesion", async (t) => {
+function d1Config(port) {
+  return {
+    appsScriptUrl: `http://127.0.0.1:${port}/api/bridge`,
+    authToken: "auth-token",
+    deviceToken: "device-token",
+    deviceId: "device-1",
+    lastHotelId: "hotel-1",
+    lastVenueId: "venue-1",
+    lastActivityId: "activity-1"
+  };
+}
+
+test("espera el arranque lento del servicio D1 al iniciar sesion", async (t) => {
   const server = createServer(async (request, response) => {
     for await (const _chunk of request) {
       // Consume the request body before simulating an Apps Script cold start.
@@ -41,33 +53,11 @@ test("espera el arranque lento de Apps Script al iniciar sesion", async (t) => {
   assert.equal(result.deviceId, "device-1");
 });
 
-test("envía al Apps Script la acción, el PIN y los datos de la solicitud", async (t) => {
-  let received;
-  const server = createServer(async (request, response) => {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    response.writeHead(200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ ok: true, requests: [] }));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const address = server.address();
-  const config = {
-    appsScriptUrl: `http://127.0.0.1:${address.port}/exec`,
-    hostPin: "123456"
-  };
-  const result = await appsScriptAction(config, "bridgeUpdate", {
-    id: "request-1",
-    status: "Agregada a VirtualDJ"
-  });
-  assert.equal(result.ok, true);
-  assert.deepEqual(received, {
-    action: "bridgeUpdate",
-    pin: "123456",
-    id: "request-1",
-    status: "Agregada a VirtualDJ"
-  });
+test("bloquea por completo el backend heredado de Google Sheets y PIN", async () => {
+  await assert.rejects(
+    appsScriptAction({ appsScriptUrl: "https://script.google.com/example", hostPin: "123456" }, "bridgeUpdate"),
+    /Google Sheets\/PIN backend is disabled/
+  );
 });
 
 test("envía los controles compartidos con origen bridge", async (t) => {
@@ -86,20 +76,20 @@ test("envía los controles compartidos con origen bridge", async (t) => {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
-  const address = server.address();
-  const config = {
-    appsScriptUrl: `http://127.0.0.1:${address.port}/exec`,
-    hostPin: "123456"
-  };
+  const config = d1Config(server.address().port);
 
   const result = await controlActivity(config, "close");
 
   assert.equal(result.state.accepting, false);
   assert.deepEqual(received, {
-    action: "bridgeControl",
-    pin: "123456",
-    control: "close",
-    source: "bridge"
+    action: "toggleRequests",
+    authToken: "auth-token",
+    deviceToken: "device-token",
+    hotelId: "hotel-1",
+    venueId: "venue-1",
+    activityId: "activity-1",
+    source: "bridge",
+    open: false
   });
 });
 
@@ -123,14 +113,34 @@ test("inicia el reloj compartido sin archivar las solicitudes", async (t) => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
 
-  const result = await controlActivity({
-    appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`,
-    hostPin: "123456"
-  }, "start");
+  const result = await controlActivity(d1Config(server.address().port), "start");
 
   assert.equal(result.state.lastAction, "start");
   assert.equal(result.requests.length, 1);
-  assert.equal(received.control, "start");
+  assert.equal(received.action, "startActivityV4");
+  assert.equal(received.source, "bridge");
+});
+
+test("inicia Player con origen player y no lo convierte en Bridge", async (t) => {
+  let received;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      state: { activityRunning: true, playbackMode: "player" },
+      requests: []
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  await controlActivity(d1Config(server.address().port), "start", "player");
+
+  assert.equal(received.action, "startActivityV4");
+  assert.equal(received.source, "player");
 });
 
 test("actualiza en la fila un solo enlace elegido y la duración exacta", async (t) => {
@@ -146,10 +156,7 @@ test("actualiza en la fila un solo enlace elegido y la duración exacta", async 
   t.after(() => server.close());
 
   await updateBridgeRequest(
-    {
-      appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`,
-      hostPin: "123456"
-    },
+    d1Config(server.address().port),
     "request-1",
     "No está local",
     "",
@@ -176,10 +183,7 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
   t.after(() => server.close());
 
   await searchKaraokeYouTube(
-    {
-      appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`,
-      hostPin: "123456"
-    },
+    d1Config(server.address().port),
     "Vivir Mi Vida",
     "Marc Anthony",
     "Español",
@@ -187,8 +191,12 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
   );
 
   assert.deepEqual(received, {
-    action: "youtubeSearch",
-    pin: "123456",
+    action: "youtubeSearchV4",
+    authToken: "auth-token",
+    deviceToken: "device-token",
+    hotelId: "hotel-1",
+    venueId: "venue-1",
+    activityId: "activity-1",
     song: "Vivir Mi Vida",
     artist: "Marc Anthony",
     language: "Español",
@@ -209,10 +217,7 @@ test("actualiza duración, transición y apertura desde la app", async (t) => {
   t.after(() => server.close());
 
   await updateBridgeConfig(
-    {
-      appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`,
-      hostPin: "123456"
-    },
+    d1Config(server.address().port),
     {
       activityHours: 3,
       transitionSeconds: 45,
@@ -221,12 +226,15 @@ test("actualiza duración, transición y apertura desde la app", async (t) => {
   );
 
   assert.deepEqual(received, {
-    action: "bridgeConfigUpdate",
-    pin: "123456",
+    action: "updateActivitySettings",
+    authToken: "auth-token",
+    deviceToken: "device-token",
+    hotelId: "hotel-1",
+    venueId: "venue-1",
+    activityId: "activity-1",
     source: "bridge",
-    activityHours: 3,
-    transitionSeconds: 45,
-    accepting: false
+    defaultDurationSeconds: 10800,
+    defaultTransitionSeconds: 45
   });
 });
 
@@ -240,10 +248,7 @@ test("avisa al Host cuando el servicio publicado todavía es anterior a 4.1", as
 
   await assert.rejects(
     controlActivity(
-      {
-        appsScriptUrl: `http://127.0.0.1:${server.address().port}/exec`,
-        hostPin: "123456"
-      },
+      d1Config(server.address().port),
       "reset"
     ),
     /service version 4\.2\.0.*Contact the Superhost/i

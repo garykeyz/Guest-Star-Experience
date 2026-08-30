@@ -174,32 +174,45 @@ test("advierte repeticiones antes de crear una fila y permite confirmarlas", () 
   const originalSpreadsheet = context.spreadsheet_;
   context.spreadsheet_ = () => ({
     getSheetByName: () => ({
-      getLastRow: () => 3,
+      getLastRow: () => 4,
       getRange: () => ({
         getDisplayValues: () => [
-          ["Ana", "Dancing Queen", "ABBA", "", "English", "", "", "", "", "", "Agregada a VirtualDJ"],
-          ["Luis", "Vivir Mi Vida", "Marc Anthony", "", "Español", "", "", "", "", "", "Ya cantó"]
+          ["device-1", "Ana", "Dancing Queen", "ABBA", "", "English", "", "", "", "", "", "Agregada a VirtualDJ", "", "", "", "", "", "activity-1", "cycle-1"],
+          ["device-2", "Luis", "Vivir Mi Vida", "Marc Anthony", "", "Español", "", "", "", "", "", "Ya cantó", "", "", "", "", "", "activity-1", "cycle-1"],
+          ["device-3", "Mia", "Waterloo", "ABBA", "", "English", "", "", "", "", "", "Pendiente", "", "", "", "", "", "activity-1", "cycle-anterior"]
         ]
       })
     })
   });
 
+  const publicContext = {
+    activity: { activityId: "activity-1", currentCycleId: "cycle-1" }
+  };
+
   const active = context.requestDuplicateWarning_({
     name: "Ana",
     song: "Dancing Queen",
     artist: "ABBA"
-  });
+  }, publicContext);
   const completed = context.requestDuplicateWarning_({
     name: "Otro",
     song: "Vivir Mi Vida",
     artist: "Marc Anthony"
-  });
+  }, publicContext);
+  const previousCycle = context.requestDuplicateWarning_({
+    name: "Mia",
+    song: "Waterloo",
+    artist: "ABBA"
+  }, publicContext);
   context.spreadsheet_ = originalSpreadsheet;
 
   assert.equal(active.repeatedSinger, true);
   assert.equal(active.duplicateSong, true);
   assert.equal(active.duplicateSongState, "active");
   assert.equal(completed.duplicateSongState, "completed");
+  assert.equal(previousCycle.repeatedSinger, false);
+  assert.equal(previousCycle.duplicateSong, false);
+  assert.equal(previousCycle.duplicateSongState, "");
   assert.match(source, /DUPLICATE_CONFIRMATION_REQUIRED/);
   assert.match(source, /!body\.confirmDuplicate/);
 });

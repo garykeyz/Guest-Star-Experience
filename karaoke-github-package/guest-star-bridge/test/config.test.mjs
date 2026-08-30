@@ -55,7 +55,7 @@ test("permite olvidar carpeta y PIN por separado al cerrar", () => {
   assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 11 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
+test("la configuración 12 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -72,12 +72,30 @@ test("la configuración 11 recuerda sesión, selección e idioma sin guardar con
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 11);
+  assert.equal(runtime.configVersion, 12);
   assert.equal(runtime.uiLanguage, "en");
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");
   assert.equal(Object.hasOwn(stored, "password"), false);
+});
+
+test("conserva las carpetas y archivos elegidos para música ambiental", () => {
+  const runtime = sanitizeConfig({
+    backgroundMusicSources: [
+      "/Users/Yefry/Music/Ambiente",
+      "/Users/Yefry/Music/intro.mp3",
+      "/Users/Yefry/Music/Ambiente"
+    ],
+    backgroundMusicVolume: 0.42
+  }, DEFAULT_CONFIG);
+
+  assert.deepEqual(runtime.backgroundMusicSources, [
+    "/Users/Yefry/Music/Ambiente",
+    "/Users/Yefry/Music/intro.mp3"
+  ]);
+  assert.deepEqual(configForStorage(runtime).backgroundMusicSources, runtime.backgroundMusicSources);
+  assert.equal(runtime.backgroundMusicVolume, 0.42);
 });
 
 test("guarda favoritos independientes por hotel y elimina duplicados", () => {

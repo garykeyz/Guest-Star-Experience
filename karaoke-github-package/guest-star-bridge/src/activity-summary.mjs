@@ -21,6 +21,7 @@ export function requestOutcome(status) {
   const normalized = normalizeText(status);
   if (normalized === "ya canto" || normalized === "completada") return "completed";
   if (normalized === "saltado" || normalized === "omitida") return "skipped";
+  if (normalized === "retirada del player") return "removed";
   return "";
 }
 
@@ -59,7 +60,7 @@ export function buildActivitySummary(
   for (const item of requests) {
     const seconds = requestPlannedSeconds(item, fallbackTransition);
     const outcome = item?.outcome || requestOutcome(item?.status);
-    if (outcome === "skipped") {
+    if (outcome === "skipped" || outcome === "removed") {
       skippedSeconds += seconds;
       continue;
     }

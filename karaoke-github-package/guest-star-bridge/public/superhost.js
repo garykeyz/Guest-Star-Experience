@@ -25,7 +25,7 @@ const BRANDING_MESSAGES = [
 const COPY = {
   es: {
     title: "Panel Superhost",
-    subtitle: "Administra toda la operación desde el Bridge.",
+    subtitle: "Administra toda la operación desde Guest Star.",
     tabs: {
       hotels: "Hoteles",
       operation: "Lugares, actividades y agenda",
@@ -75,6 +75,14 @@ const COPY = {
     autoStart: "Iniciar actividad automáticamente",
     countdown: "Mostrar cuenta regresiva",
     saveSchedule: "Guardar agenda",
+    updateSchedule: "Actualizar agenda",
+    oneTimeDate: "Fecha y hora de esta actividad única",
+    recurringTime: "Hora de cada repetición",
+    afterDay: "Al terminar este día: anuncio opcional del hotel",
+    followingEventTime: "Hora de la actividad siguiente",
+    followingEventTitle: "Título de la actividad siguiente",
+    followingEventMessage: "Mensaje personalizado",
+    scheduleModeNotice: "La agenda nunca inicia un reproductor. El Host elige Player o Bridge al comenzar y no puede alternarlo hasta finalizar.",
     schedules: "Agenda",
     cancel: "Cancelar",
     reviews: "Reseñas",
@@ -233,6 +241,14 @@ const COPY = {
     autoStart: "Start activity automatically",
     countdown: "Show countdown",
     saveSchedule: "Save schedule",
+    updateSchedule: "Update schedule",
+    oneTimeDate: "Date and time for this one-time activity",
+    recurringTime: "Time for every occurrence",
+    afterDay: "After this day: optional hotel announcement",
+    followingEventTime: "Following activity time",
+    followingEventTitle: "Following activity title",
+    followingEventMessage: "Custom message",
+    scheduleModeNotice: "A schedule never starts a player. The Host chooses Player or Bridge at start and cannot switch until Finish.",
     schedules: "Schedule",
     cancel: "Cancel",
     reviews: "Reviews",
@@ -388,6 +404,30 @@ function parsedLocalizedMessages(branding) {
   }
 }
 
+function parsedScheduleDays(schedule) {
+  try {
+    const parsed = JSON.parse(value(schedule, "recurrenceDaysJson") || "[]");
+    return Array.isArray(parsed) ? parsed.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+  } catch { return []; }
+}
+
+function parsedScheduleAnnouncements(schedule) {
+  try {
+    const parsed = JSON.parse(value(schedule, "weekdayAnnouncementsJson") || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function zonedInputDate(valueToFormat, timeZone) {
+  const date = new Date(valueToFormat);
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: timeZone || "UTC", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
 function options(items, idField, label, selected = "") {
   return items.map((item) => {
     const id = value(item, idField);
@@ -438,6 +478,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   let selectedBrandingHotel = "";
   let selectedFavoriteHotel = "";
   let selectedReviewActivity = "";
+  let editingScheduleId = "";
   let opened = false;
   let autoOpened = false;
   let loading = false;
@@ -536,16 +577,42 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     const deletedActivities = (admin.activities || []).filter((activity) => value(activity, "status") === "inactive");
     const hotelNames = new Map(hotels.map((hotel) => [value(hotel, "hotelId"), value(hotel, "name")]));
     const venueNames = new Map(venues.map((venue) => [value(venue, "venueId"), value(venue, "name")]));
+    const schedules = admin.schedules || [];
+    const editingSchedule = schedules.find((schedule) => value(schedule, "scheduleId") === editingScheduleId) || null;
+    const editingActivity = activities.find((activity) => value(activity, "activityId") === value(editingSchedule, "activityId"));
+    const editingHotel = hotels.find((hotel) => value(hotel, "hotelId") === value(editingActivity, "hotelId"));
+    const scheduleRecurrence = value(editingSchedule, "recurrenceType") === "weekly" && Number(editingSchedule?.recurrenceInterval) === 2
+      ? "biweekly" : value(editingSchedule, "recurrenceType") || "none";
+    const scheduleDays = parsedScheduleDays(editingSchedule);
+    const scheduleAnnouncements = parsedScheduleAnnouncements(editingSchedule);
+    const recurrenceOptions = [
+      ["none", text().none], ["daily", text().daily], ["weekly", text().weekly],
+      ["biweekly", text().biweekly], ["monthly", text().monthly]
+    ].map(([key, label]) => `<option value="${key}"${scheduleRecurrence === key ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+    const scheduleForm = `<form id="scheduleForm" class="superhost-form" data-schedule-editor data-schedule-id="${escapeHtml(value(editingSchedule, "scheduleId"))}" data-activity-id="${escapeHtml(value(editingSchedule, "activityId"))}">
+      <label>${escapeHtml(text().activities)}<select name="activityId" required${editingSchedule ? " disabled" : ""}>${options(activities, "activityId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${venueNames.get(value(item, "venueId")) || "Venue"} — ${value(item, "name")}`, value(editingSchedule, "activityId"))}</select></label>
+      <label>${escapeHtml(text().recurrence)}<select name="recurrenceType" data-schedule-recurrence>${recurrenceOptions}</select></label>
+      <label data-one-time-field${scheduleRecurrence === "none" ? "" : " hidden"}>${escapeHtml(text().oneTimeDate)}<input name="scheduledLocal" type="datetime-local" value="${escapeHtml(zonedInputDate(value(editingSchedule, "scheduledStartAt"), value(editingHotel, "timezone")))}"${scheduleRecurrence === "none" ? " required" : ""} /></label>
+      <label data-recurring-field${scheduleRecurrence === "none" ? " hidden" : ""}>${escapeHtml(text().recurringTime)}<input name="scheduledTime" type="time" value="${escapeHtml(value(editingSchedule, "recurrenceTime") || zonedInputDate(value(editingSchedule, "scheduledStartAt"), value(editingHotel, "timezone")).slice(11, 16) || "20:00")}"${scheduleRecurrence === "none" ? "" : " required"} /></label>
+      <label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="${Math.max(15, (Number(editingSchedule?.durationSeconds) || 7200) / 60)}" /></label>
+      <label>${escapeHtml(text().openingLead)}<input name="openingLeadMinutes" type="number" min="0" value="${Math.max(0, (Number(editingSchedule?.requestOpeningLeadSeconds) || 3600) / 60)}" /></label>
+      <fieldset class="language-fieldset" data-weekly-fields${["weekly", "biweekly"].includes(scheduleRecurrence) ? "" : " hidden"}><legend>${escapeHtml(text().weekdayHelp)}</legend>${WEEKDAYS.map(([day, es, en]) => `<label class="check-row"><input name="weekday_${day}" type="checkbox" data-schedule-weekday="${day}"${scheduleDays.includes(day) ? " checked" : ""} />${escapeHtml(language === "es" ? es : en)}</label>`).join("")}</fieldset>
+      ${WEEKDAYS.map(([day, es, en]) => { const announcement = scheduleAnnouncements.find((item) => Number(item.weekday) === day) || {}; return `<fieldset class="language-fieldset" data-announcement-day="${day}"${scheduleDays.includes(day) && ["weekly", "biweekly"].includes(scheduleRecurrence) ? "" : " hidden"}><legend>${escapeHtml(language === "es" ? es : en)} · ${escapeHtml(text().afterDay)}</legend><label>${escapeHtml(text().followingEventTime)}<input name="announcement_time_${day}" type="time" value="${escapeHtml(announcement.time || "")}" /></label><label>${escapeHtml(text().followingEventTitle)}<input name="announcement_title_${day}" maxlength="120" value="${escapeHtml(announcement.title || "")}" /></label><label>${escapeHtml(text().followingEventMessage)}<input name="announcement_message_${day}" maxlength="500" value="${escapeHtml(announcement.message || "")}" /></label></fieldset>`; }).join("")}
+      <label class="check-row"><input name="autoOpenRequests" type="checkbox"${checked(editingSchedule?.autoOpenRequests) ? " checked" : ""} />${escapeHtml(text().autoOpen)}</label>
+      <label class="check-row"><input name="showCountdown" type="checkbox"${editingSchedule?.showCountdown === false ? "" : " checked"} />${escapeHtml(text().countdown)}</label>
+      <small>${escapeHtml(text().scheduleModeNotice)}</small>
+      <div class="superhost-actions"><button class="button primary">${escapeHtml(editingSchedule ? text().updateSchedule : text().saveSchedule)}</button>${editingSchedule ? `<button type="button" data-action="cancel-schedule-edit">${escapeHtml(text().cancel)}</button>` : ""}</div>
+    </form>`;
     content.innerHTML = `<div class="superhost-grid three">
       <section class="superhost-card"><h3>${escapeHtml(text().createVenue)}</h3><details><summary>${escapeHtml(text().createCompact)}</summary><form id="createVenueForm" class="superhost-form"><label>${escapeHtml(text().hotel)}<select name="hotelId" required>${options(hotels, "hotelId", (item) => value(item, "name"))}</select></label><label>${escapeHtml(text().venueName)}<input name="name" required /></label><button class="button primary">${escapeHtml(text().createVenue)}</button></form></details></section>
       <section class="superhost-card"><h3>${escapeHtml(text().createActivity)}</h3><details><summary>${escapeHtml(text().createCompact)}</summary><form id="createActivityForm" class="superhost-form"><label>${escapeHtml(text().venues)}<select name="venueId" required>${options(venues, "venueId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().activityName)}<input name="name" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="30" /></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().activityLanguages)}</legend>${languageCheckboxes()}</fieldset><button class="button primary">${escapeHtml(text().createActivity)}</button></form></details></section>
-      <section class="superhost-card"><h3>${escapeHtml(text().schedule)}</h3><details><summary>${escapeHtml(text().saveSchedule)}</summary><form id="scheduleForm" class="superhost-form"><label>${escapeHtml(text().activities)}<select name="activityId" required>${options(activities, "activityId", (item) => `${hotelNames.get(value(item, "hotelId")) || "Hotel"} — ${venueNames.get(value(item, "venueId")) || "Venue"} — ${value(item, "name")}`)}</select></label><label>${escapeHtml(text().scheduledStart)}<input name="scheduledLocal" type="datetime-local" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="120" /></label><label>${escapeHtml(text().openingLead)}<input name="openingLeadMinutes" type="number" min="0" value="60" /></label><label>${escapeHtml(text().recurrence)}<select name="recurrenceType"><option value="none">${escapeHtml(text().none)}</option><option value="daily">${escapeHtml(text().daily)}</option><option value="weekly">${escapeHtml(text().weekly)}</option><option value="biweekly">${escapeHtml(text().biweekly)}</option><option value="monthly">${escapeHtml(text().monthly)}</option></select></label><fieldset class="language-fieldset"><legend>${escapeHtml(text().weekdayHelp)}</legend>${WEEKDAYS.map(([day, es, en]) => `<label class="check-row"><input name="weekday_${day}" type="checkbox" />${escapeHtml(language === "es" ? es : en)}</label>`).join("")}</fieldset><label class="check-row"><input name="autoOpenRequests" type="checkbox" />${escapeHtml(text().autoOpen)}</label><label class="check-row"><input name="autoStartActivity" type="checkbox" />${escapeHtml(text().autoStart)}</label><label class="check-row"><input name="showCountdown" type="checkbox" checked />${escapeHtml(text().countdown)}</label><button class="button primary">${escapeHtml(text().saveSchedule)}</button></form></details></section>
+      <section class="superhost-card"><h3>${escapeHtml(text().schedule)}</h3><details${editingSchedule ? " open" : ""}><summary>${escapeHtml(editingSchedule ? text().updateSchedule : text().saveSchedule)}</summary>${scheduleForm}</details></section>
     </div>
     <div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().venues)}</h3><div class="superhost-list">${venues.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")}</small></div></article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div><h3>${escapeHtml(text().activities)}</h3><div class="superhost-list">${activities.map((item) => { const languages = activityLanguages(item); const activityId = escapeHtml(value(item, "activityId")); const transition = Number(item.defaultTransitionSeconds); return `<article class="activity-manage-card"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(hotelNames.get(value(item, "hotelId")) || "")} · ${escapeHtml(venueNames.get(value(item, "venueId")) || "")} · ${languages.length} ${escapeHtml(text().language)}</small></div><details><summary>${escapeHtml(text().editActivity)}</summary><form class="superhost-form" data-activity-edit="${activityId}"><label>${escapeHtml(text().activityName)}<input name="name" value="${escapeHtml(value(item, "name"))}" required /></label><label>${escapeHtml(text().duration)}<input name="durationMinutes" type="number" min="15" value="${Math.max(15, (Number(item.defaultDurationSeconds) || 7200) / 60)}" /></label><label>${escapeHtml(text().transition)}<input name="transitionSeconds" type="number" min="0" max="900" value="${Number.isFinite(transition) ? transition : 30}" /></label><button>${escapeHtml(text().saveActivity)}</button></form><form class="activity-language-form" data-activity-languages="${activityId}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}"><span>${escapeHtml(text().activityLanguages)}</span>${languageCheckboxes(languages)}<button>${escapeHtml(text().saveLanguages)}</button></form><button class="button danger" data-action="delete-activity" data-id="${activityId}">${escapeHtml(text().deleteActivity)}</button></details></article>`; }).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div>${deletedActivities.length ? `<details><summary>${escapeHtml(text().deletedActivities)}</summary><div class="superhost-list">${deletedActivities.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(item, "name"))}</strong><small>${escapeHtml(text().deletedActivities)}</small></div><button data-action="restore-activity" data-id="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().restoreActivity)}</button></article>`).join("")}</div></details>` : ""}</section>
       <section class="superhost-card">
         <h3>${escapeHtml(text().schedules)}</h3>
         <div class="superhost-list">
-          ${(admin.schedules || []).map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(new Date(value(item, "scheduledStartAt")).toLocaleString(language === "es" ? "es-DO" : "en-US"))}</strong><small>${escapeHtml(value(item, "recurrenceType"))} · ${escapeHtml(value(item, "status"))}</small></div>${value(item, "status") === "active" ? `<button data-action="cancel-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}" data-activity="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().cancel)}</button>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}
+          ${schedules.map((item) => `<article class="superhost-entity"><div><strong>${escapeHtml(new Date(value(item, "scheduledStartAt")).toLocaleString(language === "es" ? "es-DO" : "en-US"))}</strong><small>${escapeHtml(value(item, "recurrenceType") === "weekly" && Number(item.recurrenceInterval) === 2 ? text().biweekly : value(item, "recurrenceType"))} · ${escapeHtml(value(item, "status"))}</small></div>${value(item, "status") === "active" ? `<div class="superhost-actions"><button data-action="edit-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}">${escapeHtml(text().edit)}</button><button data-action="cancel-schedule" data-id="${escapeHtml(value(item, "scheduleId"))}" data-hotel="${escapeHtml(value(item, "hotelId"))}" data-venue="${escapeHtml(value(item, "venueId"))}" data-activity="${escapeHtml(value(item, "activityId"))}">${escapeHtml(text().cancel)}</button></div>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}
         </div>
         <h3>${escapeHtml(text().reviews)}</h3>
         <label>${escapeHtml(text().activities)}<select id="reviewActivity">${options(activities, "activityId", (item) => value(item, "name"), selectedReviewActivity)}</select></label>
@@ -691,27 +758,47 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         allowedLanguages
       });
     } else if (form.id === "scheduleForm") {
-      const activity = (admin.activities || []).find((item) => value(item, "activityId") === data.activityId);
+      const activityId = form.dataset.activityId || data.activityId;
+      const activity = (admin.activities || []).find((item) => value(item, "activityId") === activityId);
       const recurrenceDays = WEEKDAYS.map(([day]) => data[`weekday_${day}`] === "on" ? day : null)
         .filter((day) => day !== null);
       if (["weekly", "biweekly"].includes(data.recurrenceType) && !recurrenceDays.length) {
         notify(text().weekdayHelp, true);
         return;
       }
-      await mutate("scheduleActivity", {
-        hotelId: value(activity, "hotelId"),
-        venueId: value(activity, "venueId"),
-        activityId: data.activityId,
-        scheduledLocal: data.scheduledLocal,
+      if (data.recurrenceType === "none" && !data.scheduledLocal) {
+        notify(text().oneTimeDate, true);
+        return;
+      }
+      const weekdayAnnouncements = recurrenceDays.map((weekday) => ({
+        weekday,
+        time: data[`announcement_time_${weekday}`] || "",
+        title: data[`announcement_title_${weekday}`] || "",
+        message: data[`announcement_message_${weekday}`] || ""
+      })).filter((item) => item.time || item.title || item.message);
+      const scheduleId = form.dataset.scheduleId || "";
+      const result = await mutate(scheduleId ? "updateSchedule" : "scheduleActivity", {
+        ...(scheduleId ? { scheduleId } : {
+          hotelId: value(activity, "hotelId"),
+          venueId: value(activity, "venueId"),
+          activityId
+        }),
+        ...(data.recurrenceType === "none"
+          ? { scheduledLocal: data.scheduledLocal }
+          : { scheduledTime: data.scheduledTime }),
         durationSeconds: Number(data.durationMinutes) * 60,
         requestOpeningLeadSeconds: Number(data.openingLeadMinutes) * 60,
         autoOpenRequests: data.autoOpenRequests === "on",
-        autoStartActivity: data.autoStartActivity === "on",
         showCountdown: data.showCountdown === "on",
         recurrenceType: data.recurrenceType,
         recurrenceInterval: data.recurrenceType === "biweekly" ? 2 : 1,
-        recurrenceDays
+        recurrenceDays,
+        weekdayAnnouncements
       });
+      if (result) {
+        editingScheduleId = "";
+        renderOperation();
+      }
     } else if (form.id === "createHostForm") {
       if (data.password !== data.confirmPassword) {
         notify(text().passwordsMismatch, true);
@@ -774,6 +861,20 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     } else if (event.target.id === "reviewActivity") {
       selectedReviewActivity = event.target.value;
       reviews = [];
+    } else if (event.target.matches("[data-schedule-recurrence], [data-schedule-weekday]")) {
+      const form = event.target.closest("[data-schedule-editor]");
+      if (!form) return;
+      const recurrence = form.elements.recurrenceType.value;
+      const oneTime = recurrence === "none";
+      form.querySelector("[data-one-time-field]").hidden = !oneTime;
+      form.querySelector("[data-recurring-field]").hidden = oneTime;
+      form.elements.scheduledLocal.required = oneTime;
+      form.elements.scheduledTime.required = !oneTime;
+      form.querySelector("[data-weekly-fields]").hidden = !["weekly", "biweekly"].includes(recurrence);
+      WEEKDAYS.forEach(([day]) => {
+        const enabled = ["weekly", "biweekly"].includes(recurrence) && form.elements[`weekday_${day}`]?.checked;
+        form.querySelector(`[data-announcement-day="${day}"]`).hidden = !enabled;
+      });
     }
   });
 
@@ -821,6 +922,12 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         venueId: button.dataset.venue,
         activityId: button.dataset.activity
       });
+    } else if (action === "edit-schedule") {
+      editingScheduleId = id;
+      renderOperation();
+    } else if (action === "cancel-schedule-edit") {
+      editingScheduleId = "";
+      renderOperation();
     } else if (action === "load-reviews") {
       const activityId = selectedReviewActivity || content.querySelector("#reviewActivity")?.value;
       const activity = (admin.activities || []).find((item) => value(item, "activityId") === activityId);

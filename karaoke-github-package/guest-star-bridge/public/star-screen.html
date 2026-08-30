@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="google" content="notranslate" />
+    <title>Guest Star · Star Screen</title>
+    <link rel="stylesheet" href="/player-beta.css" />
+  </head>
+  <body class="star-screen-body">
+    <video id="starScreenMedia" class="star-screen-media" muted playsinline preload="auto"></video>
+    <div class="star-screen-ambient"></div>
+    <main class="star-screen-stage">
+      <header class="star-screen-topbar">
+        <div class="star-screen-hotel-mark">
+          <img id="starScreenLogo" class="star-screen-logo hidden" alt="Logo del hotel" referrerpolicy="no-referrer" />
+          <div id="starScreenFallback" class="star-screen-fallback">GS</div>
+          <div><span id="starScreenHotel">Guest Star</span><small id="starScreenActivity">Karaoke Night</small></div>
+        </div>
+        <div class="star-screen-live"><i></i><span id="starScreenStatus">STAR SCREEN</span></div>
+        <button class="star-screen-fullscreen" id="starScreenFullscreen">⛶ Pantalla completa</button>
+      </header>
+
+      <section class="star-screen-welcome" id="starScreenWelcome">
+        <div class="star-screen-invite">
+          <p>GUEST STAR EXPERIENCE</p>
+          <h1>YOUR STAGE<br /><em>IS READY</em></h1>
+          <span>Escanea, elige tu canción y prepárate para brillar.</span>
+        </div>
+        <div class="star-screen-lineup">
+          <div class="star-screen-lineup-head"><div><p>PRÓXIMOS EN EL ESCENARIO</p><h2>Star Lineup</h2></div><div class="star-screen-lineup-tools"><div class="star-screen-qr-card"><img id="starScreenQr" alt="QR de solicitudes" /><div><strong>¿QUIERES CANTAR?</strong><small>ESCANEA EL QR</small></div></div><span id="starScreenQueueCount">0</span></div></div>
+          <ol id="starScreenQueue"></ol>
+        </div>
+      </section>
+
+      <section class="star-screen-now" id="starScreenNow">
+        <div><span>SONANDO AHORA</span><h2 id="starScreenNowSong">Música de fondo</h2><p id="starScreenNowSinger">Ambientación del hotel</p></div>
+        <div class="star-screen-next"><small>SIGUIENTE</small><strong id="starScreenNextSinger">Esperando solicitudes</strong></div>
+      </section>
+    </main>
+    <script src="/vendor/qrcode.js"></script>
+    <script type="module" src="/star-screen.js"></script>
+  </body>
+</html>

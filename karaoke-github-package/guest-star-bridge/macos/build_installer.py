@@ -18,19 +18,20 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 
-APP_NAME = "Guest Star Bridge.app"
-BUNDLE_ID = "com.gstarxp.guest-star-bridge"
+APP_NAME = "Guest Star.app"
+BUNDLE_ID = "com.gstarxp.guest-star"
 MINIMUM_MACOS = "11.0"
 
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Construye Guest Star Bridge Universal para Mac Intel y Apple Silicon."
+            "Construye Guest Star Universal para Mac Intel y Apple Silicon."
         )
     )
     parser.add_argument("--node-arm64-tarball", required=True, type=Path)
     parser.add_argument("--node-x64-tarball", required=True, type=Path)
+    parser.add_argument("--stem-engine-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args()
 
@@ -43,12 +44,12 @@ def write_info_plist(path: Path, version: str) -> None:
     version_number = int(re.sub(r"\D", "", version) or "1")
     payload = {
         "CFBundleDevelopmentRegion": "es",
-        "CFBundleDisplayName": "Guest Star Bridge",
+        "CFBundleDisplayName": "Guest Star",
         "CFBundleExecutable": "GuestStarBridge",
         "CFBundleIconFile": "AppIcon.icns",
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": "Guest Star Bridge",
+        "CFBundleName": "Guest Star",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": version,
         "CFBundleSupportedPlatforms": ["MacOSX"],
@@ -207,6 +208,45 @@ def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
         shutil.copy2(bridge_root / filename, destination / filename)
 
 
+def copy_stem_engine(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    required = (
+        "package.json",
+        "node_modules/demucs/dist/cli.js",
+        "node_modules/ffmpeg-static/ffmpeg",
+        "node_modules/ffprobe-static/bin/darwin/arm64/ffprobe",
+        "node_modules/ffprobe-static/bin/darwin/x64/ffprobe",
+        "node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node",
+        "node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node",
+    )
+    missing = [relative for relative in required if not (source / relative).is_file()]
+    if missing:
+        raise RuntimeError(
+            "El motor Stems IA Universal no está completo: " + ", ".join(missing)
+        )
+    shutil.copytree(source, destination)
+
+    # The npm packages also contain Linux and Windows runtimes. The Mac release
+    # keeps both Darwin architectures and removes unrelated binaries only.
+    runtime_root = destination / "node_modules" / "onnxruntime-node" / "bin" / "napi-v6"
+    for platform in ("linux", "win32"):
+        platform_root = runtime_root / platform
+        if platform_root.exists():
+            shutil.rmtree(platform_root)
+    ffprobe_root = destination / "node_modules" / "ffprobe-static" / "bin"
+    for platform_root in ffprobe_root.iterdir():
+        if platform_root.name != "darwin" and platform_root.is_dir():
+            shutil.rmtree(platform_root)
+
+    run([
+        "lipo",
+        str(destination / "node_modules" / "ffmpeg-static" / "ffmpeg"),
+        "-verify_arch",
+        "arm64",
+        "x86_64",
+    ])
+
+
 def write_bundle_build_id(bridge_dir: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(bridge_dir.rglob("*")):
@@ -313,7 +353,7 @@ def create_disk_image(distribution: Path, output_path: Path, version: str) -> No
             "hdiutil",
             "create",
             "-volname",
-            f"Guest Star Bridge {version}",
+            f"Guest Star {version}",
             "-srcfolder",
             str(distribution),
             "-ov",
@@ -423,6 +463,10 @@ def main() -> None:
         resources / "runtime" / "node-x64",
     )
     copy_bridge_source(bridge_root, resources / "bridge")
+    copy_stem_engine(
+        args.stem_engine_root,
+        resources / "bridge" / "stem-engine",
+    )
     bundle_build_id = write_bundle_build_id(resources / "bridge")
     sign_and_verify_app(app_bundle, node_arm64, node_x64)
 
@@ -433,8 +477,8 @@ def main() -> None:
         bridge_root / "macos" / "LEEME.txt",
         bridge_root / "macos" / "INSTALACION-OTRA-MAC.txt",
     )
-    dmg_path = output_dir / f"Guest-Star-Bridge-Universal-v{version}.dmg"
-    zip_path = output_dir / f"Guest-Star-Bridge-Universal-v{version}-app.zip"
+    dmg_path = output_dir / f"Guest-Star-Universal-v{version}.dmg"
+    zip_path = output_dir / f"Guest-Star-Universal-v{version}-app.zip"
     create_disk_image(distribution, dmg_path, version)
     create_zip(distribution, zip_path)
 

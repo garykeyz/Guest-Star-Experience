@@ -1,9 +1,9 @@
 {
-  "name": "guest-star-bridge",
-  "version": "4.3.9",
+  "name": "guest-star",
+  "version": "4.4.0",
   "private": true,
   "type": "module",
-  "description": "Puente local entre Guest Star Experience, la biblioteca de karaoke y VirtualDJ.",
+  "description": "Aplicación local Guest Star con Player interno y Bridge opcional para VirtualDJ.",
   "engines": {
     "node": ">=18"
   },

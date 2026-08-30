@@ -1,10 +1,13 @@
-import { createReadStream, watch } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { createReadStream, existsSync, watch } from "node:fs";
+import { access, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { execFile, spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { homedir, setPriority } from "node:os";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
@@ -73,18 +76,44 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const BRIDGE_VERSION = "4.3.9";
+const STEM_DATA_ROOT = process.platform === "darwin"
+  ? resolve(homedir(), "Library", "Application Support", "Guest Star")
+  : resolve(ROOT, "data");
+const INSTALLED_STEM_ENGINE_ROOT = resolve(STEM_DATA_ROOT, "stem-engine");
+const BUNDLED_STEM_ENGINE_ROOT = resolve(ROOT, "stem-engine");
+const STEM_ENGINE_ROOT = existsSync(resolve(INSTALLED_STEM_ENGINE_ROOT, "package.json"))
+  ? INSTALLED_STEM_ENGINE_ROOT
+  : BUNDLED_STEM_ENGINE_ROOT;
+const STEM_ENGINE_CLI = resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
+const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
+const BRIDGE_VERSION = "4.4.0";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
+const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
+const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
-  ".json": "application/json; charset=utf-8"
+  ".json": "application/json; charset=utf-8",
+  ".mp4": "video/mp4",
+  ".m4v": "video/x-m4v",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac"
 };
+const BACKGROUND_AUDIO_EXTENSIONS = new Set([".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac"]);
 
 let config = await loadConfig();
+const runtimePort = Number.isInteger(requestedPort) && requestedPort >= 1024 && requestedPort <= 65535
+  ? requestedPort
+  : config.bridgePort;
 let identityState = {
   user: null,
   selection: { hotels: [], venues: [], activities: [] },
@@ -92,6 +121,7 @@ let identityState = {
 };
 let tenantState = {
   hotel: null,
+  branding: null,
   venue: null,
   activity: null,
   permissions: {},
@@ -99,7 +129,27 @@ let tenantState = {
   upcomingActivities: []
 };
 const storedQueueState = await loadQueueState();
+let operatingMode = storedQueueState.operatingMode || "";
 let libraryFiles = [];
+let backgroundMusicFiles = [];
+let backgroundMusicError = "";
+const playerLocalRequests = new Map(
+  storedQueueState.playerRequests.map((entry) => [entry.id, entry])
+);
+const playerStemJobs = new Map(
+  storedQueueState.playerStemJobs.map((entry) => [entry.id, entry])
+);
+let playerOrder = [...storedQueueState.playerOrder];
+let playerPlayback = { ...storedQueueState.playerPlayback };
+let remotePlayerRuntime = null;
+let playerRuntimeDirty = false;
+let stemEngineAvailable = false;
+let stemFfmpegPath = "";
+let stemFfprobePath = "";
+let activeStemChild = null;
+let activeStemJobId = "";
+let stemWorkerRunning = false;
+let stemWorkerPaused = false;
 let requests = [];
 let scanning = false;
 let syncing = false;
@@ -122,7 +172,8 @@ let activityState = {
   activityId: storedQueueState.activityId || "",
   updatedAt: "",
   lastAction: "",
-  lastSource: ""
+  lastSource: "",
+  playbackMode: ""
 };
 let queueActivityId = storedQueueState.activityId;
 const queuedEntries = new Map(
@@ -303,7 +354,7 @@ async function updateFavorite(body = {}) {
 }
 
 function guestStarConfigured() {
-  return Boolean(config.appsScriptUrl && (hasV4Session(config) || config.hostPin));
+  return Boolean(config.appsScriptUrl && hasV4Session(config));
 }
 
 function json(response, status, data) {
@@ -390,6 +441,19 @@ async function resolveVirtualDjLocalFile(entry, libraryIndex) {
   return "";
 }
 
+function playerStemJobView(id) {
+  const job = playerStemJobs.get(String(id));
+  if (!job) return null;
+  return {
+    status: job.status,
+    progress: Math.max(0, Math.min(100, Number(job.progress) || 0)),
+    phase: String(job.phase || ""),
+    error: String(job.error || ""),
+    ready: job.status === "ready" && Boolean(job.instrumentalPath && job.vocalsPath),
+    updatedAt: String(job.updatedAt || "")
+  };
+}
+
 function requestView(item) {
   const matches = findMatches(
     libraryFiles,
@@ -446,6 +510,7 @@ function requestView(item) {
       youtubeSearched: youtubeCache.has(item.id),
       youtubeSearching: youtubeSearches.has(item.id),
       queueSyncState: "",
+      stem: playerStemJobView(item.id),
       clipboardCopied: false
     };
   }
@@ -484,10 +549,55 @@ function requestView(item) {
     youtube: youtubeCache.get(item.id) || [],
     youtubeSearched: youtubeCache.has(item.id),
     youtubeSearching: youtubeSearches.has(item.id),
+    stem: playerStemJobView(item.id),
     clipboardCopied:
       clipboardState.requestId === item.id &&
       Boolean(clipboardState.copiedAt) &&
       !clipboardState.error
+  };
+}
+
+function mediaMetadata(filePath) {
+  const label = basename(filePath, extname(filePath))
+    .replace(/[_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const parts = label.split(/\s+[\-–—]\s+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return { artist: parts.shift(), song: parts.join(" - ") };
+  }
+  return { artist: "", song: label || "Pista local" };
+}
+
+function playerLocalRequestView(item) {
+  const outcome = ["completed", "skipped", "removed"].includes(item.outcome)
+    ? item.outcome
+    : requestOutcome(item.status);
+  return {
+    ...item,
+    sourceType: "player_local",
+    localAvailable: true,
+    localState: outcome || "exact",
+    queued: false,
+    queuePosition: null,
+    removedExternally: false,
+    queueUnverified: false,
+    manualLink: true,
+    outcome: outcome || "",
+    matches: [{
+      exact: true,
+      score: 1,
+      filePath: item.filePath,
+      fileName: basename(item.filePath)
+    }],
+    queuedFilePath: item.filePath,
+    canUndo: Boolean(outcome),
+    canRestoreToQueue: true,
+    youtube: [],
+    youtubeSearched: false,
+    youtubeSearching: false,
+    stem: playerStemJobView(item.id),
+    clipboardCopied: false
   };
 }
 
@@ -565,7 +675,14 @@ function normalizedActivity(data = {}) {
     activityId,
     updatedAt: String(source.updatedAt ?? activityState.updatedAt ?? ""),
     lastAction: String(source.lastAction ?? activityState.lastAction ?? ""),
-    lastSource: String(source.lastSource ?? activityState.lastSource ?? "")
+    lastSource: String(source.lastSource ?? activityState.lastSource ?? ""),
+    playbackMode: ["player", "bridge"].includes(String(source.playbackMode || "").toLowerCase())
+      ? String(source.playbackMode).toLowerCase()
+      : ["player", "bridge"].includes(String(source.lastSource || "").toLowerCase())
+        ? String(source.lastSource).toLowerCase()
+        : sameActivity
+          ? String(activityState.playbackMode || "")
+          : ""
   };
 }
 
@@ -607,9 +724,31 @@ function clearTransientCaches() {
 function applyActivityState(data) {
   const next = normalizedActivity(data);
   activityState = next;
+  if (activityState.activityRunning) {
+    // The remote activity owns the locked mode. Older activities without an
+    // explicit mode keep a valid local selection, then fall back to Bridge.
+    operatingMode = activityState.playbackMode || operatingMode || "bridge";
+  }
   if (data && typeof data === "object") {
+    if (data.playerRuntime && typeof data.playerRuntime === "object" && !playerRuntimeDirty) {
+      remotePlayerRuntime = data.playerRuntime;
+      if (Array.isArray(data.playerRuntime.queueOrder)) {
+        playerOrder = [...new Set(data.playerRuntime.queueOrder.map(String).filter(Boolean))];
+      }
+      const remotePlayback = data.playerRuntime.playback;
+      if (remotePlayback && typeof remotePlayback === "object") {
+        playerPlayback = {
+          currentRequestId: String(remotePlayback.currentRequestId || ""),
+          currentTimeSeconds: Math.max(0, Number(remotePlayback.currentTimeSeconds) || 0),
+          scene: remotePlayback.scene === "karaoke" ? "karaoke" : "lobby",
+          wasPlaying: remotePlayback.wasPlaying === true,
+          updatedAt: String(remotePlayback.updatedAt || data.playerRuntime.updatedAt || "")
+        };
+      }
+    }
     tenantState = {
       hotel: data.hotel || tenantState.hotel,
+      branding: data.branding || tenantState.branding,
       venue: data.venue || tenantState.venue,
       activity: data.activity || tenantState.activity,
       permissions: data.permissions || tenantState.permissions || {},
@@ -635,6 +774,7 @@ function bridgeRequests(data = {}) {
       languageCode: String(item.languageCode || "").trim(),
       sourceUrl: String(item.sourceUrl || "").trim(),
       sourceType: String(item.sourceType || "").trim(),
+      playerQueuePosition: Math.max(0, Math.floor(numberOr(item.queuePosition, 0))),
       guestIdentity: String(item.guestIdentity || "").trim(),
       guestCode: String(item.guestCode || "").trim(),
       status: String(item.status || "Pendiente"),
@@ -755,8 +895,86 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
     suppressedQueueIds.values(),
     outcomeRecoveries.values(),
     activityState.activityStartedAt,
-    removedExternallyIds.values()
+    removedExternallyIds.values(),
+    operatingMode,
+    playerLocalRequests.values(),
+    playerOrder,
+    playerPlayback,
+    playerStemJobs.values()
   );
+}
+
+function cleanPlayerRuntimeUpdate(body = {}) {
+  const requestedOrder = Array.isArray(body.queueOrder)
+    ? [...new Set(body.queueOrder.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 1000)
+    : null;
+  const sourcePlayback = body.playback && typeof body.playback === "object"
+    ? body.playback
+    : null;
+  const currentTimeSeconds = Number(sourcePlayback?.currentTimeSeconds);
+  return {
+    queueOrder: requestedOrder,
+    playback: sourcePlayback ? {
+      currentRequestId: String(sourcePlayback.currentRequestId || "").trim().slice(0, 160),
+      currentTimeSeconds: Number.isFinite(currentTimeSeconds)
+        ? Math.max(0, Math.min(12 * 60 * 60, currentTimeSeconds))
+        : 0,
+      scene: sourcePlayback.scene === "karaoke" ? "karaoke" : "lobby",
+      wasPlaying: sourcePlayback.wasPlaying === true,
+      updatedAt: new Date().toISOString()
+    } : null
+  };
+}
+
+async function pushPlayerRuntimeRemote() {
+  if (
+    !playerRuntimeDirty ||
+    !hasV4Session(config) ||
+    !config.lastActivityId ||
+    !activityState.activityRunning ||
+    operatingMode !== "player"
+  ) return false;
+  const data = await v4AppsScriptAction(config, "playerRuntimeUpdate", {
+    hotelId: config.lastHotelId,
+    venueId: config.lastVenueId,
+    activityId: config.lastActivityId,
+    source: "player",
+    queueOrder: playerOrder,
+    playback: playerPlayback
+  });
+  if (data?.ok === false) throw new Error(data.code || "Guest Star could not save Player state.");
+  if (data?.playerRuntime) remotePlayerRuntime = data.playerRuntime;
+  playerRuntimeDirty = false;
+  return true;
+}
+
+async function updatePlayerRuntime(body = {}) {
+  if (operatingMode !== "player" || !activityState.activityRunning) {
+    throw new Error("Player state can only change during an activity running in Player mode.");
+  }
+  const clean = cleanPlayerRuntimeUpdate(body);
+  if (clean.queueOrder) playerOrder = clean.queueOrder;
+  if (clean.playback) {
+    playerPlayback = clean.playback;
+    // Any Karaoke scene owns the live audio path, even while paused. Keep all
+    // AI work stopped until Star Screen has fully returned to the lobby.
+    pauseStemWorker(clean.playback.scene === "karaoke");
+  }
+  playerRuntimeDirty = true;
+  await persistQueuedEntries();
+  broadcastState();
+  try {
+    await pushPlayerRuntimeRemote();
+    return { ok: true, remoteSaved: true, playerRuntime: stateView().playerRuntime };
+  } catch (error) {
+    sheetError = errorMessage(error);
+    return {
+      ok: true,
+      remoteSaved: false,
+      warning: "The Player remains safe locally and will retry cloud persistence.",
+      playerRuntime: stateView().playerRuntime
+    };
+  }
 }
 
 async function resetLocalActivity(activityId) {
@@ -766,6 +984,18 @@ async function resetLocalActivity(activityId) {
   suppressedQueueIds.clear();
   removedExternallyIds.clear();
   outcomeRecoveries.clear();
+  playerLocalRequests.clear();
+  playerStemJobs.clear();
+  playerOrder = [];
+  playerPlayback = {
+    currentRequestId: "",
+    currentTimeSeconds: 0,
+    scene: "lobby",
+    wasPlaying: false,
+    updatedAt: new Date().toISOString()
+  };
+  remotePlayerRuntime = null;
+  playerRuntimeDirty = false;
   pendingInsertions.clear();
   queuePresenceMisses = new Map();
   transientQueueMissingIds = new Set();
@@ -787,6 +1017,11 @@ async function reconcileDeletedRequests(
     nextActivity.activityId &&
     queueActivityId !== nextActivity.activityId
   );
+  if (activityChanged) {
+    operatingMode = "";
+    playerLocalRequests.clear();
+    playerStemJobs.clear();
+  }
   const shouldDiscardMissing = removeFromVirtualDJ || activityChanged;
   let changed = false;
 
@@ -990,6 +1225,7 @@ function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
 }
 
 async function reconcileVirtualDjQueue(force = false) {
+  if (operatingMode !== "bridge") return;
   if (vdjQueueCheckPromise) return vdjQueueCheckPromise;
   if (queueLocks.size) return;
 
@@ -1333,7 +1569,26 @@ async function reconcileVirtualDjQueue(force = false) {
 }
 
 function stateView() {
-  const requestViews = orderRequestViews(requests.map(requestView));
+  const requestViews = orderRequestViews([
+    ...requests.map(requestView),
+    ...[...playerLocalRequests.values()].map(playerLocalRequestView)
+  ]);
+  const activePlayerIds = requestViews
+    .filter((item) =>
+      !item.outcome &&
+      !["Ya cantó", "Saltado", "Retirada del Player"].includes(String(item.status || "")) &&
+      (!item.stem || item.stem.status === "ready")
+    )
+    .sort((left, right) => {
+      const leftPosition = Number(left.playerQueuePosition) || Number.MAX_SAFE_INTEGER;
+      const rightPosition = Number(right.playerQueuePosition) || Number.MAX_SAFE_INTEGER;
+      return leftPosition - rightPosition;
+    })
+    .map((item) => String(item.id));
+  playerOrder = [
+    ...playerOrder.filter((id) => activePlayerIds.includes(id)),
+    ...activePlayerIds.filter((id) => !playerOrder.includes(id))
+  ];
   const requestsByQueuePosition = new Map(
     requestViews
       .filter((item) => Number.isInteger(item.queuePosition))
@@ -1388,6 +1643,25 @@ function stateView() {
     },
     tenant: tenantState,
     activity: activityState,
+    operatingMode: {
+      selected: operatingMode,
+      locked: Boolean(activityState.activityRunning),
+      canChange: !activityState.activityRunning
+    },
+    playerRuntime: {
+      ...(remotePlayerRuntime && typeof remotePlayerRuntime === "object"
+        ? remotePlayerRuntime
+        : {}),
+      queueOrder: [...playerOrder],
+      playback: { ...playerPlayback }
+    },
+    stemEngine: {
+      available: stemEngineAvailable,
+      processing: Boolean(activeStemJobId),
+      pausedForLivePlayback: stemWorkerPaused,
+      activeRequestId: activeStemJobId,
+      jobs: [...playerStemJobs.keys()].map((id) => ({ id, ...playerStemJobView(id) }))
+    },
     activitySummary,
     library: {
       count: libraryFiles.length,
@@ -1395,6 +1669,19 @@ function stateView() {
       scanning,
       realtime: libraryWatchers.length > 0,
       error: libraryError
+    },
+    backgroundMusic: {
+      count: backgroundMusicFiles.length,
+      error: backgroundMusicError,
+      sources: [...config.backgroundMusicSources],
+      volume: config.backgroundMusicVolume,
+      tracks: backgroundMusicFiles.slice(0, 1000).map((filePath) => ({
+        id: Buffer.from(filePath).toString("base64url"),
+        ...mediaMetadata(filePath),
+        name: basename(filePath, extname(filePath)),
+        extension: extname(filePath).replace(/^\./, "").toUpperCase(),
+        mediaType: MIME[extname(filePath).toLowerCase()] || "application/octet-stream"
+      }))
     },
     sheet: {
       lastSyncAt,
@@ -1575,16 +1862,39 @@ async function scanNow() {
   } finally {
     scanning = false;
   }
+  await scanBackgroundMusicNow();
   refreshLocalAvailability();
   broadcastState();
   await reportLocalStates();
   await prepareMissingYoutube();
-  await autoQueueExactMatches();
+  if (operatingMode === "bridge") await autoQueueExactMatches();
   broadcastState();
   if (scanAgain) {
     scanAgain = false;
     scheduleRealtimeScan();
   }
+}
+
+async function scanBackgroundMusicNow() {
+  const files = [];
+  const errors = [];
+  for (const source of config.backgroundMusicSources) {
+    try {
+      const info = await stat(source);
+      if (info.isDirectory()) {
+        const found = await scanLibrary([source]);
+        files.push(...found.filter((filePath) => BACKGROUND_AUDIO_EXTENSIONS.has(extname(filePath).toLowerCase())));
+      } else if (info.isFile() && BACKGROUND_AUDIO_EXTENSIONS.has(extname(source).toLowerCase())) {
+        files.push(source);
+      } else {
+        errors.push(`${source} no es una carpeta ni un audio compatible.`);
+      }
+    } catch {
+      errors.push(`La fuente ambiental no está disponible: ${source}`);
+    }
+  }
+  backgroundMusicFiles = [...new Set(files)].sort((a, b) => a.localeCompare(b));
+  backgroundMusicError = errors.join(" ");
 }
 
 async function syncNow() {
@@ -1656,11 +1966,13 @@ async function syncNow() {
     sheetError = errorMessage(error);
   }
   try {
-    await reconcileVirtualDjQueue();
+    if (operatingMode === "bridge") await reconcileVirtualDjQueue();
     await reportLocalStates();
     await prepareMissingYoutube();
-    await prepareHitSuggestionYoutube();
-    await autoQueueExactMatches();
+    if (operatingMode === "bridge") {
+      await prepareHitSuggestionYoutube();
+      await autoQueueExactMatches();
+    }
   } catch (error) {
     if (!sheetError) sheetError = errorMessage(error);
   } finally {
@@ -1735,6 +2047,396 @@ async function assertAllowedFile(filePath) {
   throw new Error("The track is not inside a configured karaoke folder.");
 }
 
+async function stemCacheRootForFile(filePath) {
+  const target = await realpath(String(filePath || ""));
+  for (const folder of config.libraryFolders) {
+    try {
+      const root = await realpath(folder);
+      if (target !== root && !target.startsWith(`${root}${sep}`)) continue;
+      const cacheRoot = resolve(root, ".guest-star-stems");
+      await mkdir(cacheRoot, { recursive: true });
+      const safeCacheRoot = await realpath(cacheRoot);
+      if (safeCacheRoot !== root && safeCacheRoot.startsWith(`${root}${sep}`)) {
+        return safeCacheRoot;
+      }
+    } catch {
+      // Continue through the configured karaoke folders.
+    }
+  }
+  throw new Error("Guest Star could not create its Stems cache inside the configured karaoke folder.");
+}
+
+async function refreshStemEngineCapability() {
+  try {
+    await access(STEM_ENGINE_CLI);
+    stemFfmpegPath = String(stemEngineRequire("ffmpeg-static") || "");
+    stemFfprobePath = String(stemEngineRequire("ffprobe-static")?.path || "");
+    await Promise.all([access(stemFfmpegPath), access(stemFfprobePath)]);
+    stemEngineAvailable = true;
+  } catch {
+    stemEngineAvailable = false;
+    stemFfmpegPath = "";
+    stemFfprobePath = "";
+  }
+  return stemEngineAvailable;
+}
+
+function pauseStemWorker(paused) {
+  stemWorkerPaused = paused === true;
+  if (activeStemChild?.pid) {
+    try {
+      activeStemChild.kill(stemWorkerPaused ? "SIGSTOP" : "SIGCONT");
+    } catch {
+      // The worker may have completed between state updates.
+    }
+  }
+  if (!stemWorkerPaused) void processStemQueue();
+}
+
+async function runStemCommand(command, args, job, phase, onOutput = null) {
+  if (!playerStemJobs.has(job.id)) throw new Error("Stem preparation was cancelled.");
+  job.phase = phase;
+  job.updatedAt = new Date().toISOString();
+  await persistQueuedEntries();
+  broadcastState();
+  const child = spawn(command, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OMP_NUM_THREADS: "1",
+      MKL_NUM_THREADS: "1",
+      OPENBLAS_NUM_THREADS: "1",
+      VECLIB_MAXIMUM_THREADS: "1",
+      UV_THREADPOOL_SIZE: "1"
+    }
+  });
+  activeStemChild = child;
+  try { setPriority(child.pid, 19); } catch { /* Best effort on supported systems. */ }
+  if (stemWorkerPaused) {
+    try { child.kill("SIGSTOP"); } catch { /* The child may still be starting. */ }
+  }
+  let errorText = "";
+  const consume = (chunk) => {
+    const output = String(chunk || "");
+    errorText = `${errorText}${output}`.slice(-12000);
+    if (onOutput) onOutput(output);
+  };
+  child.stdout?.on("data", consume);
+  child.stderr?.on("data", consume);
+  const [code, signal] = await once(child, "close");
+  if (activeStemChild === child) activeStemChild = null;
+  if (Number(code) !== 0) {
+    throw new Error(`Stem engine stopped${signal ? ` (${signal})` : ""}: ${errorText.trim().slice(-800) || `code ${code}`}`);
+  }
+}
+
+async function probeDuration(filePath) {
+  const { stdout } = await execFileAsync(stemFfprobePath, [
+    "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", filePath
+  ], { timeout: 30000 });
+  return Math.max(0, Number(String(stdout).trim()) || 0);
+}
+
+async function prepareStemJob(job) {
+  const inputInfo = await stat(job.filePath);
+  const cacheRoot = await stemCacheRootForFile(job.filePath);
+  const cacheKey = createHash("sha256")
+    .update(`${job.filePath}|${inputInfo.size}|${inputInfo.mtimeMs}`)
+    .digest("hex")
+    .slice(0, 32);
+  const outputDir = resolve(cacheRoot, cacheKey);
+  await mkdir(outputDir, { recursive: true });
+  const safeOutputDir = await realpath(outputDir);
+  if (!safeOutputDir.startsWith(`${cacheRoot}${sep}`)) {
+    throw new Error("The Stems cache entry is outside Guest Star storage.");
+  }
+  const instrumentalPath = resolve(safeOutputDir, "instrumental.m4a");
+  const vocalsPath = resolve(safeOutputDir, "vocals.m4a");
+  try {
+    await Promise.all([access(instrumentalPath), access(vocalsPath)]);
+    const [instrumentalDuration, vocalsDuration] = await Promise.all([
+      probeDuration(instrumentalPath),
+      probeDuration(vocalsPath)
+    ]);
+    if (instrumentalDuration > 10 && Math.abs(instrumentalDuration - vocalsDuration) < 1.5) {
+      return { instrumentalPath, vocalsPath };
+    }
+  } catch {
+    // A missing or incomplete cache is regenerated atomically below.
+  }
+  const workDir = await mkdtemp(resolve(cacheRoot, ".work-"));
+  try {
+    const wavPath = resolve(workDir, "input.wav");
+    const separatedDir = resolve(workDir, "separated");
+    job.progress = 3;
+    await runStemCommand(stemFfmpegPath, [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", job.filePath, "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_f32le", wavPath
+    ], job, "Extrayendo audio");
+    job.progress = 10;
+    await runStemCommand(process.execPath, [
+      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.10"
+    ], job, "Separando voz e instrumental", (output) => {
+      const matches = [...output.matchAll(/(\d+)\/(\d+)/g)];
+      const latest = matches.at(-1);
+      if (!latest) return;
+      job.progress = Math.max(10, Math.min(82, 10 + Math.round((Number(latest[1]) / Math.max(1, Number(latest[2]))) * 72)));
+      job.updatedAt = new Date().toISOString();
+      broadcastState();
+    });
+    const parts = resolve(separatedDir, "input");
+    const instrumentalPart = resolve(outputDir, "instrumental.part.m4a");
+    const vocalsPart = resolve(outputDir, "vocals.part.m4a");
+    job.progress = 86;
+    await runStemCommand(stemFfmpegPath, [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", resolve(parts, "drums.wav"),
+      "-i", resolve(parts, "bass.wav"),
+      "-i", resolve(parts, "other.wav"),
+      "-filter_complex", "[0:a][1:a][2:a]amix=inputs=3:normalize=0,alimiter=limit=0.95[a]",
+      "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", instrumentalPart
+    ], job, "Generando instrumental");
+    job.progress = 92;
+    await runStemCommand(stemFfmpegPath, [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", resolve(parts, "vocals.wav"), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", vocalsPart
+    ], job, "Preparando control de voz");
+    const [instrumentalDuration, vocalsDuration] = await Promise.all([
+      probeDuration(instrumentalPart),
+      probeDuration(vocalsPart)
+    ]);
+    if (instrumentalDuration <= 10 || Math.abs(instrumentalDuration - vocalsDuration) >= 1.5) {
+      throw new Error("The generated stems did not pass synchronization validation.");
+    }
+    await Promise.all([
+      rename(instrumentalPart, instrumentalPath),
+      rename(vocalsPart, vocalsPath)
+    ]);
+    return { instrumentalPath, vocalsPath };
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
+async function processStemQueue() {
+  if (stemWorkerRunning || !stemEngineAvailable || stemWorkerPaused) return;
+  stemWorkerRunning = true;
+  try {
+    while (!stemWorkerPaused) {
+      const job = [...playerStemJobs.values()].find((entry) => entry.status === "queued");
+      if (!job) break;
+      activeStemJobId = job.id;
+      job.status = "processing";
+      job.error = "";
+      job.updatedAt = new Date().toISOString();
+      await persistQueuedEntries();
+      broadcastState();
+      try {
+        const output = await prepareStemJob(job);
+        job.status = "ready";
+        job.progress = 100;
+        job.phase = "Lista y sincronizada";
+        job.instrumentalPath = output.instrumentalPath;
+        job.vocalsPath = output.vocalsPath;
+        job.updatedAt = new Date().toISOString();
+        playerOrder = [...playerOrder.filter((id) => id !== job.id), job.id];
+        playerRuntimeDirty = true;
+      } catch (error) {
+        job.status = "failed";
+        job.phase = "No se pudo preparar";
+        job.error = errorMessage(error);
+        job.updatedAt = new Date().toISOString();
+      } finally {
+        activeStemJobId = "";
+        await persistQueuedEntries();
+        broadcastState();
+        if (playerRuntimeDirty) void pushPlayerRuntimeRemote().catch(() => {});
+      }
+    }
+  } finally {
+    stemWorkerRunning = false;
+  }
+}
+
+async function enqueueStemRequest(id) {
+  if (!stemEngineAvailable) {
+    throw new Error("The real AI Stems engine is not installed on this Mac.");
+  }
+  const filePath = await playerFileForRequest(id);
+  const existing = playerStemJobs.get(id);
+  if (existing?.status === "ready") return { ok: true, stem: playerStemJobView(id), cached: true };
+  const stamp = new Date().toISOString();
+  playerStemJobs.set(id, {
+    id,
+    filePath,
+    status: "queued",
+    progress: 0,
+    phase: "Esperando un momento seguro",
+    instrumentalPath: "",
+    vocalsPath: "",
+    error: "",
+    requestedAt: existing?.requestedAt || stamp,
+    updatedAt: stamp
+  });
+  playerOrder = playerOrder.filter((entryId) => entryId !== id);
+  await persistQueuedEntries();
+  broadcastState();
+  void processStemQueue();
+  return { ok: true, stem: playerStemJobView(id), cached: false };
+}
+
+async function servePlayerStem(request, response, id, kind) {
+  const job = playerStemJobs.get(id);
+  if (!job || job.status !== "ready") throw new Error("The requested stems are not ready.");
+  const candidate = kind === "vocals" ? job.vocalsPath : job.instrumentalPath;
+  const target = await realpath(candidate);
+  const root = await realpath(await stemCacheRootForFile(job.filePath));
+  if (!target.startsWith(`${root}${sep}`)) throw new Error("The stem file is outside Guest Star storage.");
+  await streamPlayerMedia(request, response, target);
+}
+
+function decodeMediaToken(token) {
+  try {
+    return Buffer.from(String(token || ""), "base64url").toString("utf8");
+  } catch {
+    throw new Error("The local library reference is invalid.");
+  }
+}
+
+async function playerFileForRequest(id) {
+  const localRequest = playerLocalRequests.get(id);
+  if (localRequest) return assertAllowedFile(localRequest.filePath);
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  const exact = findMatches(libraryFiles, item.song, item.artist, item.languageCode || item.language, 1)[0];
+  return firstAllowedFile([
+    queuedEntries.get(id)?.filePath || "",
+    vdjRequestFilePaths.get(id) || "",
+    exact?.exact ? exact.filePath : ""
+  ]);
+}
+
+async function servePlayerMedia(request, response, id) {
+  const filePath = await playerFileForRequest(id);
+  await streamPlayerMedia(request, response, filePath);
+}
+
+function playerLibrarySearch(query = "", { offset = 0, limit = 60, includeAll = false } = {}) {
+  const needle = normalizeText(query);
+  if (!needle && !includeAll) {
+    return {
+      tracks: [],
+      total: libraryFiles.length,
+      offset: 0,
+      hasMore: libraryFiles.length > 0,
+      deferred: true
+    };
+  }
+  const matches = libraryFiles
+    .filter((filePath) => !needle || normalizeText(basename(filePath)).includes(needle));
+  const tracks = matches
+    .slice(offset, offset + limit)
+    .map((filePath) => {
+      const metadata = mediaMetadata(filePath);
+      return {
+        id: Buffer.from(filePath).toString("base64url"),
+        name: basename(filePath, extname(filePath)),
+        ...metadata,
+        extension: extname(filePath).replace(/^\./, "").toUpperCase(),
+        mediaType: MIME[extname(filePath).toLowerCase()] || "application/octet-stream"
+      };
+    });
+  return {
+    tracks,
+    total: matches.length,
+    offset,
+    hasMore: offset + tracks.length < matches.length,
+    deferred: false
+  };
+}
+
+async function servePlayerLibraryMedia(request, response, token) {
+  const decoded = decodeMediaToken(token);
+  const filePath = await assertAllowedFile(decoded);
+  await streamPlayerMedia(request, response, filePath);
+}
+
+async function assertAllowedBackgroundFile(filePath) {
+  const target = await realpath(String(filePath || ""));
+  const info = await stat(target);
+  if (!info.isFile() || !BACKGROUND_AUDIO_EXTENSIONS.has(extname(target).toLowerCase())) {
+    throw new Error("The selected background track is not a compatible audio file.");
+  }
+  for (const source of config.backgroundMusicSources) {
+    try {
+      const root = await realpath(source);
+      const sourceInfo = await stat(root);
+      if (sourceInfo.isFile() && target === root) return target;
+      if (sourceInfo.isDirectory() && target.startsWith(`${root}${sep}`)) return target;
+    } catch {
+      // Ignore sources that disappeared after the last scan.
+    }
+  }
+  throw new Error("The background track is not inside a configured source.");
+}
+
+async function serveBackgroundMusic(request, response, token) {
+  const filePath = await assertAllowedBackgroundFile(decodeMediaToken(token));
+  await streamPlayerMedia(request, response, filePath);
+}
+
+async function createPlayerLocalRequest(body = {}) {
+  if (operatingMode !== "player" || !activityState.activityRunning) {
+    throw new Error("Start this activity in Player mode before adding a local singer.");
+  }
+  const singer = String(body.singer || "").trim().slice(0, 100);
+  if (!singer) throw new Error("Enter the singer's name.");
+  const prepareStems = body.prepareStems === true;
+  if (prepareStems && !stemEngineAvailable) {
+    throw new Error("Install the real AI Stems engine before requesting an instrumental version.");
+  }
+  const filePath = await assertAllowedFile(decodeMediaToken(body.trackId));
+  const metadata = mediaMetadata(filePath);
+  const item = {
+    id: `player-local-${randomUUID()}`,
+    filePath,
+    singer,
+    song: metadata.song,
+    artist: metadata.artist,
+    durationSeconds: 0,
+    status: "En fila del Player",
+    outcome: "",
+    insertedAt: new Date().toISOString(),
+    markedAt: ""
+  };
+  playerLocalRequests.set(item.id, item);
+  if (!prepareStems) playerOrder = [...playerOrder.filter((id) => id !== item.id), item.id];
+  await persistQueuedEntries();
+  if (prepareStems) await enqueueStemRequest(item.id);
+  broadcastState();
+  return { ok: true, item: playerLocalRequestView(item) };
+}
+
+async function streamPlayerMedia(request, response, filePath) {
+  const info = await stat(filePath);
+  const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
+  const range = String(request.headers.range || "").match(/^bytes=(\d*)-(\d*)$/);
+  if (!range) {
+    response.writeHead(200, { "Content-Type": type, "Content-Length": info.size, "Accept-Ranges": "bytes", "Cache-Control": "no-store" });
+    createReadStream(filePath).pipe(response);
+    return;
+  }
+  const start = range[1] ? Number(range[1]) : 0;
+  const end = range[2] ? Math.min(Number(range[2]), info.size - 1) : info.size - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end || start >= info.size) {
+    response.writeHead(416, { "Content-Range": `bytes */${info.size}` });
+    response.end();
+    return;
+  }
+  response.writeHead(206, { "Content-Type": type, "Content-Length": end - start + 1, "Content-Range": `bytes ${start}-${end}/${info.size}`, "Accept-Ranges": "bytes", "Cache-Control": "no-store" });
+  createReadStream(filePath, { start, end }).pipe(response);
+}
+
 async function firstAllowedFile(candidates) {
   let lastError = null;
   for (const candidate of [...new Set(candidates.filter(Boolean))]) {
@@ -1770,6 +2472,9 @@ function appendQueuePosition(id) {
 }
 
 async function queueRequest(id, requestedPath) {
+  if (operatingMode !== "bridge") {
+    throw new Error("This activity is not operating in Bridge mode.");
+  }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (effectiveRequestOutcome(item)) {
@@ -1909,6 +2614,9 @@ async function queueRequest(id, requestedPath) {
 }
 
 async function replaceQueuedRequest(id, requestedPath) {
+  if (operatingMode !== "bridge") {
+    throw new Error("This activity is not operating in Bridge mode.");
+  }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (effectiveRequestOutcome(item)) {
@@ -2022,6 +2730,9 @@ async function replaceQueuedRequest(id, requestedPath) {
 }
 
 async function removeQueuedRequest(id) {
+  if (operatingMode !== "bridge") {
+    throw new Error("This activity is not operating in Bridge mode.");
+  }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (vdjQueueCheckPromise) await vdjQueueCheckPromise;
@@ -2102,6 +2813,9 @@ async function dismissRequeue(id) {
 }
 
 async function setRequestOutcome(id, outcome) {
+  if (operatingMode !== "bridge") {
+    throw new Error("Use the internal Player controls for this activity.");
+  }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (!["completed", "skipped"].includes(outcome)) {
@@ -2187,7 +2901,143 @@ async function setRequestOutcome(id, outcome) {
   }
 }
 
+async function setPlayerRequestOutcome(id, outcome) {
+  if (operatingMode !== "player" || !activityState.activityRunning) {
+    throw new Error("Start this activity in Player mode before changing its queue.");
+  }
+  const localItem = playerLocalRequests.get(id);
+  if (localItem) {
+    if (!["completed", "skipped", "removed"].includes(outcome)) throw new Error("Song outcome is not allowed.");
+    if (localItem.outcome) throw new Error("This request was already marked completed or skipped.");
+    if (queueLocks.has(id)) throw new Error("This request is already being processed.");
+    queueLocks.add(id);
+    try {
+      localItem.outcome = outcome;
+      localItem.status = outcome === "completed" ? "Ya cantó" : outcome === "skipped" ? "Saltado" : "Retirada del Player";
+      localItem.markedAt = new Date().toISOString();
+      playerOrder = playerOrder.filter((entryId) => entryId !== id);
+      if (playerPlayback.currentRequestId === id) {
+        playerPlayback = {
+          currentRequestId: "",
+          currentTimeSeconds: 0,
+          scene: "lobby",
+          wasPlaying: false,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      await persistQueuedEntries();
+      return {
+        ok: true,
+        status: localItem.status,
+        outcome,
+        singer: localItem.singer,
+        song: localItem.song,
+        playerMode: true,
+        localPlayerRequest: true,
+        warning: ""
+      };
+    } finally {
+      queueLocks.delete(id);
+    }
+  }
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  if (!["completed", "skipped", "removed"].includes(outcome)) throw new Error("Song outcome is not allowed.");
+  if (queueLocks.has(id)) throw new Error("This request is already being processed.");
+  queueLocks.add(id);
+  const status = outcome === "completed" ? "Ya cantó" : outcome === "skipped" ? "Saltado" : "Retirada del Player";
+  try {
+    const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
+    outcomeRecoveries.set(id, { id, outcome, previousStatus: item.status || "Pendiente", originalPosition: null, markedAt: new Date().toISOString(), entry: entry || null, playerMode: true });
+    queuedIds.delete(id);
+    removedExternallyIds.delete(id);
+    vdjQueuePositions.delete(id);
+    queuedEntries.delete(id);
+    suppressedQueueIds.add(id);
+    pendingInsertions.delete(id);
+    queuePresenceMisses.delete(id);
+    transientQueueMissingIds.delete(id);
+    playerOrder = playerOrder.filter((entryId) => entryId !== id);
+    if (playerPlayback.currentRequestId === id) {
+      playerPlayback = {
+        currentRequestId: "",
+        currentTimeSeconds: 0,
+        scene: "lobby",
+        wasPlaying: false,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    await persistQueuedEntries();
+    item.status = status;
+    let warning = "";
+    try {
+      const data = await updateBridgeRequest(config, id, status, basename(entry?.filePath || item.fileName || ""), { durationSeconds: item.durationSeconds });
+      if (data?.state) applyActivityState(data);
+    } catch (error) {
+      warning = `The Player saved the outcome locally, but Guest Star did not confirm the update: ${errorMessage(error)}`;
+    }
+    return { ok: true, status, outcome, singer: item.singer, song: item.song, playerMode: true, warning };
+  } finally {
+    queueLocks.delete(id);
+  }
+}
+
+async function undoPlayerRequestOutcome(id) {
+  if (operatingMode !== "player" || !activityState.activityRunning) {
+    throw new Error("The Player queue is not active.");
+  }
+  const localItem = playerLocalRequests.get(id);
+  if (localItem) {
+    if (!localItem.outcome) throw new Error("This request is not completed or skipped.");
+    if (queueLocks.has(id)) throw new Error("This request is already being processed.");
+    queueLocks.add(id);
+    try {
+      localItem.outcome = "";
+      localItem.status = "En fila del Player";
+      localItem.markedAt = "";
+      playerOrder = [...playerOrder.filter((entryId) => entryId !== id), id];
+      await persistQueuedEntries();
+      return { ok: true, restored: true, playerMode: true, localPlayerRequest: true };
+    } finally {
+      queueLocks.delete(id);
+    }
+  }
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  if (!effectiveRequestOutcome(item)) {
+    throw new Error("This request is not completed or skipped.");
+  }
+  outcomeRecoveries.delete(id);
+  suppressedQueueIds.delete(id);
+  const exact = findMatches(
+    libraryFiles,
+    item.song,
+    item.artist,
+    item.languageCode || item.language,
+    1
+  )[0];
+  item.status = exact?.exact ? "Local encontrado" : "No está local";
+  playerOrder = [...playerOrder.filter((entryId) => entryId !== id), id];
+  await persistQueuedEntries();
+  try {
+    const data = await updateBridgeRequest(
+      config,
+      id,
+      item.status,
+      exact?.exact ? basename(exact.filePath) : "",
+      { durationSeconds: item.durationSeconds }
+    );
+    if (data?.state) applyActivityState(data);
+  } catch {
+    // The local Player remains authoritative and retries on the next sync.
+  }
+  return { ok: true, id, status: item.status, playerMode: true };
+}
+
 async function undoRequestOutcome(id, placement) {
+  if (operatingMode !== "bridge") {
+    throw new Error("Use the internal Player history for this activity.");
+  }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   if (!effectiveRequestOutcome(item)) {
@@ -2534,14 +3384,28 @@ async function prepareMissingYoutube() {
   broadcastState();
 }
 
-async function chooseFolder() {
+async function chooseFolder(prompt = "Choose your karaoke song folder") {
   if (process.platform !== "darwin") {
     throw new Error("The automatic folder picker is available when Bridge runs on Mac.");
   }
-  const script =
-    'POSIX path of (choose folder with prompt "Choose your karaoke song folder")';
+  const safePrompt = String(prompt).replace(/["\\]/g, " ");
+  const script = `POSIX path of (choose folder with prompt "${safePrompt}")`;
   const { stdout } = await execFileAsync("osascript", ["-e", script], { timeout: 120000 });
   return stdout.trim().replace(/\/$/, "");
+}
+
+async function chooseBackgroundAudioFile() {
+  if (process.platform !== "darwin") {
+    throw new Error("The automatic file picker is available when Guest Star runs on Mac.");
+  }
+  const script = 'POSIX path of (choose file with prompt "Choose one background music audio file")';
+  const { stdout } = await execFileAsync("osascript", ["-e", script], { timeout: 120000 });
+  const filePath = stdout.trim();
+  const info = await stat(filePath);
+  if (!info.isFile() || !BACKGROUND_AUDIO_EXTENSIONS.has(extname(filePath).toLowerCase())) {
+    throw new Error("Choose an MP3, M4A, WAV, OGG, AAC or FLAC audio file.");
+  }
+  return filePath;
 }
 
 async function serveStatic(pathname, response) {
@@ -2572,6 +3436,110 @@ async function serveStatic(pathname, response) {
 
 async function api(request, response, url) {
   const { pathname } = url;
+  if (request.method === "GET" && pathname === "/api/player/library") {
+    const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset")) || 0));
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(url.searchParams.get("limit")) || 60)));
+    const result = playerLibrarySearch(
+      url.searchParams.get("query") || "",
+      { offset, limit, includeAll: url.searchParams.get("all") === "1" }
+    );
+    json(response, 200, { ok: true, ...result });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/runtime") {
+    requireSignedInBridge();
+    json(response, 200, await updatePlayerRuntime(await readJson(request)));
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/local-requests") {
+    requireSignedInBridge();
+    json(response, 200, await createPlayerLocalRequest(await readJson(request)));
+    return;
+  }
+  const backgroundMediaMatch = pathname.match(/^\/api\/player\/background\/media\/([^/]+)$/);
+  if (request.method === "GET" && backgroundMediaMatch) {
+    await serveBackgroundMusic(request, response, decodeURIComponent(backgroundMediaMatch[1]));
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/background/choose-folder") {
+    requireSignedInBridge();
+    const folder = await chooseFolder("Choose the folder with your background music");
+    config = await saveConfig(sanitizeConfig({
+      backgroundMusicSources: [...config.backgroundMusicSources, folder]
+    }, config));
+    await scanBackgroundMusicNow();
+    broadcastState();
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/background/choose-file") {
+    requireSignedInBridge();
+    const filePath = await chooseBackgroundAudioFile();
+    config = await saveConfig(sanitizeConfig({
+      backgroundMusicSources: [...config.backgroundMusicSources, filePath]
+    }, config));
+    await scanBackgroundMusicNow();
+    broadcastState();
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/background/config") {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    config = await saveConfig(sanitizeConfig({
+      backgroundMusicSources: Array.isArray(body.sources)
+        ? body.sources
+        : config.backgroundMusicSources,
+      backgroundMusicVolume: body.volume === undefined
+        ? config.backgroundMusicVolume
+        : body.volume
+    }, config));
+    await scanBackgroundMusicNow();
+    broadcastState();
+    json(response, 200, stateView());
+    return;
+  }
+  const playerLibraryMediaMatch = pathname.match(/^\/api\/player\/library-media\/([^/]+)$/);
+  if (request.method === "GET" && playerLibraryMediaMatch) {
+    await servePlayerLibraryMedia(request, response, decodeURIComponent(playerLibraryMediaMatch[1]));
+    return;
+  }
+  const playerStemMediaMatch = pathname.match(/^\/api\/player\/stems\/([^/]+)\/(instrumental|vocals)$/);
+  if (request.method === "GET" && playerStemMediaMatch) {
+    await servePlayerStem(
+      request,
+      response,
+      decodeURIComponent(playerStemMediaMatch[1]),
+      playerStemMediaMatch[2]
+    );
+    return;
+  }
+  const playerStemRequestMatch = pathname.match(/^\/api\/player\/requests\/([^/]+)\/stems$/);
+  if (request.method === "POST" && playerStemRequestMatch) {
+    requireSignedInBridge();
+    json(response, 200, await enqueueStemRequest(decodeURIComponent(playerStemRequestMatch[1])));
+    return;
+  }
+  const playerMediaMatch = pathname.match(/^\/api\/player\/media\/([^/]+)$/);
+  if (request.method === "GET" && playerMediaMatch) {
+    await servePlayerMedia(request, response, decodeURIComponent(playerMediaMatch[1]));
+    return;
+  }
+  const playerOutcomeMatch = pathname.match(/^\/api\/player\/requests\/([^/]+)\/outcome$/);
+  if (request.method === "POST" && playerOutcomeMatch) {
+    const body = await readJson(request);
+    const data = await setPlayerRequestOutcome(decodeURIComponent(playerOutcomeMatch[1]), String(body.outcome || ""));
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
+  const playerUndoMatch = pathname.match(/^\/api\/player\/requests\/([^/]+)\/undo$/);
+  if (request.method === "POST" && playerUndoMatch) {
+    const data = await undoPlayerRequestOutcome(decodeURIComponent(playerUndoMatch[1]));
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
   if (request.method === "GET" && pathname === "/api/events") {
     openEventStream(request, response);
     return;
@@ -2624,10 +3592,10 @@ async function api(request, response, url) {
     const action = String(body.action || "");
     const allowed = new Set([
       "adminState", "createHotel", "updateHotel", "createVenue", "updateVenue",
-      "createActivity", "updateActivity", "setDefaultPublicExperience", "setDefaultGoogleFallback", "createHost", "updateHost", "assignUser",
+      "createActivity", "updateActivity", "setDefaultPublicExperience", "createHost", "updateHost", "assignUser",
       "setHostPassword", "updateActivityLanguages",
       "revokeAssignment", "revokeDevice", "updateHotelBranding",
-      "scheduleActivity", "cancelSchedule", "listReviews", "updateReview",
+      "scheduleActivity", "updateSchedule", "cancelSchedule", "listReviews", "updateReview",
       "regenerateHotelQr", "hotelShare"
     ]);
     if (!allowed.has(action)) throw new Error("Superhost action not allowed.");
@@ -2656,6 +3624,7 @@ async function api(request, response, url) {
       }, config));
       tenantState = {
         hotel: null,
+        branding: null,
         venue: null,
         activity: null,
         permissions: {},
@@ -2689,6 +3658,7 @@ async function api(request, response, url) {
       user: data.user || null,
       selection: data.selection || { hotels: [], venues: [], activities: [] }
     };
+    await resumeRunningActivity();
     sheetError = "";
     broadcastState();
     json(response, 200, {
@@ -2732,6 +3702,7 @@ async function api(request, response, url) {
       user: data.user || null,
       selection: data.selection || { hotels: [], venues: [], activities: [] }
     };
+    await resumeRunningActivity();
     sheetError = "";
     broadcastState();
     json(response, 200, {
@@ -2763,6 +3734,7 @@ async function api(request, response, url) {
       };
       tenantState = {
         hotel: null,
+        branding: null,
         venue: null,
         activity: null,
         permissions: {},
@@ -2802,12 +3774,16 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && pathname === "/api/auth/selection") {
     const body = await readJson(request);
+    const previousActivityId = config.lastActivityId;
     const selection = {
       hotelId: String(body.hotelId || ""),
       venueId: String(body.venueId || ""),
       activityId: String(body.activityId || "")
     };
     const data = await selectBridgeActivity(config, selection);
+    if (selection.activityId && selection.activityId !== previousActivityId) {
+      operatingMode = "";
+    }
     config = await saveConfig(sanitizeConfig({
       ...config,
       lastHotelId: selection.hotelId,
@@ -2866,7 +3842,7 @@ async function api(request, response, url) {
       hotelId: config.lastHotelId,
       venueId: config.lastVenueId,
       activityId: config.lastActivityId,
-      source: "bridge",
+      source: operatingMode === "player" ? "player" : "bridge",
       scheduledStartAt: body.scheduledStartAt,
       defaultDurationSeconds: body.defaultDurationSeconds,
       defaultTransitionSeconds: body.defaultTransitionSeconds,
@@ -2896,16 +3872,41 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
+  if (request.method === "POST" && pathname === "/api/player/sync") {
+    await scanNow();
+    await syncNow();
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/activity/mode") {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    const nextMode = String(body.mode || "").toLowerCase();
+    if (!["player", "bridge"].includes(nextMode)) {
+      throw new Error("Choose Player or Bridge before starting the activity.");
+    }
+    if (activityState.activityRunning) {
+      throw new Error("The playback mode is locked until this activity finishes.");
+    }
+    operatingMode = nextMode;
+    await persistQueuedEntries(config.lastActivityId || activityState.activityId);
+    json(response, 200, stateView());
+    broadcastState();
+    return;
+  }
   const activityMatch = pathname.match(
     /^\/api\/activity\/(start|open|close|reset|finish|start-new|archive)$/
   );
   if (request.method === "POST" && activityMatch) {
     const action = activityMatch[1];
+    if (["start", "start-new"].includes(action) && !operatingMode) {
+      throw new Error("Choose Player or Bridge before starting the activity.");
+    }
     const context = {
       hotelId: config.lastHotelId,
       venueId: config.lastVenueId,
       activityId: config.lastActivityId,
-      source: "bridge"
+      source: operatingMode === "player" ? "player" : "bridge"
     };
     const data = action === "finish"
       ? await v4AppsScriptAction(config, "finishActivityV4", context)
@@ -2913,8 +3914,9 @@ async function api(request, response, url) {
         ? await v4AppsScriptAction(config, "startNewActivityV4", context)
         : action === "archive"
           ? await v4AppsScriptAction(config, "archiveClearQueue", context)
-          : await controlActivity(config, action);
+          : await controlActivity(config, action, context.source);
     applyActivityState(data);
+    if (["finish", "reset", "archive"].includes(action)) operatingMode = "";
     if (["reset", "archive", "start-new"].includes(action)) {
       await reconcileDeletedRequests([], activityState, {
         removeFromVirtualDJ: true
@@ -2926,6 +3928,7 @@ async function api(request, response, url) {
     }
     await syncNow();
     await reconcileVirtualDjQueue(true);
+    await persistQueuedEntries(activityState.activityId);
     json(response, 200, stateView());
     return;
   }
@@ -3151,10 +4154,46 @@ async function restoreBridgeIdentity() {
   }
 }
 
+async function resumeRunningActivity() {
+  if (!identityState.authenticated || !hasV4Session(config)) return false;
+  const activities = Array.isArray(identityState.selection?.activities)
+    ? identityState.selection.activities
+    : [];
+  const running = activities.filter((item) => String(item.status || "") === "in_progress");
+  const remembered = running.find((item) => String(item.activityId || "") === String(config.lastActivityId || ""));
+  const activity = remembered || (running.length === 1 ? running[0] : null);
+  if (!activity) return false;
+  const hotelId = String(activity.hotelId || config.lastHotelId || "");
+  const venueId = String(activity.venueId || config.lastVenueId || "");
+  const activityId = String(activity.activityId || "");
+  if (!hotelId || !venueId || !activityId) return false;
+  const data = await selectBridgeActivity(config, {
+    hotelId,
+    venueId,
+    activityId,
+    source: "resume"
+  });
+  config = await saveConfig(sanitizeConfig({
+    ...config,
+    lastHotelId: hotelId,
+    lastVenueId: venueId,
+    lastActivityId: activityId,
+    rememberSelection: true
+  }, config));
+  applyActivityState(data);
+  if (Array.isArray(data.requests)) requests = bridgeRequests(data);
+  refreshLocalAvailability();
+  await persistQueuedEntries(activityId);
+  return true;
+}
+
 let cloudLoopRunning = false;
 let lastHeartbeatSentAt = 0;
 
 async function executeCloudCommand(command) {
+  if (operatingMode !== "bridge") {
+    throw new Error("VirtualDJ commands are locked because this activity uses Player mode.");
+  }
   const payload = command?.payload || {};
   if (command.commandType === "synchronize") {
     await syncNow();
@@ -3186,6 +4225,7 @@ async function executeCloudCommand(command) {
 }
 
 async function bridgeCloudLoop() {
+  if (operatingMode !== "bridge") return;
   if (cloudLoopRunning || !hasV4Session(config) || !config.lastActivityId) return;
   cloudLoopRunning = true;
   try {
@@ -3218,11 +4258,20 @@ async function bridgeCloudLoop() {
   }
 }
 
-server.listen(config.bridgePort, "127.0.0.1", () => {
-  console.log(`Guest Star Bridge listo: http://127.0.0.1:${config.bridgePort}`);
+await refreshStemEngineCapability();
+pauseStemWorker(playerPlayback.scene === "karaoke");
+
+server.listen(runtimePort, "127.0.0.1", () => {
+  const edition = WEB_BETA ? "Guest Star Web Beta" : "Guest Star";
+  console.log(`${edition} listo: http://127.0.0.1:${runtimePort}`);
 });
 
 await restoreBridgeIdentity();
+try {
+  await resumeRunningActivity();
+} catch (error) {
+  sheetError = errorMessage(error);
+}
 startLibraryWatchers();
 await scanNow();
 await syncNow();
@@ -3234,14 +4283,21 @@ async function requestLoop() {
 
 async function scanLoop() {
   await scanNow();
-  setTimeout(scanLoop, config.scanIntervalSeconds * 1000).unref();
+  setTimeout(scanLoop, (WEB_BETA ? 5 : config.scanIntervalSeconds) * 1000).unref();
 }
 
 setTimeout(requestLoop, config.requestIntervalSeconds * 1000).unref();
-setTimeout(scanLoop, config.scanIntervalSeconds * 1000).unref();
+setTimeout(scanLoop, (WEB_BETA ? 5 : config.scanIntervalSeconds) * 1000).unref();
 setInterval(() => {
   void bridgeCloudLoop();
 }, 2000).unref();
+setInterval(() => {
+  if (!playerRuntimeDirty) return;
+  void pushPlayerRuntimeRemote().catch((error) => {
+    sheetError = errorMessage(error);
+    broadcastState();
+  });
+}, 10000).unref();
 setInterval(() => {
   for (const response of [...eventClients]) {
     try {

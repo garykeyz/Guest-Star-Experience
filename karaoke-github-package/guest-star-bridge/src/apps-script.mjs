@@ -9,15 +9,15 @@ async function parseResponse(response) {
 }
 
 const REQUIRED_CODE_VERSION = "4.2.0";
-const BRIDGE_APP_VERSION = "4.3.9";
-const APPS_SCRIPT_TIMEOUT_MS = 70000;
+const BRIDGE_APP_VERSION = "4.4.0";
+const GUEST_STAR_SERVICE_TIMEOUT_MS = 70000;
 
 function endpoint(config) {
   if (!config.appsScriptUrl) throw new Error("Guest Star connection is not configured.");
   return config.appsScriptUrl;
 }
 
-async function postPayload(config, payload, timeoutMs = APPS_SCRIPT_TIMEOUT_MS) {
+async function postPayload(config, payload, timeoutMs = GUEST_STAR_SERVICE_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -137,46 +137,18 @@ export function syncExternalVirtualDjEntries(config, entries, confirmedMissingId
 }
 
 export async function appsScriptAction(config, action, extra = {}) {
-  if (!config.appsScriptUrl) throw new Error("Configure the Guest Star connection.");
-  if (!config.hostPin) throw new Error("Configure the private legacy host PIN.");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await fetch(config.appsScriptUrl, {
-      method: "POST",
-      redirect: "follow",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action, pin: config.hostPin, ...extra }),
-      signal: controller.signal
-    });
-    const data = await parseResponse(response);
-    if (!data.ok) {
-      const message =
-        data.code === "INVALID_PIN"
-          ? "The legacy host PIN does not match."
-          : data.error || data.code || "Guest Star rejected the request.";
-      throw new Error(message);
-    }
-    return data;
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error("Guest Star did not respond in time.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  void config;
+  void action;
+  void extra;
+  throw new Error("The legacy Google Sheets/PIN backend is disabled. Sign in to Guest Star D1.");
 }
 
 export async function fetchBridgeQueue(config) {
-  if (hasV4Session(config)) {
-    return v4AppsScriptAction(config, "activityState", {
-      hotelId: config.lastHotelId,
-      venueId: config.lastVenueId,
-      activityId: config.lastActivityId
-    });
-  }
-  const data = await appsScriptAction(config, "bridgeQueue");
+  const data = await v4AppsScriptAction(config, "activityState", {
+    hotelId: config.lastHotelId,
+    venueId: config.lastVenueId,
+    activityId: config.lastActivityId
+  });
   if (!Array.isArray(data.requests)) {
     throw new Error(
       "Guest Star did not return the request queue. Contact the Superhost."
@@ -192,47 +164,30 @@ export function updateBridgeRequest(
   fileName = "",
   extra = {}
 ) {
-  if (hasV4Session(config)) {
-    return v4AppsScriptAction(config, "bridgeRequestUpdate", {
-      id,
-      status,
-      fileName,
-      durationSeconds: extra.durationSeconds,
-      sourceUrl: extra.sourceUrl,
-      virtualDJItemId: extra.virtualDJItemId,
-      queuePosition: extra.queuePosition,
-      syncState: extra.syncState,
-      lastSeenAt: extra.lastSeenAt
-    });
-  }
-  return appsScriptAction(config, "bridgeUpdate", {
+  return v4AppsScriptAction(config, "bridgeRequestUpdate", {
     id,
     status,
     fileName,
     durationSeconds: extra.durationSeconds,
-    sourceUrl: extra.sourceUrl
+    sourceUrl: extra.sourceUrl,
+    virtualDJItemId: extra.virtualDJItemId,
+    queuePosition: extra.queuePosition,
+    syncState: extra.syncState,
+    lastSeenAt: extra.lastSeenAt
   });
 }
 
 export function updateBridgeConfig(config, sheetConfig = {}) {
-  if (hasV4Session(config)) {
-    return v4AppsScriptAction(config, "updateActivitySettings", {
-      hotelId: config.lastHotelId,
-      venueId: config.lastVenueId,
-      activityId: config.lastActivityId,
-      source: "bridge",
-      defaultDurationSeconds:
-        sheetConfig.activityHours === undefined
-          ? undefined
-          : Math.round(Number(sheetConfig.activityHours) * 3600),
-      defaultTransitionSeconds: sheetConfig.transitionSeconds
-    });
-  }
-  return appsScriptAction(config, "bridgeConfigUpdate", {
+  return v4AppsScriptAction(config, "updateActivitySettings", {
+    hotelId: config.lastHotelId,
+    venueId: config.lastVenueId,
+    activityId: config.lastActivityId,
     source: "bridge",
-    activityHours: sheetConfig.activityHours,
-    transitionSeconds: sheetConfig.transitionSeconds,
-    accepting: sheetConfig.accepting
+    defaultDurationSeconds:
+      sheetConfig.activityHours === undefined
+        ? undefined
+        : Math.round(Number(sheetConfig.activityHours) * 3600),
+    defaultTransitionSeconds: sheetConfig.transitionSeconds
   });
 }
 
@@ -243,18 +198,10 @@ export function searchKaraokeYouTube(
   language = "",
   languageCode = ""
 ) {
-  if (hasV4Session(config)) {
-    return v4AppsScriptAction(config, "youtubeSearchV4", {
-      hotelId: config.lastHotelId,
-      venueId: config.lastVenueId,
-      activityId: config.lastActivityId,
-      song,
-      artist,
-      language,
-      languageCode
-    });
-  }
-  return appsScriptAction(config, "youtubeSearch", {
+  return v4AppsScriptAction(config, "youtubeSearchV4", {
+    hotelId: config.lastHotelId,
+    venueId: config.lastVenueId,
+    activityId: config.lastActivityId,
     song,
     artist,
     language,
@@ -262,34 +209,31 @@ export function searchKaraokeYouTube(
   });
 }
 
-export async function controlActivity(config, action) {
+export async function controlActivity(config, action, source = "bridge") {
   if (!["start", "open", "close", "reset"].includes(action)) {
     throw new Error("Activity action is not allowed.");
   }
-  let data;
+  const playbackSource = String(source || "").toLowerCase();
+  if (!["player", "bridge"].includes(playbackSource)) {
+    throw new Error("Choose Player or Bridge before controlling the activity.");
+  }
   try {
-    if (hasV4Session(config)) {
-      const common = {
-        hotelId: config.lastHotelId,
-        venueId: config.lastVenueId,
-        activityId: config.lastActivityId,
-        source: "bridge"
-      };
-      if (action === "start") {
-        return v4AppsScriptAction(config, "startActivityV4", common);
-      }
-      if (action === "open" || action === "close") {
-        return v4AppsScriptAction(config, "toggleRequests", {
-          ...common,
-          open: action === "open"
-        });
-      }
-      return v4AppsScriptAction(config, "archiveClearQueue", common);
+    const common = {
+      hotelId: config.lastHotelId,
+      venueId: config.lastVenueId,
+      activityId: config.lastActivityId,
+      source: playbackSource
+    };
+    if (action === "start") {
+      return await v4AppsScriptAction(config, "startActivityV4", common);
     }
-    data = await appsScriptAction(config, "bridgeControl", {
-      control: action,
-      source: "bridge"
-    });
+    if (action === "open" || action === "close") {
+      return await v4AppsScriptAction(config, "toggleRequests", {
+        ...common,
+        open: action === "open"
+      });
+    }
+    return await v4AppsScriptAction(config, "archiveClearQueue", common);
   } catch (error) {
     if (
       String(error?.message || "").includes("INVALID_ACTION") ||
@@ -301,25 +245,4 @@ export async function controlActivity(config, action) {
     }
     throw error;
   }
-  if (!data?.state || !Array.isArray(data.requests)) {
-    throw new Error(
-      `Guest Star did not confirm the change. Contact the Superhost and report version ${REQUIRED_CODE_VERSION}.`
-    );
-  }
-  if (action === "open" && data.state.accepting === false) {
-    throw new Error("Guest Star did not confirm that requests are open.");
-  }
-  if (action === "close" && data.state.accepting !== false) {
-    throw new Error("Guest Star did not confirm that requests are closed.");
-  }
-  if (action === "reset" && data.state.lastAction !== "reset") {
-    throw new Error("Guest Star did not confirm the activity reset.");
-  }
-  if (action === "start" && data.state.lastAction !== "start") {
-    throw new Error("Guest Star did not confirm the activity start.");
-  }
-  if (action === "reset" && data.requests.length !== 0) {
-    throw new Error("Guest Star did not archive every request during reset.");
-  }
-  return data;
 }

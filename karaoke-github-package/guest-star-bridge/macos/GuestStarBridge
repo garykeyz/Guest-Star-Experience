@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 
-APP_VERSION="4.3.9"
+APP_VERSION="4.4.0"
 PANEL_URL="http://127.0.0.1:8787"
 CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE_DIR="$(cd "$CONTENTS_DIR/.." && pwd)"
@@ -11,12 +11,13 @@ case "$(/usr/bin/uname -m)" in
   x86_64) RUNTIME="$RESOURCES_DIR/runtime/node-x64/node" ;;
   *) RUNTIME="" ;;
 esac
-SUPPORT_DIR="$HOME/Library/Application Support/Guest Star Bridge"
+SUPPORT_DIR="$HOME/Library/Application Support/Guest Star"
+LEGACY_SUPPORT_DIR="$HOME/Library/Application Support/Guest Star Bridge"
 BRIDGE_DIR="$SUPPORT_DIR/bridge"
 DATA_DIR="$SUPPORT_DIR/data"
 PID_FILE="$SUPPORT_DIR/bridge.pid"
 LOG_DIR="$HOME/Library/Logs"
-LOG_FILE="$LOG_DIR/Guest Star Bridge.log"
+LOG_FILE="$LOG_DIR/Guest Star.log"
 WINDOW_SCRIPT="$RESOURCES_DIR/GuestStarWindow.js"
 bridge_pid=""
 owns_server=0
@@ -25,7 +26,7 @@ bridge_updated=0
 show_alert() {
   /usr/bin/osascript - "$1" <<'APPLESCRIPT' >/dev/null 2>&1
 on run argv
-  display alert "Guest Star Bridge" message (item 1 of argv) as critical
+  display alert "Guest Star" message (item 1 of argv) as critical
 end run
 APPLESCRIPT
 }
@@ -34,7 +35,7 @@ is_bridge_process() {
   candidate_pid="$1"
   running_command="$(/bin/ps -p "$candidate_pid" -o command= 2>/dev/null || true)"
   case "$running_command" in
-    *"Guest Star Bridge.app/Contents/Resources/runtime/"*"src/server.mjs"*) return 0 ;;
+    *"Guest Star.app/Contents/Resources/runtime/"*"src/server.mjs"*|*"Guest Star Bridge.app/Contents/Resources/runtime/"*"src/server.mjs"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -42,7 +43,7 @@ is_bridge_process() {
 case "$BUNDLE_DIR" in
   /Volumes/*)
     /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
-display alert "Install Guest Star Bridge" message "Move the application to the Applications folder and open it from there." buttons {"OK"} default button "OK"
+display alert "Install Guest Star" message "Move the application to the Applications folder and open it from there." buttons {"OK"} default button "OK"
 APPLESCRIPT
     /usr/bin/open "/Applications"
     exit 0
@@ -52,6 +53,9 @@ esac
 /bin/mkdir -p "$SUPPORT_DIR" "$DATA_DIR" "$LOG_DIR"
 
 if [ ! -f "$DATA_DIR/config.json" ]; then
+  if [ -f "$LEGACY_SUPPORT_DIR/data/config.json" ]; then
+    /usr/bin/ditto "$LEGACY_SUPPORT_DIR/data" "$DATA_DIR"
+  fi
   for old_config in \
     "$HOME/Downloads/guest-star-bridge/data/config.json" \
     "$HOME/Desktop/guest-star-bridge/data/config.json" \
@@ -98,7 +102,7 @@ then
     if [ -d "$PREVIOUS_DIR" ]; then
       /bin/mv "$PREVIOUS_DIR" "$BRIDGE_DIR"
     fi
-    show_alert "No se pudo actualizar Guest Star Bridge."
+    show_alert "No se pudo actualizar Guest Star."
     exit 1
   fi
   /bin/rm -rf "$PREVIOUS_DIR"
@@ -135,7 +139,7 @@ if [ -z "$RUNTIME" ] || [ ! -x "$RUNTIME" ]; then
 fi
 
 if [ ! -f "$WINDOW_SCRIPT" ]; then
-  show_alert "The Guest Star Bridge internal interface is unavailable."
+  show_alert "The Guest Star internal interface is unavailable."
   exit 1
 fi
 
@@ -170,6 +174,24 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 if [ -z "$bridge_pid" ]; then
+  listener_pid=""
+  if [ -x /usr/sbin/lsof ]; then
+    listener_pid="$(/usr/sbin/lsof -nP -tiTCP:8787 -sTCP:LISTEN 2>/dev/null | /usr/bin/head -n 1)"
+  fi
+  if [ -n "$listener_pid" ] && is_bridge_process "$listener_pid"; then
+    running_state="$(/usr/bin/curl --silent --max-time 1 "$PANEL_URL/api/state" 2>/dev/null || true)"
+    case "$running_state" in
+      *\"version\":\"$APP_VERSION\"*) ;;
+      *)
+        /bin/kill "$listener_pid" 2>/dev/null || true
+        stop_attempt=0
+        while [ "$stop_attempt" -lt 20 ] && /bin/kill -0 "$listener_pid" 2>/dev/null; do
+          /bin/sleep 0.1
+          stop_attempt=$((stop_attempt + 1))
+        done
+        ;;
+    esac
+  fi
   if ! /usr/bin/curl --silent --fail --max-time 1 "$PANEL_URL/api/state" >/dev/null 2>&1; then
     cd "$BRIDGE_DIR" || exit 1
     /usr/bin/nohup "$RUNTIME" src/server.mjs >>"$LOG_FILE" 2>&1 </dev/null &
@@ -185,7 +207,7 @@ while [ "$attempt" -lt 40 ]; do
     /usr/bin/osascript -l JavaScript "$WINDOW_SCRIPT" >>"$LOG_FILE" 2>&1
     window_status=$?
     if [ "$window_status" -ne 0 ]; then
-      show_alert "The internal window could not be opened. Details were saved to Library/Logs/Guest Star Bridge.log."
+      show_alert "The internal window could not be opened. Details were saved to Library/Logs/Guest Star.log."
     fi
     exit "$window_status"
   fi
@@ -193,5 +215,5 @@ while [ "$attempt" -lt 40 ]; do
   attempt=$((attempt + 1))
 done
 
-show_alert "Guest Star Bridge could not start. Details were saved to Library/Logs/Guest Star Bridge.log."
+show_alert "Guest Star could not start. Details were saved to Library/Logs/Guest Star.log."
 exit 1

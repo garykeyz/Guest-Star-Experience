@@ -40,6 +40,74 @@ function cleanRecovery(value = {}) {
   };
 }
 
+function cleanPlayerRequest(value = {}) {
+  const id = String(value.id || "").trim();
+  const filePath = String(value.filePath || "").trim();
+  const singer = String(value.singer || "").trim();
+  if (!id || !filePath || !singer) return null;
+  const outcome = ["completed", "skipped", "removed"].includes(String(value.outcome || ""))
+    ? String(value.outcome)
+    : "";
+  return {
+    id,
+    filePath,
+    singer,
+    song: String(value.song || "").trim() || "Pista local",
+    artist: String(value.artist || "").trim(),
+    durationSeconds: Math.max(0, Number(value.durationSeconds) || 0),
+    status: outcome === "completed"
+      ? "Ya cantó"
+      : outcome === "skipped"
+        ? "Saltado"
+        : outcome === "removed"
+          ? "Retirada del Player"
+        : String(value.status || "En fila del Player").trim(),
+    outcome,
+    insertedAt: String(value.insertedAt || "").trim(),
+    markedAt: String(value.markedAt || "").trim()
+  };
+}
+
+function cleanPlayerOrder(value = []) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))]
+    : [];
+}
+
+function cleanPlayerPlayback(value = {}) {
+  const currentTimeSeconds = Number(value.currentTimeSeconds);
+  return {
+    currentRequestId: String(value.currentRequestId || "").trim(),
+    currentTimeSeconds: Number.isFinite(currentTimeSeconds)
+      ? Math.max(0, Math.min(12 * 60 * 60, currentTimeSeconds))
+      : 0,
+    scene: value.scene === "karaoke" ? "karaoke" : "lobby",
+    wasPlaying: value.wasPlaying === true,
+    updatedAt: String(value.updatedAt || "").trim()
+  };
+}
+
+function cleanPlayerStemJob(value = {}) {
+  const id = String(value.id || "").trim();
+  const filePath = String(value.filePath || "").trim();
+  if (!id || !filePath) return null;
+  const status = ["queued", "processing", "ready", "failed"].includes(String(value.status || ""))
+    ? String(value.status)
+    : "queued";
+  return {
+    id,
+    filePath,
+    status: status === "processing" ? "queued" : status,
+    progress: Math.max(0, Math.min(100, Number(value.progress) || 0)),
+    phase: String(value.phase || "").trim(),
+    instrumentalPath: String(value.instrumentalPath || "").trim(),
+    vocalsPath: String(value.vocalsPath || "").trim(),
+    error: String(value.error || "").trim(),
+    requestedAt: String(value.requestedAt || "").trim(),
+    updatedAt: String(value.updatedAt || "").trim()
+  };
+}
+
 export function normalizeQueueState(value = {}) {
   const entries = Array.isArray(value.entries)
     ? value.entries.map(cleanEntry).filter(Boolean)
@@ -53,13 +121,25 @@ export function normalizeQueueState(value = {}) {
   const removedIds = Array.isArray(value.removedIds)
     ? [...new Set(value.removedIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
+  const playerRequests = Array.isArray(value.playerRequests)
+    ? value.playerRequests.map(cleanPlayerRequest).filter(Boolean)
+    : [];
   return {
     activityId: String(value.activityId || "").trim(),
     activityStartedAt: String(value.activityStartedAt || "").trim(),
+    operatingMode: ["player", "bridge"].includes(String(value.operatingMode || "").trim())
+      ? String(value.operatingMode).trim()
+      : "",
     entries,
     suppressedIds,
     recoveries,
-    removedIds
+    removedIds,
+    playerRequests,
+    playerOrder: cleanPlayerOrder(value.playerOrder),
+    playerPlayback: cleanPlayerPlayback(value.playerPlayback),
+    playerStemJobs: Array.isArray(value.playerStemJobs)
+      ? value.playerStemJobs.map(cleanPlayerStemJob).filter(Boolean)
+      : []
   };
 }
 
@@ -78,7 +158,12 @@ export async function saveQueueState(
   suppressedIds = [],
   recoveries = [],
   activityStartedAt = "",
-  removedIds = []
+  removedIds = [],
+  operatingMode = "",
+  playerRequests = [],
+  playerOrder = [],
+  playerPlayback = {},
+  playerStemJobs = []
 ) {
   const clean = normalizeQueueState({
     activityId,
@@ -86,7 +171,12 @@ export async function saveQueueState(
     entries: Array.from(entries || []),
     suppressedIds: Array.from(suppressedIds || []),
     recoveries: Array.from(recoveries || []),
-    removedIds: Array.from(removedIds || [])
+    removedIds: Array.from(removedIds || []),
+    operatingMode,
+    playerRequests: Array.from(playerRequests || []),
+    playerOrder: Array.from(playerOrder || []),
+    playerPlayback,
+    playerStemJobs: Array.from(playerStemJobs || [])
   });
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");

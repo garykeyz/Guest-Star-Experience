@@ -4,6 +4,10 @@
     "/Users/tu-usuario/Music/Karaoke"
   ],
   "rememberLibraryFolders": true,
+  "backgroundMusicSources": [
+    "/Users/tu-usuario/Music/Ambiente"
+  ],
+  "backgroundMusicVolume": 0.55,
   "appsScriptUrl": "https://request.gstarxp.com/api/bridge",
   "hostPin": "",
   "rememberHostPin": true,
