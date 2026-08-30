@@ -165,6 +165,12 @@ jobs:
       - name: Build and exercise the Universal AI Stems engine
         run: |
           engine_root="$RUNNER_TEMP/guest-star-stem-engine"
+          mkdir -p "$engine_root"
+          (
+            cd "$engine_root"
+            npm init --yes >/dev/null
+            npm pkg set private=true overrides.adm-zip=0.6.0
+          )
           npm install \
             --prefix "$engine_root" \
             --omit=dev \
@@ -172,6 +178,7 @@ jobs:
             --no-fund \
             --save-exact \
             demucs@1.0.0 \
+            onnxruntime-node@1.23.2 \
             ffmpeg-static@5.3.0 \
             ffprobe-static@3.1.0
           case "$(uname -m)" in
@@ -251,6 +258,12 @@ jobs:
       - name: Build and exercise the Universal AI Stems engine
         run: |
           engine_root="$RUNNER_TEMP/guest-star-stem-engine"
+          mkdir -p "$engine_root"
+          (
+            cd "$engine_root"
+            npm init --yes >/dev/null
+            npm pkg set private=true overrides.adm-zip=0.6.0
+          )
           npm install \
             --prefix "$engine_root" \
             --omit=dev \
@@ -258,6 +271,7 @@ jobs:
             --no-fund \
             --save-exact \
             demucs@1.0.0 \
+            onnxruntime-node@1.23.2 \
             ffmpeg-static@5.3.0 \
             ffprobe-static@3.1.0
           case "$(uname -m)" in

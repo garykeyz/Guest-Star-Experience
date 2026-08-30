@@ -37,6 +37,8 @@ test("incluye y prueba el motor Stems IA real para Intel y Apple Silicon", () =>
   assert.match(buildSource, /onnxruntime-node\/bin\/napi-v6\/darwin\/x64/);
   assert.match(buildSource, /ffmpeg-static.*ffmpeg/s);
   assert.match(workflowSource, /demucs@1\.0\.0/);
+  assert.match(workflowSource, /onnxruntime-node@1\.23\.2/);
+  assert.match(workflowSource, /overrides\.adm-zip=0\.6\.0/);
   assert.match(workflowSource, /lipo -create/);
   assert.match(workflowSource, /stems-engine-smoke\.mjs/);
   assert.match(workflowSource, /--stem-engine-root "\$RUNNER_TEMP\/guest-star-stem-engine"/);
