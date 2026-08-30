@@ -85,6 +85,7 @@ class TestD1 implements D1DatabaseLike {
 
 const migrationDb = new TestD1();
 migrationDb.database.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
+migrationDb.database.exec(readFileSync("migrations/0002_atomic_request_queue.sql", "utf8"));
 
 const driveFileId = "1MoonPalaceLogo_2026abcXYZ";
 const driveShareUrl = `https://drive.google.com/file/d/${driveFileId}/view?usp=drive_link`;
@@ -111,8 +112,7 @@ const globalCssSource = readFileSync("app/globals.css", "utf8");
 const hostRouteSource = readFileSync("app/api/host/route.ts", "utf8");
 const bridgeRouteSource = readFileSync("app/api/bridge/route.ts", "utf8");
 const karaokeRouteSource = readFileSync("app/api/karaoke/route.ts", "utf8");
-const appsScriptSource = readFileSync("google-apps-script/Code.gs", "utf8");
-const upstreamSource = readFileSync("lib/guest-star/upstream.ts", "utf8");
+const d1ActionsSource = readFileSync("lib/guest-star/d1-actions.ts", "utf8");
 const bridgeServerSource = readFileSync("guest-star-bridge/src/server.mjs", "utf8");
 assert.match(rootPageSource, /isHostPanelHostname\(hostname\)/,
   "the production host domain root must render the Host Panel");
@@ -134,24 +134,26 @@ assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com/,
   "Superhost must be able to choose the optional root-domain experience");
 assert.match(hostPanelSource, /action:"setDefaultPublicExperience"/,
   "the root-domain selection must be saved through the authenticated Host API");
-assert.match(hostPanelSource, /Google Form and Sheet Backup/,
-  "Host Panel must expose the reusable Google operational backup");
-assert.match(hostPanelSource, /action:"setDefaultGoogleFallback"/,
-  "Superhost must be able to assign or remove the Google fallback at the root domain");
-assert.match(hostRouteSource, /getRecord\(db!, "GlobalSettings", "defaultGoogleFallback"\)/,
-  "the Host Panel must report the live D1 root fallback instead of a stale Sheets mirror");
-assert.match(publicExperienceSource, /googleFallbackCard/,
-  "the root Google fallback must remain inside a branded Guest Star handoff");
-assert.match(appsScriptSource, /FormApp\.DestinationType\.SPREADSHEET/,
-  "the reusable Google Form must store responses in its linked Sheet");
-assert.match(appsScriptSource, /resetGoogleFallbackForArchiveV43_/,
-  "archiving or starting a new activity must reset the operational Google backup automatically");
-assert.match(appsScriptSource, /https:\/\/www\.googleapis\.com\/auth\/forms/,
-  "Apps Script must request the Forms scope explicitly");
+assert.doesNotMatch(hostPanelSource, /Google Form and Sheet Backup|linkGoogleFallback/,
+  "Host Panel must not expose Google Forms or Sheets as a live request destination");
+assert.match(hostRouteSource, /GOOGLE_REQUEST_BACKUP_DISABLED/,
+  "the Host API must reject the retired Google request fallback explicitly");
+assert.match(karaokeRouteSource, /D1_SERVICE_UNAVAILABLE/,
+  "the public API must fail closed with a retryable D1 response");
+assert.match(karaokeRouteSource, /X-Guest-Star-Backend": "d1-only"/,
+  "public responses must identify the D1-only request path");
+assert.doesNotMatch(karaokeRouteSource, /AppsScript|script\.google|scheduleD1Backup|callAppsScript/,
+  "public requests must never call Apps Script or schedule a Sheets mirror");
+assert.doesNotMatch(bridgeRouteSource, /scheduleD1Backup|callAppsScript/,
+  "Bridge live operations must never call Apps Script or schedule a Sheets mirror");
+assert.doesNotMatch(hostRouteSource, /scheduleD1Backup/,
+  "Host live operations must never schedule a Sheets mirror");
+assert.doesNotMatch(d1ActionsSource, /appendOutbox/,
+  "D1 mutations must not create Google Sheets backup work during a live activity");
 assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
   "the local Bridge Superhost proxy must allow the root-domain setting");
-assert.match(bridgeServerSource, /"setDefaultGoogleFallback"/,
-  "the local Bridge Superhost proxy must preserve the root Google fallback setting");
+assert.doesNotMatch(bridgeServerSource, /"setDefaultGoogleFallback"/,
+  "the local Guest Star service must not proxy the retired Google request fallback");
 assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
   "the public experience must normalize Google Drive logo links");
 assert.match(publicExperienceSource, /className="tenantLogo"/,
@@ -162,24 +164,6 @@ assert.match(globalCssSource, /filter:brightness\(\.58\) contrast\(1\.85\)/,
   "very pale hotel logos must receive enough contrast to remain visible");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
   "migration, backup, and legacy storage controls must stay out of the operational panel");
-assert.match(hostRouteSource, /READ_ONLY_D1_ACTIONS\.has\(action\)/,
-  "read-only Host polling must never start a background backup");
-assert.match(bridgeRouteSource, /"pollBridgeCommands", "bridgeHeartbeat"/,
-  "Bridge polling and heartbeats must remain classified as read-only actions");
-assert.match(bridgeRouteSource, /BACKUP_MAINTENANCE_ACTIONS = new Set\(\["bridgeHeartbeat"\]\)/,
-  "a heartbeat may drain an existing backlog through the global backup lease");
-assert.match(karaokeRouteSource, /data\.ok === true && data\.backupNeeded !== false/,
-  "successful public mutations must schedule backup only when data changed");
-assert.doesNotMatch(karaokeRouteSource.split("export async function POST")[0], /scheduleD1Backup\(db\)/,
-  "public status polling must never trigger Sheets backup work");
-assert.match(upstreamSource, /return flushD1Backup\(db, 20\)/,
-  "background backup must drain only one bounded batch per mutation");
-assert.match(upstreamSource, /new WeakMap<object, Promise<unknown>>\(\)/,
-  "concurrent mutation backups must be coalesced per D1 binding");
-assert.match(upstreamSource, /sheets_backup_delivery_lease/,
-  "backup delivery must be coalesced globally across Worker isolates");
-assert.match(upstreamSource, /BACKUP_LEASE_MS = 90_000/,
-  "the Sheets mirror must have a global cooldown against request bursts");
 assert.match(publicExperienceSource, /setInterval\(refreshStatus,15000\)/,
   "public status polling must use the Worker-safe interval");
 assert.match(publicExperienceSource, /!hasLoadedPublicState\.current&&code==="PUBLIC_LINK_NOT_FOUND"/,
@@ -293,7 +277,7 @@ await importD1Snapshot(db, {
 });
 
 let health = await d1Health(db);
-assert.equal(health.mode, "apps_script");
+assert.equal(health.mode, "d1_primary");
 assert.equal(health.migrationStatus, "ready");
 assert.equal(health.counts.users, 1);
 assert.equal(health.counts.requests, 1);
@@ -301,7 +285,7 @@ await setD1BackendMode(db, "d1_primary");
 assert.equal(await backendMode(db), "d1_primary");
 
 const googleBridgeLogin = await loginD1WithVerifiedGoogle(db, verifiedGoogle.email, {
-  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.3.9",
+  clientType: "bridge", deviceName: "Google Test Bridge", bridgeVersion: "4.4.0",
   rememberLogin: true
 }) as Record<string, unknown>;
 assert.equal(googleBridgeLogin?.ok, true,
@@ -309,7 +293,7 @@ assert.equal(googleBridgeLogin?.ok, true,
 assert.ok(String(googleBridgeLogin?.authToken || "").length >= 40);
 assert.ok(String(googleBridgeLogin?.deviceToken || "").length >= 40);
 assert.equal(((await loginD1WithVerifiedGoogle(db, "unknown@example.com", {
-  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.3.9"
+  clientType: "bridge", deviceName: "Unknown Bridge", bridgeVersion: "4.4.0"
 })) as Record<string, unknown>).code, "GOOGLE_ACCOUNT_NOT_REGISTERED",
 "Google login must never create an unregistered Guest Star account implicitly");
 
@@ -427,6 +411,13 @@ const switchedDeviceLogin = await handleD1HostAction(db, {
 assert.equal(switchedDeviceLogin?.ok, true, "a shared Mac must be reassigned instead of returning DEVICE_NOT_AUTHORIZED");
 assert.notEqual(switchedDeviceLogin?.deviceId, bridgeLogin?.deviceId,
   "changing the Bridge user must revoke the previous device identity");
+const switchedBridgeAuth = {
+  authToken: String(switchedDeviceLogin?.authToken),
+  deviceToken: String(switchedDeviceLogin?.deviceToken)
+};
+assert.equal((await handleD1HostAction(db, {
+  action: "selectActivity", ...switchedBridgeAuth, hotelId, venueId, activityId, source: "bridge"
+}))?.ok, true);
 assert.equal((await handleD1HostAction(db, { action: "me", ...bridgeAuth }))?.code, "UNAUTHORIZED",
   "switching a Mac user must revoke the prior Bridge session");
 
@@ -467,6 +458,24 @@ assert.equal((await handleD1HostAction(db, {
   scheduleId: String((futureSchedule?.schedule as Record<string, unknown>).scheduleId)
 }))?.ok, true);
 
+const earlyOpenSchedule = await handleD1HostAction(db, {
+  action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
+  scheduledStartAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  durationSeconds: 7200, requestOpeningLeadSeconds: 600,
+  autoOpenRequests: true, showCountdown: true,
+  recurrenceType: "none", recurrenceInterval: 1
+});
+assert.equal(earlyOpenSchedule?.ok, true);
+const earlyOpenPublicState = await handleD1PublicGet(db, publicParams);
+assert.equal(earlyOpenPublicState.accepting, true,
+  "a one-time activity must open inside its configured pre-event window");
+assert.equal(earlyOpenPublicState.activityRunning, false,
+  "opening requests early must never start Player or Bridge");
+assert.equal((await handleD1HostAction(db, {
+  action: "cancelSchedule", ...superAuth,
+  scheduleId: String((earlyOpenSchedule?.schedule as Record<string, unknown>).scheduleId)
+}))?.ok, true);
+
 const dueSchedule = await handleD1HostAction(db, {
   action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
   scheduledStartAt: new Date(Date.now() - 1000).toISOString(),
@@ -476,22 +485,66 @@ const dueSchedule = await handleD1HostAction(db, {
 });
 assert.equal(dueSchedule?.ok, true);
 assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "completed");
+assert.equal((dueSchedule?.schedule as Record<string, unknown>).autoStartActivity, false,
+  "schedules must never choose or start a playback engine automatically");
 assert.equal((await handleD1HostAction(db, {
   action: "activityState", ...superAuth, hotelId, venueId, activityId
 }))?.ok, true, "due schedules must be processed by Host/Bridge state reads");
 
-const publicState = await handleD1PublicGet(db, publicParams);
-assert.equal(publicState.ok, true);
-assert.equal((publicState as Record<string, unknown>).accepting, true);
-assert.equal((publicState as Record<string, unknown>).activityRunning, true,
-  "due schedules must auto-start the activity exactly once");
-assert.equal((publicState as Record<string, unknown>).queuePeopleCount, 1,
+const scheduledPublicState = await handleD1PublicGet(db, publicParams);
+assert.equal(scheduledPublicState.ok, true);
+assert.equal((scheduledPublicState as Record<string, unknown>).accepting, true);
+assert.equal((scheduledPublicState as Record<string, unknown>).activityRunning, false,
+  "a due schedule may open requests but must wait for the Host to select Player or Bridge");
+assert.equal((scheduledPublicState as Record<string, unknown>).queuePeopleCount, 1,
   "legacy requests without tenant IDs must inherit the active hotel activity during import");
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId
+}))?.code, "PLAYBACK_MODE_REQUIRED", "an activity cannot start without a playback mode");
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
+}))?.ok, true, "the Host can explicitly start the internal Player");
+const publicState = await handleD1PublicGet(db, publicParams);
+assert.equal((publicState as Record<string, unknown>).activityRunning, true);
+assert.equal((publicState as Record<string, unknown>).playbackMode, "player");
 const publicRequest = await handleD1PublicPost(db, {
   publicCode: "moon-palace-public-test-code", name: "Guest One", song: "Song One",
   artist: "Artist One", language: "Español", languageCode: "es", comment: ""
 });
 assert.equal(publicRequest.ok, true);
+const playerRuntimeUpdate = await handleD1HostAction(db, {
+  action: "playerRuntimeUpdate", ...superAuth, hotelId, venueId, activityId,
+  queueOrder: [publicRequest.id],
+  playback: {
+    currentRequestId: publicRequest.id,
+    currentTimeSeconds: 83.5,
+    scene: "karaoke",
+    wasPlaying: true
+  }
+});
+assert.equal(playerRuntimeUpdate?.ok, true);
+const resumedOnAnotherLaptop = await handleD1HostAction(db, {
+  action: "activityState", ...switchedBridgeAuth, hotelId, venueId, activityId
+});
+assert.deepEqual(
+  (resumedOnAnotherLaptop?.playerRuntime as Record<string, unknown>).queueOrder,
+  [publicRequest.id],
+  "the Player queue must resume from D1 on another authorized laptop"
+);
+assert.equal(Number(((resumedOnAnotherLaptop?.playerRuntime as Record<string, unknown>)
+  .playback as Record<string, unknown>).currentTimeSeconds), 83.5,
+  "the Player position must survive a restart or laptop change");
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...switchedBridgeAuth, hotelId, venueId, activityId, source: "bridge"
+}))?.code, "PLAYBACK_MODE_LOCKED", "a running Player activity cannot switch to Bridge");
+const removedFromPlayer = await handleD1HostAction(db, {
+  action: "bridgeRequestUpdate", ...switchedBridgeAuth,
+  id: publicRequest.id, status: "Retirada del Player"
+});
+assert.equal(removedFromPlayer?.ok, true, JSON.stringify(removedFromPlayer));
+assert.equal((await activeRequests(db, hotelId, activityId))
+  .find((request) => request.requestId === publicRequest.id)?.status, "Retirada del Player",
+"a Player removal must survive the next shared-service synchronization");
 const firstAlex = await handleD1PublicPost(db, {
   publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
   name: "Alex", song: "Valió la pena", artist: "Marc Anthony",
@@ -535,9 +588,12 @@ const burstResults = await Promise.all(
 const burst200Ms = performance.now() - burstStartedAt;
 assert.equal(burstResults.filter((result) => result.ok === true).length, 200,
   "two hundred independent guests must be accepted in one simultaneous burst");
-assert.equal((await activeRequests(db, hotelId, activityId))
-  .filter((request) => request.singer.startsWith("Burst Guest ")).length, 200,
+const burstRows = (await activeRequests(db, hotelId, activityId))
+  .filter((request) => request.singer.startsWith("Burst Guest "));
+assert.equal(burstRows.length, 200,
   "a simultaneous burst must not lose or merge requests from different devices");
+assert.equal(new Set(burstRows.map((request) => request.queuePosition)).size, 200,
+  "every simultaneous guest must receive one stable queue position");
 const sameDeviceResults = [];
 for (let index = 0; index < 9; index += 1) {
   sameDeviceResults.push(await handleD1PublicPost(db, {
@@ -557,8 +613,29 @@ assert.equal(sameDeviceResults.slice(0, 8).every((result) => result.ok === true)
 assert.equal(sameDeviceResults[8].code, "RATE_LIMITED",
   "the ninth completed request from one device in a minute must be rate-limited");
 assert.equal((await handleD1HostAction(db, {
-  action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
-}))?.ok, true, "starting a new cycle must archive the previous D1 queue");
+  action: "finishActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
+}))?.ok, true, "restarting the same configured activity must create a fresh cycle");
+const repeatedInFreshCycle = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
+  name: "Alex", song: "Valió la pena", artist: "Marc Anthony",
+  language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(repeatedInFreshCycle.ok, true);
+assert.notEqual(repeatedInFreshCycle.deduplicated, true,
+  "a singer or song from a finished cycle must never trigger a duplicate in the new activity cycle");
+assert.equal((await handleD1HostAction(db, {
+  action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "bridge"
+}))?.code, "ACTIVITY_ALREADY_RUNNING",
+"a Host must finish the current activity before replacing it with a new cycle");
+assert.equal((await handleD1HostAction(db, {
+  action: "finishActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "bridge"
+}))?.ok, true, "after finishing, a new cycle may explicitly choose Bridge");
 
 assert.equal((await handleD1HostAction(db, {
   action: "updateHotelBranding", ...superAuth, hotelId,
@@ -620,7 +697,7 @@ const rootOnlyActivity = await handleD1HostAction(db, {
 const rootOnlyActivityId = String((rootOnlyActivity?.activity as Record<string, unknown>).activityId);
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
-  venueId: editableVenueId, activityId: editableActivityId, source: "web"
+  venueId: editableVenueId, activityId: editableActivityId, source: "bridge"
 }))?.ok, true);
 assert.equal((await handleD1HostAction(db, {
   action: "setDefaultPublicExperience", ...superAuth, enabled: true,
@@ -651,27 +728,24 @@ assert.equal((await handleD1HostAction(db, {
   action: "setDefaultGoogleFallback", ...superAuth, enabled: true,
   formUrl: fallbackFormUrl, userId: "superhost-1",
   hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
-}))?.ok, true);
+}))?.code, "GOOGLE_REQUEST_BACKUP_DISABLED");
 const fallbackRootState = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: "default"
 })) as Record<string, unknown>;
-assert.equal((fallbackRootState.googleFallback as Record<string, unknown>).formUrl, fallbackFormUrl,
-  "request.gstarxp.com must expose only the explicitly assigned Google Form");
+assert.equal(fallbackRootState.googleFallback, undefined,
+  "request.gstarxp.com must never expose Google Forms as its live request path");
 assert.equal((fallbackRootState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
-  "the Google fallback must carry the exact Superhost-selected activity branding");
+  "removing Google fallback must preserve the exact Superhost-selected activity");
 assert.equal(fallbackRootState.accepting, false,
-  "Guest Star submissions must close while the root Google fallback is enabled");
+  "the selected ready activity must preserve its own closed state");
 assert.equal((await handleD1PublicPost(db, {
   publicCode: "default", name: "Fallback Guest", song: "Song", artist: "Artist", language: "English"
-})).code, "GOOGLE_FALLBACK_ACTIVE");
+})).code, "CLOSED");
 const permanentDuringFallback = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: otherHotelIdentifier
 })) as Record<string, unknown>;
 assert.equal(permanentDuringFallback.googleFallback, undefined,
-  "permanent hotel URLs must never inherit the optional root Google fallback");
-assert.equal((await handleD1HostAction(db, {
-  action: "setDefaultGoogleFallback", ...superAuth, enabled: false
-}))?.ok, true, "the Google root fallback must be removable immediately");
+  "permanent hotel URLs must remain D1-only");
 assert.equal((await handleD1HostAction(db, {
   action: "setDefaultPublicExperience", ...superAuth, enabled: false
 }))?.ok, true, "the optional root-domain override must be removable");
@@ -733,6 +807,54 @@ assert.equal(nextScheduleOccurrence({
   scheduledStartAt: "2027-02-28T20:00:00.000Z", recurrenceType: "monthly",
   recurrenceInterval: 1, recurrenceDaysJson: "[]", recurrenceDayOfMonth: 31
 }, "UTC"), "2027-03-31T20:00:00.000Z", "monthly recurrence must retain its original calendar day");
+const weekdayAnnouncements = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+  weekday, time: "22:30", title: weekday === 2 ? "Rock Band" : weekday === 5 ? "Jazz" : "Hotel Show",
+  message: "Continúa la noche en el Lobby Bar."
+}));
+const liveRecurringSchedule = await handleD1HostAction(db, {
+  action: "scheduleActivity", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId,
+  scheduledStartAt: new Date(Date.now() - 1000).toISOString(), durationSeconds: 3600,
+  recurrenceType: "weekly", recurrenceDays: [0, 1, 2, 3, 4, 5, 6],
+  weekdayAnnouncements, autoOpenRequests: false, showCountdown: true
+});
+assert.equal(liveRecurringSchedule?.ok, true);
+const liveScheduleRecord = liveRecurringSchedule?.schedule as Record<string, unknown>;
+assert.equal(String(liveScheduleRecord.status), "active", "a weekly series must advance instead of completing");
+assert.ok(Date.parse(String(liveScheduleRecord.scheduledStartAt)) > Date.now(),
+  "a weekly series must keep its next occurrence in the future");
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "player"
+}))?.ok, true);
+assert.equal((await handleD1HostAction(db, {
+  action: "finishActivityV4", ...superAuth, hotelId: otherHotelId,
+  venueId: editableVenueId, activityId: editableActivityId, source: "player"
+}))?.ok, true);
+const announcementState = await handleD1PublicGet(db, new URLSearchParams({
+  action: "publicBootstrap", hotel: otherHotelIdentifier
+})) as Record<string, unknown>;
+const postAnnouncement = announcementState.postActivityAnnouncement as Record<string, unknown>;
+assert.ok(postAnnouncement, "finishing a scheduled activity must expose its day-specific announcement");
+assert.equal(String(postAnnouncement.message), "Continúa la noche en el Lobby Bar.");
+assert.ok(Date.parse(String(postAnnouncement.nextGuestStarAt)) > Date.now(),
+  "the finished page must announce when Guest Star repeats at the hotel");
+const updatedLiveSchedule = await handleD1HostAction(db, {
+  action: "updateSchedule", ...superAuth, scheduleId: String(liveScheduleRecord.scheduleId),
+  recurrenceType: "weekly", scheduledTime: "20:00", recurrenceDays: [2, 5],
+  durationSeconds: 7200, requestOpeningLeadSeconds: 3600,
+  weekdayAnnouncements: [
+    { weekday: 2, time: "22:30", title: "Rock Band", message: "Rock después del karaoke." },
+    { weekday: 5, time: "22:30", title: "Jazz", message: "Jazz después del karaoke." }
+  ], autoOpenRequests: true, showCountdown: true
+});
+assert.equal(updatedLiveSchedule?.ok, true);
+assert.equal(String((updatedLiveSchedule?.schedule as Record<string, unknown>).scheduleId), String(liveScheduleRecord.scheduleId),
+  "editing a recurring series must preserve its identity");
+assert.deepEqual(JSON.parse(String((updatedLiveSchedule?.schedule as Record<string, unknown>).recurrenceDaysJson)), [2, 5]);
+assert.deepEqual(JSON.parse(String((updatedLiveSchedule?.schedule as Record<string, unknown>).weekdayAnnouncementsJson)).map(
+  (item: Record<string, unknown>) => item.title
+), ["Rock Band", "Jazz"], "Tuesday and Friday must retain independent announcements");
 assert.equal((await handleD1HostAction(db, {
   action: "updateActivity", ...superAuth, activityId: editableActivityId, status: "inactive"
 }))?.ok, true);
@@ -754,8 +876,8 @@ assert.equal(outbox.length, 3);
 const serializedOutbox = JSON.stringify(
   db.database.prepare("SELECT action, payload_json FROM guest_star_outbox").all()
 );
-assert.equal(serializedOutbox.includes('"action":"requests.archive"'), true,
-  "start-new must replicate queue archival to the Sheets standby");
+assert.equal(serializedOutbox, "[]",
+  "live D1 mutations must not create Google Sheets backup work");
 assert.equal(serializedOutbox.includes(hostPassword), false, "plaintext passwords must never enter backup events");
 assert.equal(serializedOutbox.includes(replacement), false, "replacement passwords must never enter backup events");
 assert.equal(serializedOutbox.includes(String(bridgeLogin?.deviceToken)), false, "Bridge tokens must never enter backup events");
@@ -816,10 +938,14 @@ assert.equal(unavailableTranslation.branding.translationStatus, "manual_required
 assert.equal("localizedMessagesJson" in unavailableTranslation.branding, false,
   "free-quota failure must omit the field so stored manual translations are preserved");
 
-await setD1BackendMode(db, "apps_script");
+await assert.rejects(
+  () => setD1BackendMode(db, "apps_script"),
+  /D1_ONLY_MODE/,
+  "the live backend must never be switched back to Apps Script"
+);
 health = await d1Health(db);
-assert.equal(health.mode, "apps_script");
-assert.ok(health.backup.pending > 0);
+assert.equal(health.mode, "d1_primary");
+assert.equal(health.backup.pending, 0);
 
 console.log("D1 backend tests passed", {
   users: health.counts.users,

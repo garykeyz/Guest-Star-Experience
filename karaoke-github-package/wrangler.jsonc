@@ -5,7 +5,6 @@
   "compatibility_date": "2026-07-28",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "KARAOKE_APPS_SCRIPT_URL": "https://script.google.com/macros/s/AKfycbxpUugPQJ1N3yb8uezB6fpd84CELAKtbuB2maE3HberOBGo5ObABGtN3ZfCI3UvKbLkzg/exec",
     "GOOGLE_OAUTH_CLIENT_ID": "880632654473-msu6iflunmvn4916obdl5cp39orj2lrk.apps.googleusercontent.com"
   },
   "d1_databases": [

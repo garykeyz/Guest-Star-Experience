@@ -1,34 +1,33 @@
-GUEST STAR BRIDGE 4.3.9 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR 4.4.0 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
 Compatible con Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
 No necesitas instalar Node, npm ni usar Terminal.
 
 REQUISITOS
 
-1. VirtualDJ instalado.
-2. Network Control instalado y activo.
-3. Biblioteca de karaoke local o en disco conectado.
-4. Internet.
-5. Cuenta Host y asignación creadas por el Superhost.
+1. VirtualDJ y Network Control solamente si usarás modo Bridge.
+2. Biblioteca de karaoke local o en disco conectado.
+3. Internet.
+4. Cuenta Host y asignación creadas por el Superhost.
 
 INSTALAR
 
-1. Descarga Guest-Star-Bridge-Universal-v4.3.9-app.zip o el DMG.
-2. Descomprime y mueve Guest Star Bridge.app a Aplicaciones.
-3. La primera vez, usa clic derecho sobre Guest Star Bridge y elige Abrir.
+1. Descarga Guest-Star-Universal-v4.4.0-app.zip o el DMG.
+2. Descomprime y mueve Guest Star.app a Aplicaciones.
+3. La primera vez, usa clic derecho sobre Guest Star y elige Abrir.
 4. Si macOS bloquea la app, usa Privacidad y seguridad → Abrir de todos modos.
 
 CONFIGURAR
 
-1. Abre Bridge y confirma que la pantalla de acceso muestre v4.3.9.
+1. Abre Guest Star y confirma que la pantalla muestre v4.4.0.
 2. Inicia sesión con el usuario Host y su contraseña permanente.
 3. Selecciona hotel, sede y actividad asignados.
 4. En Settings, elige la carpeta de karaoke.
-5. Configura el mismo puerto/contraseña de Network Control.
-6. Prueba VirtualDJ, guarda y sincroniza.
+5. Para Bridge, configura el mismo puerto/contraseña de Network Control.
+6. Elige Player o Bridge antes de iniciar; no puede alternarse durante el evento.
 
 Toda la administración técnica pertenece al Superhost. El operador solo inicia
-sesión en Guest Star Bridge con su cuenta Host.
+sesión en Guest Star con su cuenta Host.
 
 Las opciones de compatibilidad 3.x son solamente para el Superhost.
 Consulta GUIA-MAC-SOLO-BRIDGE.txt para la prueba completa y el evento.

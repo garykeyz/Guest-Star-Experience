@@ -29,6 +29,21 @@ test("construye una app Universal con iniciador Mach-O y dos motores nativos", (
   assert.match(launcherSource, /GuestStarBridge\.sh/);
 });
 
+test("incluye y prueba el motor Stems IA real para Intel y Apple Silicon", () => {
+  assert.match(buildSource, /--stem-engine-root/);
+  assert.match(buildSource, /def copy_stem_engine/);
+  assert.match(buildSource, /demucs\/dist\/cli\.js/);
+  assert.match(buildSource, /onnxruntime-node\/bin\/napi-v6\/darwin\/arm64/);
+  assert.match(buildSource, /onnxruntime-node\/bin\/napi-v6\/darwin\/x64/);
+  assert.match(buildSource, /ffmpeg-static.*ffmpeg/s);
+  assert.match(workflowSource, /demucs@1\.0\.0/);
+  assert.match(workflowSource, /onnxruntime-node@1\.23\.2/);
+  assert.match(workflowSource, /overrides\.adm-zip=0\.6\.0/);
+  assert.match(workflowSource, /lipo -create/);
+  assert.match(workflowSource, /stems-engine-smoke\.mjs/);
+  assert.match(workflowSource, /--stem-engine-root "\$RUNNER_TEMP\/guest-star-stem-engine"/);
+});
+
 test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
   assert.match(buildSource, /codesign/);
   assert.match(buildSource, /--verify/);
@@ -57,33 +72,39 @@ test("firma, verifica y crea un DMG real antes de publicar el ZIP", () => {
 test("selecciona automáticamente el motor correcto en Intel o Apple Silicon", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.3\.9"/);
+  assert.match(shellSource, /APP_VERSION="4\.4\.0"/);
   assert.match(shellSource, /\.bundle-build/);
   assert.match(shellSource, /installed_build.*bundled_build/s);
   assert.match(buildSource, /def write_bundle_build_id/);
   assert.match(buildSource, /La versión del iniciador no coincide con package\.json/);
+  assert.match(shellSource, /Application Support\/Guest Star"/);
+  assert.match(shellSource, /LEGACY_SUPPORT_DIR=.*Guest Star Bridge/);
+  assert.match(shellSource, /version.*APP_VERSION/s);
 });
 
-test("la barra nativa se identifica como Guest Star Bridge y ofrece acciones útiles", () => {
-  assert.match(windowSource, /processName = "Guest Star Bridge"/);
-  assert.match(windowSource, /addMenu\(menuBar, "Guest Star Bridge"/);
+test("la barra nativa se identifica como Guest Star y separa el modo Bridge", () => {
+  assert.match(windowSource, /processName = "Guest Star"/);
+  assert.match(windowSource, /addMenu\(menuBar, "Guest Star"/);
   assert.match(windowSource, /addMenu\(menuBar, "Actividad"/);
   assert.match(windowSource, /openLiveEvent:/);
   assert.match(windowSource, /switchActivity:/);
   assert.match(windowSource, /openAdministration:/);
   assert.match(windowSource, /openSettings:/);
   assert.match(windowSource, /reloadPage:/);
+  assert.match(windowSource, /Bridge \(VirtualDJ\)/);
 });
 
-test("la publicación deriva el paquete Universal de la versión 4.3.9", () => {
+test("la publicación deriva Guest Star Universal de la versión 4.4.0", () => {
   assert.match(workflowSource, /release_meta\.outputs\.version/);
-  assert.match(workflowSource, /Guest-Star-Bridge-Universal-v\$\{VERSION\}-app\.zip/);
+  assert.match(workflowSource, /Guest-Star-Universal-v\$\{VERSION\}-app\.zip/);
+  assert.match(buildSource, /APP_NAME = "Guest Star\.app"/);
+  assert.match(buildSource, /BUNDLE_ID = "com\.gstarxp\.guest-star"/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
   assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);
   assert.match(guideSource, /Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5/);
   assert.match(guideSource, /No necesitas instalar Node, npm ni usar Terminal/);
-  assert.match(guideSource, /clic derecho sobre Guest Star Bridge y elige Abrir/);
+  assert.match(guideSource, /clic derecho sobre Guest Star y elige Abrir/);
 });
 
 test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare", () => {
@@ -97,5 +118,9 @@ test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudfl
   assert.match(workflowSource, /npm run test:http/);
   assert.match(workflowSource, /npx opennextjs-cloudflare build/);
   assert.match(workflowSource, /if: github\.event_name != 'pull_request'/);
+  assert.match(workflowSource, /deploy-production:\s*\n\s*if:.*\n\s*needs: validate/);
+  assert.match(workflowSource, /environment: production/);
+  assert.match(workflowSource, /secrets\.CLOUDFLARE_API_TOKEN/);
+  assert.match(workflowSource, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflowSource, /release:\s*\n\s*if:.*\n\s*needs: validate/);
 });

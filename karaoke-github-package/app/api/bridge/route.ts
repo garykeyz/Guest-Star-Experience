@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendMode, ensureD1Schema, getGuestStarD1, getMeta, type JsonObject } from "@/lib/guest-star/d1-store";
+import { ensureD1Schema, getGuestStarD1, type JsonObject } from "@/lib/guest-star/d1-store";
 import { handleD1HostAction, loginD1WithVerifiedGoogle } from "@/lib/guest-star/d1-actions";
 import { verifyGoogleIdentityToken } from "@/lib/guest-star/google-identity";
 import { runtimeEnvString } from "@/lib/guest-star/runtime-env";
-import { callAppsScript, scheduleD1Backup } from "@/lib/guest-star/upstream";
-
 const MAX_BODY_BYTES = 512 * 1024;
-const APPS_SCRIPT_TIMEOUT_MS = 60_000;
-const READ_ONLY_D1_ACTIONS = new Set([
-  "me", "adminState", "activityState", "listReviews", "hotelShare",
-  "youtubeSearchV4", "pollBridgeCommands", "bridgeHeartbeat"
-]);
-const BACKUP_MAINTENANCE_ACTIONS = new Set(["bridgeHeartbeat"]);
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +12,7 @@ function response(data: JsonObject, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.3.9"
+      "X-Guest-Star-Bridge-Proxy": "4.4.0"
     }
   });
 }
@@ -63,38 +55,28 @@ export async function POST(request: NextRequest) {
         clientType: "bridge",
         deviceId: String(payload.deviceId || ""),
         deviceName: String(payload.deviceName || "Guest Star Bridge"),
-        bridgeVersion: String(payload.bridgeVersion || "4.3.9"),
+        bridgeVersion: String(payload.bridgeVersion || "4.4.0"),
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {
         await ensureD1Schema(db);
-        if (await backendMode(db) === "d1_primary") {
-          return response(await loginD1WithVerifiedGoogle(db, verified.email, loginPayload));
-        }
-        const backupSecret = await getMeta(db, "sheets_backup_secret");
-        if (backupSecret) {
-          return response(await callAppsScript({ ...loginPayload, backupSecret }, APPS_SCRIPT_TIMEOUT_MS));
-        }
+        return response(await loginD1WithVerifiedGoogle(db, verified.email, loginPayload));
       }
       return response({ ok: false, code: "GOOGLE_LOGIN_NOT_READY" }, 503);
     }
     if (db) {
       await ensureD1Schema(db);
-      if (await backendMode(db) === "d1_primary") {
-        const data = await handleD1HostAction(db, payload) || {
-          ok: false,
-          code: "D1_ACTION_NOT_IMPLEMENTED"
-        };
-        if (data.ok === true && (
-          BACKUP_MAINTENANCE_ACTIONS.has(action) ||
-          (data.backupNeeded !== false && !READ_ONLY_D1_ACTIONS.has(action))
-        )) {
-          scheduleD1Backup(db);
-        }
-        return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);
-      }
+      const data = await handleD1HostAction(db, payload) || {
+        ok: false,
+        code: "D1_ACTION_NOT_IMPLEMENTED"
+      };
+      return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);
     }
-    return response(await callAppsScript(payload, APPS_SCRIPT_TIMEOUT_MS));
+    return response({
+      ok: false,
+      code: "D1_SERVICE_UNAVAILABLE",
+      error: "Guest Star D1 is required for live operation."
+    }, 503);
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     if (["INVALID_GOOGLE_CREDENTIAL", "GOOGLE_CREDENTIAL_EXPIRED", "GOOGLE_EMAIL_NOT_VERIFIED"].includes(code)) {

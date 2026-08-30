@@ -31,7 +31,7 @@ static int helper_path(char *destination, size_t capacity) {
 int main(void) {
   char helper[PATH_MAX];
   if (helper_path(helper, sizeof(helper)) != 0) {
-    fprintf(stderr, "No se pudo localizar el iniciador de Guest Star Bridge.\n");
+    fprintf(stderr, "No se pudo localizar el iniciador de Guest Star.\n");
     return 1;
   }
 

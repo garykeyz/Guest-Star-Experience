@@ -45,6 +45,12 @@ const SCHEMA_STATEMENTS = [
 )`,
   `CREATE INDEX IF NOT EXISTS guest_star_records_table
   ON guest_star_records (scope, table_name, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_hotel_json
+  ON guest_star_records (scope, table_name, json_extract(data_json, '$.hotelId'), updated_at)
+  WHERE json_valid(data_json)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_public_code_json
+  ON guest_star_records (json_extract(data_json, '$.publicCode'))
+  WHERE scope = 'master' AND table_name = 'Hotels' AND json_valid(data_json)`,
   `CREATE TABLE IF NOT EXISTS guest_star_requests (
   row_id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL,
@@ -81,6 +87,12 @@ const SCHEMA_STATEMENTS = [
   ON guest_star_requests (hotel_id, request_id, archived_at)`,
   `CREATE INDEX IF NOT EXISTS guest_star_requests_virtual_dj
   ON guest_star_requests (hotel_id, activity_id, virtual_dj_item_id, archived_at)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_cycle_guest
+  ON guest_star_requests (hotel_id, activity_id, cycle_id, source_type, archived_at, status)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_cycle_song
+  ON guest_star_requests (hotel_id, activity_id, cycle_id, song COLLATE NOCASE, artist COLLATE NOCASE, archived_at, status)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_cycle_singer
+  ON guest_star_requests (hotel_id, activity_id, cycle_id, singer COLLATE NOCASE, archived_at, status)`,
   `CREATE TABLE IF NOT EXISTS guest_star_activity_runtime (
   activity_id TEXT PRIMARY KEY,
   hotel_id TEXT NOT NULL,
@@ -133,6 +145,7 @@ const TABLE_ID_FIELDS: Record<string, string> = {
   UpcomingActivities: "upcomingActivityId",
   GlobalSettings: "settingKey",
   ActivityCycles: "cycleId",
+  PlayerActivityRuntime: "playerRuntimeId",
   Reviews: "reviewId",
   ReviewInvitations: "invitationId",
   GuestReminders: "reminderId"
@@ -194,12 +207,15 @@ export async function ensureD1Schema(db: D1DatabaseLike) {
         ).bind("schema_version", D1_SCHEMA_VERSION, now),
         db.prepare(
           "INSERT OR IGNORE INTO guest_star_meta (key, value, updated_at) VALUES (?, ?, ?)"
-        ).bind("backend_mode", "apps_script", now),
+        ).bind("backend_mode", "d1_primary", now),
         db.prepare(
           "INSERT OR IGNORE INTO guest_star_meta (key, value, updated_at) VALUES (?, ?, ?)"
         ).bind("session_hash_secret", randomToken(96), now)
       ]);
       await setMeta(db, "schema_version", D1_SCHEMA_VERSION);
+      // Guest Star's live operation is permanently D1-only. Upgrading an old
+      // database must never reactivate the retired Apps Script request path.
+      await setMeta(db, "backend_mode", "d1_primary");
     })();
     schemaReady.set(db as object, ready);
   }
@@ -266,7 +282,7 @@ export async function reserveDailyFreeTranslationBudget(
 
 export async function backendMode(db: D1DatabaseLike) {
   await ensureD1Schema(db);
-  return (await getMeta(db, "backend_mode")) || "apps_script";
+  return "d1_primary";
 }
 
 export async function listRecords(
@@ -279,6 +295,31 @@ export async function listRecords(
     WHERE scope = ? AND table_name = ?
     ORDER BY created_at ASC, record_id ASC
   `).bind(scope, tableName).all<{ data_json: string }>();
+  return (result.results || []).map((row) => JSON.parse(row.data_json) as JsonObject);
+}
+
+const INDEXED_JSON_FIELDS: Record<string, string> = {
+  hotelId: "$.hotelId",
+  publicCode: "$.publicCode"
+};
+
+export async function listRecordsByJsonField(
+  db: D1DatabaseLike,
+  tableName: string,
+  field: keyof typeof INDEXED_JSON_FIELDS,
+  value: string,
+  scope = "master",
+  limit = 1_000
+) {
+  const jsonPath = INDEXED_JSON_FIELDS[field];
+  if (!jsonPath) throw new Error(`UNSUPPORTED_INDEXED_JSON_FIELD:${String(field)}`);
+  const result = await db.prepare(`
+    SELECT data_json FROM guest_star_records
+    WHERE scope = ? AND table_name = ? AND json_valid(data_json)
+      AND json_extract(data_json, '${jsonPath}') = ?
+    ORDER BY created_at ASC, record_id ASC
+    LIMIT ?
+  `).bind(scope, tableName, value, Math.max(1, Math.min(5_000, Math.round(limit)))).all<{ data_json: string }>();
   return (result.results || []).map((row) => JSON.parse(row.data_json) as JsonObject);
 }
 
@@ -382,6 +423,7 @@ export interface GuestStarRequest {
 }
 
 interface RequestRow {
+  insertion_order?: number;
   row_id: string;
   request_id: string;
   hotel_id: string;
@@ -435,7 +477,7 @@ function requestFromRow(row: RequestRow): GuestStarRequest {
     fileName: row.file_name,
     sourceType: row.source_type,
     virtualDJItemId: row.virtual_dj_item_id,
-    queuePosition: Number(row.queue_position) || 0,
+    queuePosition: Number(row.queue_position) || Number(row.insertion_order) || 0,
     syncState: row.sync_state,
     lastSeenAt: row.last_seen_at,
     stateRevision: Number(row.state_revision) || 0,
@@ -494,18 +536,48 @@ export async function upsertRequest(db: D1DatabaseLike, item: GuestStarRequest) 
   return item;
 }
 
+export async function insertPublicRequestAtomically(
+  db: D1DatabaseLike,
+  item: GuestStarRequest,
+  activityDurationSeconds: number
+) {
+  await db.prepare(`
+    INSERT INTO guest_star_requests (
+      row_id, request_id, hotel_id, venue_id, activity_id, cycle_id,
+      singer, song, artist, comment, language, language_code,
+      duration_seconds, transition_seconds, accumulated_seconds, remaining_seconds,
+      source_url, status, file_name, source_type, virtual_dj_item_id,
+      queue_position, sync_state, last_seen_at, state_revision,
+      created_at, updated_at, archived_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?
+    ) ON CONFLICT(row_id) DO NOTHING
+  `).bind(
+    item.rowId, item.requestId, item.hotelId, item.venueId, item.activityId, item.cycleId,
+    item.singer, item.song, item.artist, item.comment, item.language, item.languageCode,
+    item.durationSeconds, item.transitionSeconds,
+    Math.max(0, activityDurationSeconds),
+    item.sourceUrl, item.status, item.fileName, item.sourceType, item.virtualDJItemId,
+    item.syncState, item.lastSeenAt, item.stateRevision,
+    item.createdAt, item.updatedAt, item.archivedAt
+  ).run();
+  return await findActiveRequest(db, item.hotelId, item.requestId) || item;
+}
+
 export async function activeRequests(
   db: D1DatabaseLike,
   hotelId: string,
   activityId = ""
 ) {
   const query = activityId
-    ? `SELECT * FROM guest_star_requests
+    ? `SELECT rowid AS insertion_order, * FROM guest_star_requests
        WHERE hotel_id = ? AND activity_id = ? AND archived_at = ''
-       ORDER BY queue_position ASC, created_at ASC, row_id ASC`
-    : `SELECT * FROM guest_star_requests
+       ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END ASC,
+                created_at ASC, row_id ASC`
+    : `SELECT rowid AS insertion_order, * FROM guest_star_requests
        WHERE hotel_id = ? AND archived_at = ''
-       ORDER BY queue_position ASC, created_at ASC, row_id ASC`;
+       ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END ASC,
+                created_at ASC, row_id ASC`;
   const statement = activityId
     ? db.prepare(query).bind(hotelId, activityId)
     : db.prepare(query).bind(hotelId);
@@ -519,7 +591,7 @@ export async function findActiveRequest(
   requestId: string
 ) {
   const row = await db.prepare(`
-    SELECT * FROM guest_star_requests
+    SELECT rowid AS insertion_order, * FROM guest_star_requests
     WHERE hotel_id = ? AND request_id = ? AND archived_at = ''
     ORDER BY created_at DESC LIMIT 1
   `).bind(hotelId, requestId).first<RequestRow>();
@@ -837,7 +909,7 @@ export async function importD1Snapshot(db: D1DatabaseLike, snapshot: D1Migration
   }
 
   await setMeta(db, "migration_status", "importing");
-  await setMeta(db, "backend_mode", "apps_script");
+  await setMeta(db, "backend_mode", "d1_primary");
   await db.batch([
     db.prepare("DELETE FROM guest_star_records"),
     db.prepare("DELETE FROM guest_star_requests"),
@@ -960,6 +1032,7 @@ export async function importD1Snapshot(db: D1DatabaseLike, snapshot: D1Migration
   }
   await setMeta(db, "migration_imported_at", importedAt);
   await setMeta(db, "migration_status", "ready");
+  await setMeta(db, "backend_mode", "d1_primary");
   return { importedAt, counts, status: "ready" };
 }
 
@@ -977,7 +1050,7 @@ export async function d1Health(db: D1DatabaseLike) {
     ok: true,
     backend: "cloudflare-d1",
     schemaVersion: D1_SCHEMA_VERSION,
-    mode: mode || "apps_script",
+    mode: mode || "d1_primary",
     migrationStatus: status || "not_started",
     importedAt,
     counts: counts ? JSON.parse(counts) : null,

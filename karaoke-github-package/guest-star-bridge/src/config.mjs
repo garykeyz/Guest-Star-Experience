@@ -12,7 +12,7 @@ const LEGACY_DIRECT_APPS_SCRIPT_URL =
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 11,
+  configVersion: 12,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -29,6 +29,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   secretsInKeychain: false,
   libraryFolders: [],
   rememberLibraryFolders: true,
+  backgroundMusicSources: [],
+  backgroundMusicVolume: 0.55,
   appsScriptUrl: BRIDGE_PROXY_URL,
   hostPin: "",
   rememberHostPin: true,
@@ -138,6 +140,17 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.rememberLibraryFolders === undefined
         ? Boolean(current.rememberLibraryFolders)
         : Boolean(input.rememberLibraryFolders),
+    backgroundMusicSources: normalizeFolders(
+      input.backgroundMusicSources === undefined
+        ? current.backgroundMusicSources
+        : input.backgroundMusicSources
+    ),
+    backgroundMusicVolume: numberInRange(
+      input.backgroundMusicVolume,
+      Number(current.backgroundMusicVolume ?? 0.55),
+      0,
+      1
+    ),
     appsScriptUrl: migrateAppsScriptUrl(
       input.appsScriptUrl === undefined
         ? current.appsScriptUrl
@@ -219,6 +232,12 @@ export async function loadConfig() {
       if (parsed.autoQueueExact === undefined) parsed.autoQueueExact = true;
       if (parsed.rememberLibraryFolders === undefined) {
         parsed.rememberLibraryFolders = true;
+      }
+      if (parsed.backgroundMusicSources === undefined) {
+        parsed.backgroundMusicSources = [];
+      }
+      if (parsed.backgroundMusicVolume === undefined) {
+        parsed.backgroundMusicVolume = 0.55;
       }
       if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;

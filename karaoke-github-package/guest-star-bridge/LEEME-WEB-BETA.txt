@@ -1,0 +1,108 @@
+GUEST STAR WEB BETA 0.9.0
+
+Esta versión abre Guest Star en Chrome para probar y refinar el Player interno.
+No instala ni reemplaza Guest Star 4.4.0 y no modifica Cloudflare.
+
+PARA ABRIR
+
+1. Cierra cualquier beta web anterior.
+2. Haz doble clic en INICIAR-GUEST-STAR-WEB-BETA.command.
+3. Si macOS lo bloquea la primera vez, haz clic derecho sobre el archivo,
+   elige Abrir y confirma.
+4. Se abrirá http://127.0.0.1:8790 en el navegador.
+5. Inicia sesión, selecciona hotel y actividad, termina su configuración y
+   pulsa Player BETA.
+
+La pantalla principal comparte la cuenta, actividad, solicitudes, logo y QR
+del sistema Guest Star. La biblioteca y los videos se leen localmente desde
+las carpetas configuradas en esta beta. El cuadro principal es un preview en
+tiempo real de Star Screen, que es la salida para el teleprompter o pantalla
+grande.
+
+Antes de iniciar cada actividad debes elegir Player interno o Bridge con
+VirtualDJ. Cuando la actividad comience, Guest Star bloqueará el modo elegido
+hasta que el Host o Superhost finalice explícitamente la actividad. Cerrar la
+beta, reiniciar la Mac o iniciar sesión desde otra Mac no termina la actividad:
+Guest Star recupera desde D1 el modo, la fila, la pista y la posición guardada.
+
+El botón Bridge (VirtualDJ) conserva el modo externo. Player BETA reproduce
+internamente y no necesita VirtualDJ.
+
+STAR SCREEN Y MÚSICA AMBIENTAL
+
+- Mientras canta un invitado, Star Screen muestra únicamente el video
+  karaoke limpio, sin encabezados ni información superpuesta.
+- Al devolver, saltar o marcar cantada, Star Screen vuelve inmediatamente al
+  lobby con logo, QR, fila y próximo cantante.
+- Lobby y video usan una sola escena coordinada con fade de imagen y audio;
+  nunca se muestran como dos modos activos al mismo tiempo.
+- Puedes seleccionar una carpeta completa o archivos individuales para la
+  música de fondo. Guest Star los reproduce aleatoriamente entre cantantes.
+- El lobby muestra el título y artista de la música ambiental.
+- La música ambiental tiene su propio control de volumen y no cambia el
+  volumen del video karaoke.
+- Un archivo ambiental incompatible se detiene con un aviso; no provoca un
+  ciclo infinito cambiando títulos o canciones.
+
+BIBLIOTECA LOCAL
+
+Al seleccionar una pista desde el buscador, Guest Star pide inmediatamente el
+nombre del cantante y crea una entrada propia en la fila del Player. Los
+botones Saltar y Cantada permanecen disponibles con la pista seleccionada,
+aunque el video esté detenido o pausado.
+
+La beta vigila las carpetas configuradas y actualiza automáticamente los
+archivos encontrados. En macOS la detección suele ser inmediata; además hay
+un escaneo de respaldo cada cinco segundos mientras corre la beta web.
+
+ENLACES KARAOKE, AUDIO Y STEMS
+
+- Cada solicitud de la fila tiene un desplegable con hasta seis versiones de
+  YouTube Karaoke/Lyrics. Cada opción se puede abrir o copiar; la seleccionada
+  queda guardada con esa solicitud.
+- La música ambiental puede seguir en orden aleatorio o elegirse por título
+  para reproducir una canción específica.
+- El video karaoke tiene ecualizador independiente de tres bandas: graves,
+  medios y agudos, desde -12 dB hasta +12 dB.
+- Stems IA usa Demucs real y gratuito. Analiza la pista antes de permitir que
+  entre en Star Lineup; nunca procesa mientras una escena Karaoke está activa.
+- El instalador del motor ejecuta una prueba real de separación, codificación
+  AAC y sincronía antes de habilitar Stems.
+- Instrumental y voz se guardan como M4A ligeros dentro de la carpeta oculta
+  .guest-star-stems de la biblioteca configurada. Si el video no cambia, se
+  reutilizan y no se vuelven a analizar.
+- El Host puede mezclar la voz separada desde 0 % hasta 100 % sin alterar el
+  video ni el instrumental.
+- El QR aparece ampliado en Star Screen y también es legible en el preview.
+
+CONTROL RÁPIDO DEL HOST
+
+- Cada turno puede subir, bajar, marcarse cantado, saltarse o quitarse desde
+  la propia fila. Las acciones terminales pueden deshacerse.
+- Shift + Espacio: reproducir o pausar.
+- Shift + R: reiniciar la pista.
+- Shift + B: devolver el cantante al final.
+- Shift + S: saltar.
+- Shift + C: marcar como ya cantó.
+- Shift + X: quitar de la fila.
+- Shift + Flecha arriba / abajo: cambiar el turno seleccionado.
+- Shift + A: reproducir o pausar ambiente.
+- Shift + N: siguiente pista ambiental.
+
+Las advertencias de repetición se limitan al ciclo actual de la actividad;
+una canción o cantante de una actividad anterior no cuenta como repetido.
+
+SOLICITUDES EN VIVO
+
+- Request, Host, Player y Bridge beta usan exclusivamente Cloudflare D1.
+- Google Forms, Google Sheets y el PIN heredado están bloqueados en el flujo
+  operativo; una falla de D1 nunca desvía solicitudes hacia Google.
+- Una interrupción transitoria se reintenta con el mismo identificador, por lo
+  que no duplica la solicitud ni muestra falsamente que el enlace no existe.
+- Los horarios pueden abrir solicitudes, pero nunca iniciar una actividad ni
+  elegir Player o Bridge automáticamente.
+
+Para detener la beta, vuelve a la ventana de Terminal y pulsa Control + C.
+
+Consulta CAPACIDAD-BETA-Y-ESCALADO.txt antes de usar esta beta en una prueba
+pública o planificar cientos de actividades simultáneas.

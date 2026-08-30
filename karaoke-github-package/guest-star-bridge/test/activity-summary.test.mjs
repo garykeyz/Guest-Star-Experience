@@ -62,6 +62,7 @@ test("recomienda cerrar cuando lo cantado y la cola cubren la actividad", () => 
 test("normaliza los resultados finales en español", () => {
   assert.equal(requestOutcome("Ya cantó"), "completed");
   assert.equal(requestOutcome("Saltado"), "skipped");
+  assert.equal(requestOutcome("Retirada del Player"), "removed");
   assert.equal(requestOutcome("Agregada a VirtualDJ"), "");
 });
 

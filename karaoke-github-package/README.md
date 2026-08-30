@@ -1,7 +1,7 @@
-# Guest Star Experience 4.3.9
+# Guest Star Experience 4.4.0
 
-Sistema multi-hotel para solicitudes de karaoke, operación Host, Bridge local y
-sincronización con VirtualDJ.
+Sistema multi-hotel para solicitudes de karaoke, operación Host, Player interno,
+Star Screen y Bridge opcional para VirtualDJ.
 
 La versión 4.2 incorpora un backend Cloudflare D1 con importación validada,
 activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
@@ -18,7 +18,7 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - Las contraseñas permanentes conservan hashes compatibles; nunca se guardan ni
   se muestran en texto plano.
 - Hosts autorizados pueden elegir cualquiera de los siete idiomas de la actividad.
-- Bridge 4.3.9 incluye la administración, agenda recurrente, traducciones y
+- Guest Star 4.4.0 incluye la administración, agenda recurrente, traducciones y
   barra nativa actualizadas para esta versión.
 - Los mensajes públicos personalizables se guardan por idioma. Apps Script usa
   `LanguageApp`; con D1, Workers AI traduce automáticamente dentro de un
@@ -29,7 +29,21 @@ activación reversible y respaldo asíncrono hacia Google Sheets. Consulta
 - El panel compacto permite crear Hosts o Superhosts adicionales, dejando las
   opciones avanzadas plegadas hasta que el usuario las solicite.
 
-## Novedades 4.3.9
+## Novedades 4.4.0
+
+- aplicación principal **Guest Star**, con Player interno y Bridge VirtualDJ
+  como modos excluyentes elegidos antes de iniciar cada actividad;
+- Player de video local, Star Screen sincronizada, fila editable, música
+  ambiental independiente, EQ de tres bandas y stems IA preparados y cacheados
+  antes de permitir la reproducción;
+- la actividad y el modo se recuperan desde D1 después de reiniciar o abrir otra
+  Mac autorizada; solamente Host o Superhost pueden finalizar la actividad;
+- agenda editable de fechas únicas y series semanales, con mensaje posterior
+  distinto por día y anuncio automático de la próxima repetición;
+- la ruta pública de solicitudes permanece enteramente en Cloudflare D1; Google
+  Forms y Sheets no participan en la aceptación en vivo.
+
+## Incluido desde 4.3.9
 
 - una fila agregada directamente en VirtualDJ conserva su procedencia como
   pista propia y nunca se adopta por coincidir en archivo, título, artista o

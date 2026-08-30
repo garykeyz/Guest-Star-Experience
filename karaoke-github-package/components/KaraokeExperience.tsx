@@ -6,7 +6,7 @@ import { normalizeBrandImageUrl } from "@/lib/guest-star/media-url";
 import {
   ArrowRight, Bell, CalendarPlus, Check, ChevronDown, Clock3, Headphones,
   Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
-  ShieldCheck, Sparkles, UserRound, UsersRound, XCircle
+  Sparkles, UserRound, UsersRound, XCircle
 } from "lucide-react";
 
 type Lang = "es" | "en" | "fr" | "it" | "de" | "ru" | "pt";
@@ -41,6 +41,14 @@ type ApiState = {
     allowedLanguages?: Lang[];
   } | null;
   branding?: Record<string, string | boolean>;
+  postActivityAnnouncement?: {
+    scheduleId?: string;
+    weekday?: number;
+    title?: string;
+    message?: string;
+    followingEventAt?: string;
+    nextGuestStarAt?: string;
+  } | null;
   upcomingActivities?: Array<{
     scheduleId?: string;
     activityName?: string;
@@ -49,12 +57,6 @@ type ApiState = {
     durationSeconds?: number;
     showCountdown?: boolean;
   }>;
-  googleFallback?: {
-    enabled?: boolean;
-    formUrl?: string;
-    hotelId?: string;
-    activityId?: string;
-  };
 };
 type ApiResponse = ApiState & {
   ok?: boolean;
@@ -152,14 +154,14 @@ const activityCopy: Record<Lang, ActivityCopy> = {
   ru: {label:"СТАТУС МЕРОПРИЯТИЯ",notStarted:"Мероприятие ещё не началось",running:"Мероприятие идёт",finished:"Запланированное время завершено",elapsed:"Прошло",remaining:"Осталось",queue:"Людей в очереди"},
   pt: {label:"ESTADO DA ATIVIDADE",notStarted:"A atividade ainda não começou",running:"Atividade em curso",finished:"Tempo programado concluído",elapsed:"Decorrido",remaining:"Restante",queue:"Pessoas na fila"}
 };
-const fallbackCopy: Record<Lang,{eyebrow:string;title:string;body:string;action:string;language:string}> = {
-  es:{eyebrow:"RESPALDO SEGURO",title:"Solicitudes disponibles en Google Forms",body:"El anfitrión activó temporalmente el formulario de respaldo para esta actividad. Tu solicitud llegará a la misma operación del evento.",action:"Abrir formulario de solicitudes",language:"Cambiar idioma"},
-  en:{eyebrow:"SECURE BACKUP",title:"Requests available in Google Forms",body:"The host temporarily enabled the backup form for this activity. Your request will reach the same event operation.",action:"Open request form",language:"Change language"},
-  fr:{eyebrow:"SAUVEGARDE SÉCURISÉE",title:"Demandes disponibles dans Google Forms",body:"L’hôte a temporairement activé le formulaire de secours pour cette activité. Votre demande arrivera à la même équipe.",action:"Ouvrir le formulaire",language:"Changer de langue"},
-  it:{eyebrow:"BACKUP SICURO",title:"Richieste disponibili in Google Forms",body:"L’host ha attivato temporaneamente il modulo di backup per questa attività. La richiesta arriverà alla stessa gestione dell’evento.",action:"Apri il modulo richieste",language:"Cambia lingua"},
-  de:{eyebrow:"SICHERE RESERVE",title:"Anfragen über Google Forms verfügbar",body:"Der Host hat vorübergehend das Reserveformular für diese Aktivität aktiviert. Deine Anfrage erreicht dasselbe Veranstaltungsteam.",action:"Anfrageformular öffnen",language:"Sprache ändern"},
-  ru:{eyebrow:"БЕЗОПАСНЫЙ РЕЗЕРВ",title:"Заявки доступны в Google Forms",body:"Ведущий временно включил резервную форму для этого мероприятия. Ваша заявка поступит той же команде.",action:"Открыть форму заявок",language:"Сменить язык"},
-  pt:{eyebrow:"BACKUP SEGURO",title:"Pedidos disponíveis no Google Forms",body:"O anfitrião ativou temporariamente o formulário de reserva para esta atividade. O pedido chegará à mesma operação do evento.",action:"Abrir formulário de pedidos",language:"Mudar idioma"}
+const announcementCopy: Record<Lang,{following:string;returns:string}> = {
+  en:{following:"COMING UP AT THIS HOTEL",returns:"GUEST STAR RETURNS"},
+  es:{following:"A CONTINUACIÓN EN ESTE HOTEL",returns:"GUEST STAR REGRESA"},
+  fr:{following:"À SUIVRE DANS CET HÔTEL",returns:"GUEST STAR REVIENT"},
+  it:{following:"A SEGUIRE IN QUESTO HOTEL",returns:"GUEST STAR RITORNA"},
+  de:{following:"ALS NÄCHSTES IN DIESEM HOTEL",returns:"GUEST STAR KEHRT ZURÜCK"},
+  ru:{following:"ДАЛЕЕ В ЭТОМ ОТЕЛЕ",returns:"GUEST STAR ВЕРНЁТСЯ"},
+  pt:{following:"A SEGUIR NESTE HOTEL",returns:"GUEST STAR REGRESSA"}
 };
 const moduleCopy: Record<Lang,ModuleCopy> = {
   en:{unavailableTitle:"Link unavailable",unavailableText:"This hotel link is unavailable or no longer active.",startsIn:"STARTS IN",nextActivity:"NEXT ACTIVITY",defaultActivity:"Guest Star Activity",addCalendar:"Add to Calendar",reminderEmail:"Email for one reminder",reminderConsent:"Yes, send me one reminder for this activity.",remindMe:"Remind Me",reminderScheduled:"Your one-time reminder is scheduled.",reminderRequired:"Enter your email and confirm consent for one reminder.",reminderFailed:"The reminder could not be created. Please try again.",reviewLabel:"OPTIONAL REVIEW",reviewInvitation:"How was your Guest Star experience?",reviewGeneral:"No review is required to continue or to use any other option.",ratingLabel:"Rating from one to five",star:"star",stars:"stars",optionalComment:"Optional comment",optionalEmail:"Email (optional)",followUpConsent:"Yes, I would like one follow-up message about my experience.",submitReview:"Submit Optional Review",reviewSaved:"Thank you. Your review was saved.",ratingRequired:"Choose a rating before submitting.",reviewFailed:"Your review could not be submitted. Please try again.",separateReview:"Leave a separate {provider} review",optionalExternalReview:"Leave an optional {provider} review",hotel:"hotel",unsubscribed:"You have been unsubscribed from future Guest Star messages.",unsubscribeInvalid:"This unsubscribe link is invalid or has expired."},
@@ -344,6 +346,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const warningText=duplicateCopy[lang||"en"];
   const statusText=activityCopy[lang||"en"];
   const moduleText=moduleCopy[lang||"en"];
+  const announcementText=announcementCopy[lang||"en"];
   const allowedLanguageCodes=activity.activity?.allowedLanguages?.length
     ? activity.activity.allowedLanguages
     : (["es","en","fr","it","de","ru","pt"] as Lang[]);
@@ -400,6 +403,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
             ? [brandingMessage("beforeStartClosedTitle"),brandingMessage("beforeStartClosedMessage")]
             : [brandingMessage("noActivityTitle"),brandingMessage("noActivityMessage")];
   const nextActivity=activity.upcomingActivities?.[0];
+  const postAnnouncement=activity.postActivityAnnouncement;
   const calendarStamp=(value:string|undefined)=>value
     ? new Date(value).toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z")
     : "";
@@ -523,36 +527,6 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   };
   const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setMenu(false);setLang(null);setDone(false);};
 
-  if(activity.googleFallback?.enabled&&activity.googleFallback.formUrl){
-    const fallbackText=fallbackCopy[lang||"en"];
-    return <main className="page fallbackPage" style={brandStyle}>
-      <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/><ShieldCheck className="ghost microphone"/></div>
-      <div className="brand notranslate" translate="no">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
-      {!lang?<motion.section className="card languageGate fallbackLanguageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-        <div className="badge"><ShieldCheck size={31}/></div>
-        <p className="eyebrow"><Sparkles size={14}/> LANGUAGE / IDIOMA</p>
-        <h1>Select your language · Selecciona tu idioma</h1>
-        <div className="languageGrid">{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[3]}</strong><Check size={18}/></button>)}</div>
-      </motion.section>:<>
-        <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[3]}</span><ChevronDown size={16}/></button>
-          <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[3]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
-        </div>
-        {activity.hotel&&<section className="tenantIdentity">
-          {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<span className="tenantLogo" aria-hidden="true"><img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/></span>}
-          <div>{branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span></div>
-        </section>}
-        <motion.section className="card googleFallbackCard" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-          <div className="fallbackShield"><ShieldCheck size={38}/></div>
-          <p className="eyebrow"><Sparkles size={14}/> {fallbackText.eyebrow}</p>
-          <h1>{fallbackText.title}</h1>
-          <p>{fallbackText.body}</p>
-          <a className="submit googleFallbackAction" href={activity.googleFallback.formUrl} target="_blank" rel="noreferrer"><ShieldCheck size={20}/>{fallbackText.action}<ArrowRight size={18}/></a>
-          <button type="button" className="fallbackLanguage" onClick={()=>{setLang(null);setMenu(false)}}>{fallbackText.language}</button>
-        </motion.section>
-      </>}
-    </main>;
-  }
-
   return <main className="page" style={brandStyle}>
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
     <div className="brand notranslate" translate="no">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
@@ -601,6 +575,16 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
         <button className="submit" disabled={!complete||loading}>{loading?<><i className="loader"/>{text.sending}</>:<><Mic2 size={21}/>{text.submit}<Send className="send" size={17}/></>}</button>{submitError&&<p className="submitError" role="alert">{submitError}</p>}
       </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
     </motion.div>
+    {(activityStatus==="finished"||activityFinished)&&postAnnouncement&&<section className="publicModule nextActivity" aria-live="polite">
+      <div className="moduleIcon"><Music2/></div>
+      <div>
+        <small>{announcementText.following}</small>
+        {postAnnouncement.title&&<strong>{postAnnouncement.title}</strong>}
+        {postAnnouncement.message&&<p>{postAnnouncement.message}</p>}
+        {postAnnouncement.followingEventAt&&<p>{new Date(postAnnouncement.followingEventAt).toLocaleString(languageLocales[lang||"en"],{weekday:"long",hour:"numeric",minute:"2-digit"})}</p>}
+        {postAnnouncement.nextGuestStarAt&&<p><b>{announcementText.returns}:</b> {new Date(postAnnouncement.nextGuestStarAt).toLocaleString(languageLocales[lang||"en"],{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit"})}</p>}
+      </div>
+    </section>}
     {nextActivity&&branding.showNextActivity!==false&&<section className="publicModule nextActivity">
       <div className="moduleIcon"><CalendarPlus/></div><div><small>{moduleText.nextActivity}</small><strong>{nextActivity.activityName||moduleText.defaultActivity}</strong><p>{replaceMessage(brandingMessage("upcomingActivityMessage"))||[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString(languageLocales[lang||"en"])].filter(Boolean).join(" · ")}</p></div>
       <div className="moduleActions">{branding.showAddToCalendar!==false&&calendarUrl&&<a href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus/>{moduleText.addCalendar}</a>}</div>

@@ -1,12 +1,13 @@
-# Guest Star Bridge 4.3.9
+# Guest Star 4.4.0
 
-Aplicación local Universal para Mac que conecta Guest Star con la biblioteca de
-karaoke y la cola Karaoke real de VirtualDJ.
+Aplicación local Universal para Mac con Player interno, Star Screen y Bridge
+opcional para VirtualDJ. Solicitudes, hotel, actividad, cola e historial son
+compartidos por ambos modos.
 
 ## Requisitos del operador
 
 - Mac Intel o Apple Silicon M1–M5 con macOS 11 o posterior.
-- VirtualDJ y Network Control activos.
+- VirtualDJ y Network Control activos solamente si se usará el modo Bridge.
 - Biblioteca local o disco de karaoke conectado.
 - Internet.
 - Usuario Host o Superhost, correo y asignación creados por el Superhost. Puede
@@ -17,15 +18,17 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Bridge-Universal-v4.3.9-app.zip` o abre el DMG.
-2. Mueve **Guest Star Bridge.app** a Aplicaciones.
+1. Descomprime `Guest-Star-Universal-v4.4.0-app.zip` o abre el DMG.
+2. Mueve **Guest Star.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
    Google se abre en Safari/Chrome para evitar un acceso inseguro dentro del
-   WebView y regresa automáticamente al Bridge al terminar.
+   WebView y regresa automáticamente a Guest Star al terminar.
 5. Selecciona hotel, sede y actividad entre tus asignaciones.
-6. En Settings, elige las carpetas locales y configura Network Control.
-7. Prueba VirtualDJ y sincroniza.
+6. En Settings, elige las carpetas locales y, si usarás Bridge, configura
+   Network Control.
+7. Antes de iniciar selecciona Player o Bridge. La actividad bloquea ese modo
+   hasta que Host o Superhost la finalice.
 
 La configuración técnica heredada solo aparece para el Superhost al migrar una
 instalación 3.x. En 4.1 el flujo normal utiliza cuenta y token de dispositivo;
@@ -33,13 +36,14 @@ los secretos se guardan en macOS Keychain.
 
 ## Operación
 
-- **Start Activity** comienza el reloj real.
+- **Start Activity** comienza el reloj real y fija Player o Bridge.
 - **Requests** abre o cierra solicitudes sin reiniciar el evento.
 - **Finish Activity** termina el ciclo conservando historial.
 - **Share** muestra el enlace permanente y QR del hotel.
 - El menú adicional permite cambiar actividad, archivar la cola o cerrar sesión.
-- Al iniciar sesión como Superhost, Bridge abre su administración bilingüe
-  integrada; **Evento en vivo** regresa a la operación de karaoke.
+- Al iniciar sesión como Superhost, Guest Star abre su administración bilingüe
+  integrada; **Bridge (VirtualDJ)** abre la operación externa y **Player** la
+  reproducción interna.
 - **Aleatorio · Random** genera rondas en español, inglés, ambas listas o los
   favoritos del hotel sin repetir antes de completar cada vuelta.
 

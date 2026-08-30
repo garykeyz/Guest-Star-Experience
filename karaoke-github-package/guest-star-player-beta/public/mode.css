@@ -1,0 +1,20 @@
+.mode-bar {
+  margin: 18px 0;
+  padding: 14px 18px;
+  border: 1px solid #3d4776;
+  border-radius: 14px;
+  background: #10162e;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mode-bar div { display: grid; flex: 1; }
+.mode-bar small { margin-top: 3px; }
+.mode-bar a { color: #d9e1ff; text-decoration: none; background: #28345c; padding: 10px 13px; border-radius: 9px; }
+.mode-active { font-size: .72rem; font-weight: 900; letter-spacing: .08em; color: #7fffc4; background: #173b33; padding: 7px 9px; border-radius: 99px; }
+
+@media (max-width: 750px) {
+  .mode-bar { align-items: stretch; flex-direction: column; }
+  .mode-active { align-self: start; }
+}

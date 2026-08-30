@@ -2,7 +2,7 @@ const PHRASES = [
   ["Local library · YouTube · Live VirtualDJ Karaoke queue", "Biblioteca local · YouTube · Cola Karaoke en vivo de VirtualDJ"],
   ["Bridge language", "Idioma del Bridge"], ["Language", "Idioma"],
   ["Switch Activity", "Cambiar actividad"], ["Change Password", "Cambiar contraseña"],
-  ["Log Out", "Cerrar sesión"], ["LOCAL BRIDGE", "BRIDGE LOCAL"],
+  ["Log Out", "Cerrar sesión"], ["GUEST STAR LOCAL", "GUEST STAR LOCAL"], ["GUEST STAR WEB BETA", "GUEST STAR WEB BETA"], ["LOCAL BRIDGE", "BRIDGE LOCAL"],
   ["Connection status", "Estado de conexión"], ["Activity time summary", "Resumen de tiempo de la actividad"],
   ["LIBRARY", "BIBLIOTECA"], ["REQUESTS", "SOLICITUDES"], ["ACTIVITY", "ACTIVIDAD"],
   ["Checking…", "Verificando…"], ["Not tested", "No probado"],
@@ -278,7 +278,7 @@ export function translateBridgeText(rawValue, requestedLanguage = "es") {
   const exact = EXACT.get(`${language}:${value}`);
   const brandNames = [];
   const protectedValue = value.replace(
-    /Guest Star (?:Bridge|Experience)/gi,
+    /Guest Star(?: (?:Bridge|Experience))?/gi,
     (brandName) => {
       brandNames.push(brandName);
       return `__GUEST_STAR_BRAND_${brandNames.length - 1}__`;

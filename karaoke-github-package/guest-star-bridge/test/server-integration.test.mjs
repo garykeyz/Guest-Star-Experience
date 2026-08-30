@@ -44,13 +44,17 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), "guest-star-integration-"));
   const bridgeRoot = join(tempRoot, "bridge");
   const karaokeFolder = join(tempRoot, "karaoke");
+  const backgroundFolder = join(tempRoot, "background");
   await cp(sourceRoot, bridgeRoot, { recursive: true });
   await mkdir(join(bridgeRoot, "data"), { recursive: true });
   await mkdir(karaokeFolder, { recursive: true });
+  await mkdir(backgroundFolder, { recursive: true });
   const localSong = join(karaokeFolder, "Adele - Hello Karaoke Lyrics.mp4");
   const replacementSong = join(karaokeFolder, "Adele - Hello Alternate Karaoke.mp4");
-  await writeFile(localSong, "");
-  await writeFile(replacementSong, "");
+  await writeFile(localSong, Buffer.alloc(64));
+  await writeFile(replacementSong, Buffer.alloc(64));
+  const backgroundSong = join(backgroundFolder, "Purple Disco Machine - Save Me Lonely.mp3");
+  await writeFile(backgroundSong, Buffer.alloc(64));
 
   const requests = [
     {
@@ -94,7 +98,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     let payload = { ok: true };
-    if (body.action === "bridgeQueue") {
+    if (body.action === "activityState") {
       payload = {
         ok: true,
         codeVersion: "4.2.0",
@@ -102,25 +106,33 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
         requests: omitRequestsOnce ? [] : requests
       };
       omitRequestsOnce = false;
-    } else if (body.action === "bridgeControl") {
+    } else if (body.action === "toggleRequests") {
       activity.stateRevision += 1;
-      activity.lastAction = body.control;
+      activity.accepting = body.open === true;
+      activity.lastAction = activity.accepting ? "requests.open" : "requests.close";
       activity.lastSource = "bridge";
-      if (body.control === "open") activity.accepting = true;
-      if (body.control === "close") activity.accepting = false;
-      if (body.control === "reset") {
-        requests.splice(0);
-        activity.activityId = "activity-2";
-        activity.remainingSeconds = 7200;
-      }
       payload = {
         ok: true,
-        codeVersion: "4.2.0",
-        control: body.control,
+        codeVersion: "4.4.0",
         state: { ...activity },
         requests
       };
-    } else if (body.action === "bridgeUpdate") {
+    } else if (body.action === "archiveClearQueue") {
+      requests.splice(0);
+      activity.stateRevision += 1;
+      activity.activityId = "activity-2";
+      activity.accepting = false;
+      activity.activityStartedAt = "";
+      activity.remainingSeconds = 7200;
+      activity.lastAction = "queue.archiveClear";
+      activity.lastSource = "bridge";
+      payload = {
+        ok: true,
+        codeVersion: "4.4.0",
+        state: { ...activity },
+        requests
+      };
+    } else if (body.action === "bridgeRequestUpdate") {
       const item = requests.find((entry) => entry.id === body.id);
       if (item) {
         const terminalUpdate = ["Ya cantó", "Saltado"].includes(body.status);
@@ -135,7 +147,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
         }
         if (body.sourceUrl) item.sourceUrl = body.sourceUrl;
       }
-    } else if (body.action === "youtubeSearch") {
+    } else if (body.action === "youtubeSearchV4") {
       payload = {
         ok: true,
         items: [
@@ -220,13 +232,21 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   await writeFile(
     join(bridgeRoot, "data", "config.json"),
     `${JSON.stringify({
-      configVersion: 4,
+      configVersion: 12,
       bridgePort,
+      authToken: "integration-auth-token",
+      deviceToken: "integration-device-token",
+      deviceId: "integration-device",
+      lastHotelId: "hotel-1",
+      lastVenueId: "venue-1",
+      lastActivityId: "activity-1",
       libraryFolders: [karaokeFolder],
+      backgroundMusicSources: [backgroundFolder],
+      backgroundMusicVolume: 0.42,
       rememberLibraryFolders: true,
       appsScriptUrl: `http://127.0.0.1:${sheetPort}/exec`,
-      hostPin: "123456",
-      rememberHostPin: true,
+      hostPin: "",
+      rememberHostPin: false,
       virtualDJ: {
         host: "127.0.0.1",
         port: vdjPort,
@@ -280,6 +300,27 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   assert.equal(state.virtualDJ.entries[0].availableInVirtualDJ, true);
   assert.equal(state.activitySummary.queueSongCount, 2);
   assert.equal(state.activitySummary.queuedSeconds, 483);
+
+  const playerLibrary = await fetch(`${bridgeUrl}/api/player/library?query=hello`)
+    .then((response) => response.json());
+  assert.equal(playerLibrary.ok, true);
+  assert.equal(playerLibrary.tracks.some((track) => track.name.includes("Hello")), true);
+  const playerMedia = await fetch(`${bridgeUrl}/api/player/media/request-1`, {
+    headers: { Range: "bytes=0-15" }
+  });
+  assert.equal(playerMedia.status, 206);
+  assert.equal(playerMedia.headers.get("accept-ranges"), "bytes");
+  assert.equal((await playerMedia.arrayBuffer()).byteLength, 16);
+  assert.equal(state.backgroundMusic.count, 1);
+  assert.equal(state.backgroundMusic.volume, 0.42);
+  assert.equal(state.backgroundMusic.tracks[0].artist, "Purple Disco Machine");
+  assert.equal(state.backgroundMusic.tracks[0].song, "Save Me Lonely");
+  const backgroundMedia = await fetch(
+    `${bridgeUrl}/api/player/background/media/${encodeURIComponent(state.backgroundMusic.tracks[0].id)}`,
+    { headers: { Range: "bytes=0-15" } }
+  );
+  assert.equal(backgroundMedia.status, 206);
+  assert.equal((await backgroundMedia.arrayBuffer()).byteLength, 16);
 
   vdjQueue.splice(0, 1);
   state = await waitForState(
@@ -485,7 +526,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     headers: { "Content-Type": "application/json" },
     body: "{}"
   }).then((response) => response.json());
-  assert.equal(state.activity.lastAction, "reset");
+  assert.equal(state.activity.lastAction, "queue.archiveClear");
   assert.deepEqual(state.requests, []);
   assert.equal(requests.length, 0);
   assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), false);

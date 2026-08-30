@@ -1,0 +1,63 @@
+GUEST STAR WEB BETA 0.9.0
+CAPACIDAD VALIDADA Y PREPARACIÓN PARA PUBLICACIÓN
+
+Fecha de validación: 29 de agosto de 2026
+
+ALCANCE DE ESTA VALIDACIÓN
+
+Las pruebas se ejecutaron contra el Worker OpenNext compilado y una instancia
+local real de Miniflare + Cloudflare D1. No se utilizó request.gstarxp.com,
+Google Forms, Google Sheets ni una conexión de producción.
+
+RESULTADOS DE CONCURRENCIA
+
+- 200 dispositivos distintos, 1 actividad: 200/200 solicitudes aceptadas.
+- 1,000 dispositivos distintos, 1 actividad: 1,000/1,000 aceptadas.
+- 1,000 dispositivos, 100 actividades: 1,000/1,000 aceptadas.
+- 1,000 dispositivos, 200 actividades: 1,000/1,000 aceptadas.
+- Solicitudes perdidas: 0.
+- Respuestas JSON inválidas: 0.
+- Falsos duplicados por una actividad anterior: 0.
+- Llamadas operativas a Google Sheets o Forms: 0.
+
+La corrida más exigente en una sola actividad terminó en 9.0 segundos y tuvo
+un p95 local de 8.7 segundos. La corrida de 200 actividades terminó en 8.1
+segundos y tuvo un p95 local de 7.9 segundos. Estas cifras miden el simulador
+local bajo una ráfaga extrema, no la latencia que tendrá Cloudflare en Internet.
+
+CAPACIDAD QUE SE PUEDE AFIRMAR AHORA
+
+La integridad funcional está validada hasta 1,000 envíos HTTP simultáneos:
+ninguno se perdió, duplicó por reintento ni recibió una posición ambigua.
+
+Esto no equivale todavía a certificar 1,000 actividades completas de
+producción simultáneas. El backend actual usa una sola base D1 y necesita una
+prueba remota de staging, métricas reales y una estrategia de partición antes
+de vender esa escala como capacidad garantizada.
+
+ANTES DE HACERLA PÚBLICA
+
+1. Crear Worker, dominio y D1 exclusivos de staging; nunca probar carga en la
+   actividad real de un hotel.
+2. Ejecutar allí escalones de 200, 500, 1,000 y 2,000 clientes, más una prueba
+   sostenida de al menos una hora.
+3. Usar un plan de Workers de pago antes de operar cientos de actividades y
+   revisar los límites vigentes directamente en el panel de Cloudflare.
+4. Añadir métricas y alertas de errores 5xx, latencia p95/p99, escrituras D1,
+   reintentos y solicitudes rechazadas por límite.
+5. Mantener un identificador idempotente por dispositivo y solicitud; ya está
+   implementado y evita duplicados cuando el navegador reintenta.
+6. Mantener D1 como única ruta en vivo. Analítica, correos y respaldos deben ir
+   fuera de la confirmación de la solicitud y nunca bloquearla.
+7. Antes de miles de actividades simultáneas, particionar D1 por hotel/grupo o
+   serializar cada actividad con Durable Objects. Una sola base no debe ser el
+   punto de escritura global de toda la plataforma.
+8. Activar protección contra abuso, límites por dispositivo, observabilidad,
+   copias de seguridad y un procedimiento de reversión probado.
+
+CONCLUSIÓN
+
+La beta está lista para pruebas controladas y para eventos piloto. La prueba
+local demuestra que el error por muchos dispositivos quedó corregido. Para una
+apertura pública masiva, falta certificar staging remoto y aplicar partición
+antes de prometer cientos o miles de actividades simultáneas.

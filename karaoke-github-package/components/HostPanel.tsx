@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2, CalendarClock, ExternalLink, Hotel, KeyRound, Link2,
   LogOut, MapPin, Play, Plus, Radio, RefreshCw, ShieldCheck, Square,
@@ -25,32 +25,6 @@ type HostResponse = Record<string, unknown> & {
   user?: User;
   selection?: Selection;
 };
-type GoogleFallbackAsset = {
-  userId?: string; displayName?: string; email?: string;
-  hotelId?: string; hotelName?: string; venueId?: string;
-  activityId?: string; activityName?: string;
-  sheetUrl?: string; formUrl?: string; formEditUrl?: string;
-  lastResetAt?: string; updatedAt?: string;
-};
-type GoogleFallbackSnapshot = {
-  snapshotId?: string; userId?: string; displayName?: string;
-  hotelId?: string; activityId?: string; reason?: string;
-  snapshotUrl?: string; createdAt?: string;
-};
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize(options:{client_id:string;callback:(response:{credential?:string})=>void;auto_select?:boolean;cancel_on_tap_outside?:boolean}):void;
-          renderButton(element:HTMLElement,options:Record<string,unknown>):void;
-        };
-      };
-    };
-  }
-}
-
 const EMPTY_SELECTION: Selection = { hotels: [], venues: [], activities: [] };
 const GUEST_LANGUAGES = [
   ["es","Español"], ["en","English"], ["fr","Français"],
@@ -137,6 +111,30 @@ function activityLanguages(entity: Entity | undefined) {
 
 function selectedLanguages(form:FormData){
   return GUEST_LANGUAGES.map(([code])=>form.get(`language_${code}`)==="on"?code:"").filter(Boolean);
+}
+
+function scheduleDays(entity:Entity|undefined){
+  try{
+    const parsed=JSON.parse(value(entity,"recurrenceDaysJson")||"[]");
+    return Array.isArray(parsed)?parsed.map(Number).filter(day=>Number.isInteger(day)&&day>=0&&day<=6):[];
+  }catch{return [];}
+}
+
+function scheduleAnnouncements(entity:Entity|undefined){
+  try{
+    const parsed=JSON.parse(value(entity,"weekdayAnnouncementsJson")||"[]");
+    return Array.isArray(parsed)?parsed as Array<{weekday:number;time?:string;title?:string;message?:string}>:[];
+  }catch{return [];}
+}
+
+function zonedDateTimeInput(valueToFormat:string,timeZone:string){
+  const date=new Date(valueToFormat);
+  if(!Number.isFinite(date.getTime()))return "";
+  const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{
+    timeZone:timeZone||"UTC",year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hourCycle:"h23"
+  }).formatToParts(date).map(part=>[part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
 function localizedMessages(entity:Entity){
@@ -239,19 +237,15 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const [showOwnPasswordForm,setShowOwnPasswordForm]=useState(false);
   const [reviews,setReviews]=useState<Entity[]>([]);
   const [codeVersion,setCodeVersion]=useState("");
-  const [googleFallback,setGoogleFallback]=useState<HostResponse|null>(null);
-  const googleButtonRef=useRef<HTMLDivElement|null>(null);
+  const [playbackMode,setPlaybackMode]=useState<"player"|"bridge"|"">("");
+  const [scheduleRecurrenceType,setScheduleRecurrenceType]=useState("none");
+  const [scheduleSelectedDays,setScheduleSelectedDays]=useState<number[]>([]);
+  const [editingSchedule,setEditingSchedule]=useState<Entity|null>(null);
 
   const refreshAdmin=useCallback(async(currentUser:User|null=user)=>{
     if(currentUser?.role!=="superhost")return;
     setAdmin(await hostApi({action:"adminState"}));
   },[user]);
-
-  const refreshGoogleFallback=useCallback(async()=>{
-    const state=await hostApi({action:"googleFallbackState"});
-    setGoogleFallback(state);
-    return state;
-  },[]);
 
   const acceptIdentity=useCallback(async(data:HostResponse)=>{
     const nextUser=data.user||null;
@@ -295,62 +289,18 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   },[activityId,hotelId,venueId,selection]);
 
   useEffect(()=>{
-    if(!user){setGoogleFallback(null);return;}
-    let active=true;
-    void refreshGoogleFallback()
-      .catch(loadError=>{
-        if(active)setGoogleFallback({
-          ok:false,
-          code:String((loadError as HostResponse)?.code||"GOOGLE_FALLBACK_UNAVAILABLE"),
-          error:loadError instanceof Error?loadError.message:"Google backup unavailable."
-        });
-      });
-    return()=>{active=false;};
-  },[refreshGoogleFallback,user]);
+    const state=selected?.state as Entity|undefined;
+    const locked=value(state,"playbackMode");
+    if(state?.activityRunning===true&&(locked==="player"||locked==="bridge")){
+      setPlaybackMode(locked);
+    }else if(state&&state.activityRunning!==true){
+      setPlaybackMode("");
+    }
+  },[selected]);
 
   const venues=useMemo(()=>selection.venues.filter(item=>value(item,"hotelId")===hotelId),[selection,hotelId]);
   const activities=useMemo(()=>selection.activities.filter(item=>value(item,"hotelId")===hotelId&&value(item,"venueId")===venueId),[selection,hotelId,venueId]);
-  const context={hotelId,venueId,activityId,source:"web"};
-  const googleClientId=String(googleFallback?.googleClientId||"");
-
-  useEffect(()=>{
-    const target=googleButtonRef.current;
-    if(!user||!googleClientId||!target||!hotelId||!venueId||!activityId)return;
-    let cancelled=false;
-    const initialize=()=>{
-      if(cancelled||!window.google||!googleButtonRef.current)return;
-      googleButtonRef.current.replaceChildren();
-      window.google.accounts.id.initialize({
-        client_id:googleClientId,
-        auto_select:false,
-        cancel_on_tap_outside:true,
-        callback:response=>{
-          if(!response.credential)return;
-          setBusy(true);setError("");setNotice("");
-          void hostApi({action:"linkGoogleFallback",credential:response.credential,hotelId,venueId,activityId})
-            .then(async()=>{await refreshGoogleFallback();setNotice("Google backup connected. The same Form and Sheet will be reused for this Host.");})
-            .catch(connectError=>setError(connectError instanceof Error?connectError.message:"Google backup could not be connected."))
-            .finally(()=>setBusy(false));
-        }
-      });
-      window.google.accounts.id.renderButton(googleButtonRef.current,{
-        type:"standard",theme:"filled_black",size:"large",shape:"pill",text:"continue_with",width:280
-      });
-    };
-    if(window.google){initialize();return()=>{cancelled=true;};}
-    let script=document.getElementById("guest-star-google-identity") as HTMLScriptElement|null;
-    if(!script){
-      script=document.createElement("script");
-      script.id="guest-star-google-identity";
-      script.src="https://accounts.google.com/gsi/client";
-      script.async=true;
-      script.defer=true;
-      document.head.appendChild(script);
-    }
-    script.addEventListener("load",initialize,{once:true});
-    return()=>{cancelled=true;script?.removeEventListener("load",initialize);};
-  },[activityId,googleClientId,hotelId,refreshGoogleFallback,user,venueId]);
-
+  const context={hotelId,venueId,activityId};
   async function run(label:string,operation:()=>Promise<HostResponse>){
     setBusy(true);setError("");setNotice("");
     try{
@@ -389,12 +339,19 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function chooseActivity(){
     if(!hotelId||!venueId||!activityId){setError("Select a hotel, venue and activity.");return;}
+    setEditingSchedule(null);setScheduleRecurrenceType("none");setScheduleSelectedDays([]);
     await run("Activity selected.",()=>hostApi({action:"selectActivity",...context}));
   }
 
   async function activityAction(action:string,label:string,extra:Record<string,unknown>={}){
     if(!selected){setError("Select the activity first.");return;}
-    await run(label,()=>hostApi({action,...context,...extra}));
+    if(["startActivityV4","startNewActivityV4"].includes(action)&&!playbackMode){
+      setError("Choose Player interno or Bridge con VirtualDJ before starting.");return;
+    }
+    await run(label,()=>hostApi({
+      action,...context,...extra,
+      ...(["startActivityV4","startNewActivityV4"].includes(action)?{source:playbackMode}:{})
+    }));
   }
 
   async function scheduleActivity(event:FormEvent<HTMLFormElement>){
@@ -405,16 +362,53 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     if(["weekly","biweekly"].includes(recurrenceType)&&!recurrenceDays.length){
       setError("Choose at least one day of the week for this recurrence.");return;
     }
-    await run("Activity schedule saved.",()=>hostApi({
-      action:"scheduleActivity",...context,scheduledLocal:local,
+    if(recurrenceType==="none"&&!local){setError("Choose the date and time for this one-time activity.");return;}
+    const weekdayAnnouncements=recurrenceDays.map(weekday=>({
+      weekday,
+      time:String(form.get(`announcement_time_${weekday}`)||""),
+      title:String(form.get(`announcement_title_${weekday}`)||""),
+      message:String(form.get(`announcement_message_${weekday}`)||"")
+    })).filter(item=>item.time||item.title||item.message);
+    const saved=await run(editingSchedule?"Activity schedule updated.":"Activity schedule saved.",()=>hostApi({
+      action:editingSchedule?"updateSchedule":"scheduleActivity",
+      ...(editingSchedule?{scheduleId:value(editingSchedule,"scheduleId")}:{...context}),
+      ...(recurrenceType==="none"?{scheduledLocal:local}:{scheduledTime:String(form.get("scheduledTime")||"")}),
       durationSeconds:Number(form.get("durationMinutes"))*60,
       requestOpeningLeadSeconds:Number(form.get("openingLeadMinutes"))*60,
       autoOpenRequests:form.get("autoOpenRequests")==="on",
-      autoStartActivity:form.get("autoStartActivity")==="on",
+      autoStartActivity:false,
       showCountdown:form.get("showCountdown")==="on",
-      recurrenceType,recurrenceInterval:recurrenceType==="biweekly"?2:1,recurrenceDays
+      recurrenceType,recurrenceInterval:recurrenceType==="biweekly"?2:1,recurrenceDays,
+      weekdayAnnouncements
     }));
+    if(saved){
+      setSelected(await hostApi({action:"activityState",...context}));
+      setEditingSchedule(null);setScheduleRecurrenceType("none");setScheduleSelectedDays([]);
+      event.currentTarget.reset();
+    }
     await refreshAdmin();
+  }
+
+  function beginScheduleEdit(schedule:Entity){
+    setEditingSchedule(schedule);
+    const recurrence=value(schedule,"recurrenceType")==="weekly"&&Number(schedule.recurrenceInterval)===2
+      ?"biweekly":value(schedule,"recurrenceType")||"none";
+    setScheduleRecurrenceType(recurrence);
+    setScheduleSelectedDays(scheduleDays(schedule));
+  }
+
+  async function cancelActivitySchedule(schedule:Entity){
+    if(!window.confirm("Cancel this scheduled series? The current live activity will not be stopped."))return;
+    const result=await run("Activity schedule cancelled.",()=>hostApi({
+      action:"cancelSchedule",scheduleId:value(schedule,"scheduleId")
+    }));
+    if(result){
+      setSelected(await hostApi({action:"activityState",...context}));
+      if(value(editingSchedule||undefined,"scheduleId")===value(schedule,"scheduleId")){
+        setEditingSchedule(null);setScheduleRecurrenceType("none");setScheduleSelectedDays([]);
+      }
+      await refreshAdmin();
+    }
   }
 
   async function loadReviews(){
@@ -467,22 +461,6 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
       action:"setDefaultPublicExperience",...selection
     }));
     if(data)await refreshAdmin();
-  }
-
-  async function useGoogleFallbackAtRoot(asset:GoogleFallbackAsset){
-    const data=await run("Google backup assigned to request.gstarxp.com.",()=>hostApi({
-      action:"setDefaultGoogleFallback",enabled:true,
-      formUrl:asset.formUrl,userId:asset.userId,hotelId:asset.hotelId,
-      venueId:asset.venueId,activityId:asset.activityId
-    }));
-    if(data){await refreshGoogleFallback();await refreshAdmin();}
-  }
-
-  async function disableGoogleFallbackAtRoot(){
-    const data=await run("Guest Star restored at request.gstarxp.com.",()=>hostApi({
-      action:"setDefaultGoogleFallback",enabled:false
-    }));
-    if(data){await refreshGoogleFallback();await refreshAdmin();}
   }
 
   async function createVenue(event:FormEvent<HTMLFormElement>){
@@ -595,7 +573,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   async function logout(){
     try{await hostApi({action:"logout"});}catch{/* Session is cleared locally even if upstream is unavailable. */}
-    setUser(null);setSelection(EMPTY_SELECTION);setSelected(null);setAdmin(null);setGoogleFallback(null);
+    setUser(null);setSelection(EMPTY_SELECTION);setSelected(null);setAdmin(null);
   }
 
   if(loading)return <main className="hostPage"><section className="hostCard loadingCard"><RefreshCw className="spin"/>Loading secure Host Panel…</section></main>;
@@ -615,6 +593,8 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const selectedState=selected?.state as Entity|undefined;
   const accepting=selectedState?.accepting!==false;
   const publicStatusVisible=selectedState?.showPublicStatus===true;
+  const activityRunning=selectedState?.activityRunning===true;
+  const lockedPlaybackMode=value(selectedState,"playbackMode") as "player"|"bridge"|"";
   const adminHotels=(admin?.hotels as Entity[]|undefined)||[];
   const activeAdminHotels=adminHotels.filter(item=>value(item,"status")==="active");
   const adminVenues=(admin?.venues as Entity[]|undefined)||[];
@@ -634,39 +614,46 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const activityHotelId=activeAdminHotels.some(item=>value(item,"hotelId")===newActivityHotelId)
     ?newActivityHotelId:value(activeAdminHotels[0],"hotelId");
   const activityVenues=activeAdminVenues.filter(item=>value(item,"hotelId")===activityHotelId);
-  const googleAssets=(googleFallback?.assets as GoogleFallbackAsset[]|undefined)||[];
-  const googleSnapshots=(googleFallback?.snapshots as GoogleFallbackSnapshot[]|undefined)||[];
-  const ownGoogleAsset=googleAssets.find(asset=>asset.userId===user.userId);
-  const defaultGoogleFallback=(googleFallback?.defaultGoogleFallback as Entity|undefined)||
-    (admin?.defaultGoogleFallback as Entity|undefined)||{};
-  const googleFallbackEnabled=defaultGoogleFallback.enabled===true||String(defaultGoogleFallback.enabled)==="true";
+  const selectedSchedules=((selected?.schedules as Entity[]|undefined)||[]);
+  const editingAnnouncements=scheduleAnnouncements(editingSchedule||undefined);
+  const selectedHotel=selection.hotels.find(item=>value(item,"hotelId")===hotelId);
+  const scheduleFormKey=value(editingSchedule||undefined,"scheduleId")||"new-schedule";
   return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow notranslate" translate="no">GUEST STAR EXPERIENCE 4.3.9</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
+    <header className="hostTop"><div><p className="hostEyebrow notranslate" translate="no">GUEST STAR EXPERIENCE 4.4.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
     {showOwnPasswordForm&&<section className="hostCard"><div className="sectionTitle"><KeyRound/><div><h2>Change Your Password</h2><p>Your current password is required. The new permanent password must contain at least 12 characters.</p></div></div><form className="inlineForm" onSubmit={changePassword}><input name="currentPassword" type="password" autoComplete="current-password" placeholder="Current password" required/><input name="newPassword" type="password" autoComplete="new-password" minLength={12} placeholder="New password" required/><input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} placeholder="Confirm new password" required/><button disabled={busy}>Save Password</button></form></section>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
       <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
       <button className="primaryAction" disabled={busy||!activityId} onClick={chooseActivity}>Load Activity</button>
-      {selected&&<><div className="activityStrip"><div><small>ACTIVITY</small><strong>{value(selectedActivity,"name")}</strong></div><div><small>STATUS</small><strong>{value(selectedActivity,"status")||"ready"}</strong></div><div><small>REQUESTS</small><strong>{accepting?"Open":"Closed"}</strong></div></div><div className="activityButtons"><button onClick={()=>activityAction("startActivityV4","Activity started.")}><Play/>Start</button><button onClick={()=>{if(window.confirm("Finish this activity and close new requests?"))void activityAction("finishActivityV4","Activity finished.");}}><Square/>Finish</button><button onClick={()=>{if(window.confirm("Archive the previous cycle and start a new empty activity?"))void activityAction("startNewActivityV4","New activity cycle started.");}}><RefreshCw/>Start New</button><button onClick={()=>activityAction("toggleRequests",accepting?"Requests closed.":"Requests opened.",{open:!accepting})}>{accepting?"Close Requests":"Open Requests"}</button><button onClick={()=>activityAction("updateActivitySettings",publicStatusVisible?"Public activity status hidden.":"Public activity status visible.",{showPublicStatus:!publicStatusVisible})}>{publicStatusVisible?"Hide Public Status":"Show Public Status"}</button><button onClick={()=>{if(window.confirm("Archive and clear the active request queue?"))void activityAction("archiveClearQueue","Queue archived and cleared.");}}>Archive & Clear</button>{Boolean(selected.share)&&<a href={value(selected.share as Entity,"publicUrl")} target="_blank" rel="noreferrer"><Link2/>Public Link</a>}</div></>}
+      {selected&&<><div className="activityStrip"><div><small>ACTIVITY</small><strong>{value(selectedActivity,"name")}</strong></div><div><small>STATUS</small><strong>{value(selectedActivity,"status")||"ready"}</strong></div><div><small>REQUESTS</small><strong>{accepting?"Open":"Closed"}</strong></div></div><label>Reproductor de esta actividad<select value={activityRunning?lockedPlaybackMode:playbackMode} disabled={activityRunning} onChange={event=>setPlaybackMode(event.target.value as "player"|"bridge"|"")}><option value="">Selecciona antes de iniciar…</option><option value="player">Player interno</option><option value="bridge">Bridge con VirtualDJ</option></select><small>{activityRunning?`Modo ${lockedPlaybackMode==="player"?"Player":"Bridge"} bloqueado hasta finalizar.`:"No se puede alternar después de iniciar."}</small></label><div className="activityButtons"><button disabled={busy||activityRunning||!playbackMode} onClick={()=>activityAction("startActivityV4","Activity started.")}><Play/>Start</button><button disabled={busy||!activityRunning} onClick={()=>{if(window.confirm("Finish this activity and close new requests?"))void activityAction("finishActivityV4","Activity finished.");}}><Square/>Finish</button><button disabled={busy||activityRunning||!playbackMode} onClick={()=>{if(window.confirm("Archive the previous cycle and start a new empty activity?"))void activityAction("startNewActivityV4","New activity cycle started.");}}><RefreshCw/>Start New</button><button disabled={busy} onClick={()=>activityAction("toggleRequests",accepting?"Requests closed.":"Requests opened.",{open:!accepting})}>{accepting?"Close Requests":"Open Requests"}</button><button disabled={busy} onClick={()=>activityAction("updateActivitySettings",publicStatusVisible?"Public activity status hidden.":"Public activity status visible.",{showPublicStatus:!publicStatusVisible})}>{publicStatusVisible?"Hide Public Status":"Show Public Status"}</button><button disabled={busy||activityRunning} onClick={()=>{if(window.confirm("Archive and clear the active request queue?"))void activityAction("archiveClearQueue","Queue archived and cleared.");}}>Archive & Clear</button>{Boolean(selected.share)&&<a href={value(selected.share as Entity,"publicUrl")} target="_blank" rel="noreferrer"><Link2/>Public Link</a>}</div></>}
       {selected&&<div className="hostDetailsGrid">
         <details><summary>Request Languages</summary><form key={`${value(selectedActivity,"activityId")}-${value(selectedActivity,"updatedAt")}`} onSubmit={event=>updateActivityLanguages(event,selectedActivity||{})}><p>Choose any of the seven guest languages.</p><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={activityLanguages(selectedActivity).includes(code)}/>{label}</label>)}</div><button disabled={busy}>Save Languages</button></form></details>
-        <details><summary>Schedule and Recurrence</summary><form onSubmit={scheduleActivity}><label>Scheduled start<input name="scheduledStartAt" type="datetime-local" required/></label><div className="hostGrid three"><label>Duration minutes<input name="durationMinutes" type="number" min="15" defaultValue="120"/></label><label>Open requests minutes early<input name="openingLeadMinutes" type="number" min="0" defaultValue="60"/></label><label>Repeat<select name="recurrenceType" defaultValue="none"><option value="none">Do not repeat</option><option value="daily">Daily</option><option value="weekly">Every week</option><option value="biweekly">Every two weeks</option><option value="monthly">Every month</option></select></label></div><fieldset><legend>Days of the week (weekly or biweekly)</legend><div className="hostGrid weekdayChoices">{WEEKDAYS.map(([day,label])=><label className="checkLine" key={day}><input name={`weekday_${day}`} type="checkbox"/>{label}</label>)}</div></fieldset><label className="checkLine"><input name="autoOpenRequests" type="checkbox"/>Open requests automatically before start</label><label className="checkLine"><input name="autoStartActivity" type="checkbox"/>Start activity automatically at the scheduled time</label><label className="checkLine"><input name="showCountdown" type="checkbox" defaultChecked/>Show public countdown</label><button disabled={busy}><CalendarClock/>Save Schedule</button></form></details>
+        <details><summary>Schedule and Recurrence</summary>
+          <form key={scheduleFormKey} onSubmit={scheduleActivity}>
+            <label>Repeat
+              <select name="recurrenceType" value={scheduleRecurrenceType} onChange={event=>{
+                const next=event.target.value;setScheduleRecurrenceType(next);
+                if(!["weekly","biweekly"].includes(next))setScheduleSelectedDays([]);
+              }}>
+                <option value="none">One time</option><option value="daily">Every day</option>
+                <option value="weekly">Every week</option><option value="biweekly">Every two weeks</option>
+                <option value="monthly">Every month</option>
+              </select>
+            </label>
+            {scheduleRecurrenceType==="none"
+              ?<label>Date and time for this one-time activity<input name="scheduledStartAt" type="datetime-local" defaultValue={zonedDateTimeInput(value(editingSchedule||undefined,"scheduledStartAt"),value(selectedHotel,"timezone"))} required/></label>
+              :<label>Start time for every occurrence<input name="scheduledTime" type="time" defaultValue={value(editingSchedule||undefined,"recurrenceTime")||"20:00"} required/></label>}
+            <div className="hostGrid three"><label>Duration minutes<input name="durationMinutes" type="number" min="15" defaultValue={Math.max(15,Number(editingSchedule?.durationSeconds||7200)/60)}/></label><label>Open requests minutes early<input name="openingLeadMinutes" type="number" min="0" defaultValue={Math.max(0,Number(editingSchedule?.requestOpeningLeadSeconds??3600)/60)}/></label><label className="checkLine"><input name="showCountdown" type="checkbox" defaultChecked={editingSchedule?.showCountdown!==false}/>Show public countdown</label></div>
+            {["weekly","biweekly"].includes(scheduleRecurrenceType)&&<fieldset><legend>Days this activity repeats</legend><div className="hostGrid weekdayChoices">{WEEKDAYS.map(([day,label])=><label className="checkLine" key={day}><input name={`weekday_${day}`} type="checkbox" checked={scheduleSelectedDays.includes(day)} onChange={event=>setScheduleSelectedDays(current=>event.target.checked?[...current,day].sort():current.filter(item=>item!==day))}/>{label}</label>)}</div></fieldset>}
+            {["weekly","biweekly"].includes(scheduleRecurrenceType)&&scheduleSelectedDays.map(day=>{const label=WEEKDAYS.find(item=>item[0]===day)?.[1]||String(day);const current=editingAnnouncements.find(item=>Number(item.weekday)===day);return <fieldset key={`announcement-${day}`}><legend>After {label}: optional hotel announcement</legend><div className="hostGrid three"><label>Following event time<input name={`announcement_time_${day}`} type="time" defaultValue={current?.time||""}/></label><label>Event title<input name={`announcement_title_${day}`} maxLength={120} defaultValue={current?.title||""} placeholder={day===2?"Rock Band":"Jazz"}/></label><label>Public message<input name={`announcement_message_${day}`} maxLength={500} defaultValue={current?.message||""} placeholder="At 10:30 p.m. in the Lobby Bar"/></label></div></fieldset>})}
+            <label className="checkLine"><input name="autoOpenRequests" type="checkbox" defaultChecked={editingSchedule?.autoOpenRequests===true}/>Open requests automatically before start</label>
+            <p>The schedule never starts a playback engine. The Host must choose Player or Bridge, and that mode remains locked until Finish.</p>
+            <div className="entityLinks"><button disabled={busy}><CalendarClock/>{editingSchedule?"Update Schedule":"Save Schedule"}</button>{editingSchedule&&<button type="button" onClick={()=>{setEditingSchedule(null);setScheduleRecurrenceType("none");setScheduleSelectedDays([]);}}>Cancel Edit</button>}</div>
+          </form>
+          <div className="entityList compact">{selectedSchedules.map(schedule=><article key={value(schedule,"scheduleId")}><div><strong>{new Date(value(schedule,"scheduledStartAt")).toLocaleString()}</strong><small>{value(schedule,"recurrenceType")==="weekly"&&Number(schedule.recurrenceInterval)===2?"Every two weeks":value(schedule,"recurrenceType")} · {value(schedule,"status")}</small></div>{value(schedule,"status")==="active"&&<div className="entityLinks"><button type="button" onClick={()=>beginScheduleEdit(schedule)}>Edit</button><button type="button" onClick={()=>void cancelActivitySchedule(schedule)}>Cancel</button></div>}</article>)}</div>
+        </details>
         <details><summary>Reviews</summary><button onClick={loadReviews}>Refresh Reviews</button><div className="reviewList">{reviews.map(review=><article key={value(review,"reviewId")}><strong>{"★".repeat(Number(review.rating)||0)} {value(review,"guestName")||"Anonymous guest"}</strong><p>{value(review,"comment")||"No comment"}</p><small>{value(review,"createdAt")}</small><div><button onClick={()=>reviewAction(value(review,"reviewId"),"archive")}>Archive</button><button onClick={()=>reviewAction(value(review,"reviewId"),"delete")}>Delete</button></div></article>)}</div></details>
       </div>}
-      <details className="googleFallbackPanel"><summary>Google Form and Sheet Backup</summary>
-        <p>One reusable Form and response Sheet is created for each Host. Starting a new activity or archiving the queue saves a dated copy and resets the same operational files automatically.</p>
-        {googleFallback?.ok===false&&<p className="hostError">{String(googleFallback.error||"Google backup is not available yet.")}</p>}
-        {!value(user,"email")&&<p className="hostError">Add an email to this Guest Star account before connecting Google Drive.</p>}
-        {value(user,"email")&&googleClientId&&hotelId&&venueId&&activityId&&<div className="googleSignIn"><small>Google account required: {value(user,"email")}</small><div ref={googleButtonRef}/></div>}
-        {value(user,"email")&&!googleClientId&&<p>{user.role==="superhost"?"Google Sign-In still needs its OAuth Client ID in Cloudflare.":"Google Sign-In has not been enabled by the Superhost yet."}</p>}
-        {ownGoogleAsset&&<div className="googleAsset"><strong>Your operational backup</strong><small>{ownGoogleAsset.hotelName||"Hotel"} · {ownGoogleAsset.activityName||"Activity"}</small><div className="entityLinks"><a href={ownGoogleAsset.formUrl} target="_blank" rel="noreferrer"><ExternalLink/>Open Form</a><a href={ownGoogleAsset.sheetUrl} target="_blank" rel="noreferrer"><ExternalLink/>Open Sheet</a><a href={ownGoogleAsset.formEditUrl} target="_blank" rel="noreferrer"><ExternalLink/>Edit Form</a></div></div>}
-        {user.role==="superhost"&&<>
-          <h3>Host backup files</h3>
-          {googleFallbackEnabled&&<div className="temporaryPassword"><strong>Google backup is active at request.gstarxp.com</strong><span>{value(defaultGoogleFallback,"hotelId")} · {value(defaultGoogleFallback,"activityId")}</span><button type="button" disabled={busy} onClick={()=>void disableGoogleFallbackAtRoot()}>Restore Guest Star at Root</button></div>}
-          <div className="entityList compact">{googleAssets.map(asset=><article key={asset.userId}><div><strong>{asset.displayName||asset.email||"Host"}</strong><small>{asset.hotelName||"Hotel"} · {asset.activityName||"Activity"}</small><div className="entityLinks"><a href={asset.formUrl} target="_blank" rel="noreferrer">Form</a><a href={asset.sheetUrl} target="_blank" rel="noreferrer">Sheet</a><button type="button" disabled={busy||!asset.formUrl||!asset.activityId} onClick={()=>void useGoogleFallbackAtRoot(asset)}>{googleFallbackEnabled&&value(defaultGoogleFallback,"formUrl")===asset.formUrl?"Assigned to Root":"Use at Root"}</button></div></div></article>)}</div>
-          {googleSnapshots.length>0&&<details><summary>Saved activity copies ({googleSnapshots.length})</summary><div className="entityList compact">{googleSnapshots.map(snapshot=><article key={snapshot.snapshotId||snapshot.snapshotUrl}><div><strong>{snapshot.displayName||"Host backup"}</strong><small>{snapshot.createdAt||""} · {snapshot.reason||"activity reset"}</small></div><a href={snapshot.snapshotUrl} target="_blank" rel="noreferrer"><ExternalLink/>Open Copy</a></article>)}</div></details>}
-        </>}
-      </details>
     </section>
 
     {user.role==="superhost"&&<section className="adminStack">

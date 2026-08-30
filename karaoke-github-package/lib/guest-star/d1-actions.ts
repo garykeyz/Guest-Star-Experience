@@ -4,14 +4,15 @@ import {
   type GuestStarRequest,
   type JsonObject,
   activeRequests,
-  appendOutbox,
   archiveActiveRequests,
   checkRateLimit,
   findActiveRequest,
   getActivityRuntime,
   getMeta,
   getRecord,
+  insertPublicRequestAtomically,
   listRecords,
+  listRecordsByJsonField,
   setMeta,
   updateActiveRequest,
   updateRecord,
@@ -21,7 +22,7 @@ import {
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
 
-export const GUEST_STAR_D1_VERSION = "4.3.9";
+export const GUEST_STAR_D1_VERSION = "4.4.0";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -38,7 +39,8 @@ const PERMISSIONS = [
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const HOST_BASE_URL = "https://host.gstarxp.com";
 const DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
-const DEFAULT_GOOGLE_FALLBACK_SETTING = "defaultGoogleFallback";
+const PUBLIC_SCHEDULE_CHECK_INTERVAL_MS = 2_000;
+const PUBLIC_SCHEDULE_LEASE_MS = 5_000;
 export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
 
 type PermissionName = typeof PERMISSIONS[number];
@@ -58,6 +60,12 @@ type ResolvedPublicContext = {
   activityId: string;
   configuredDefault: boolean;
 };
+type PublicScheduleCheckState = {
+  nextCheckAt: number;
+  operation?: Promise<boolean>;
+};
+
+const publicScheduleChecks = new WeakMap<object, Map<string, PublicScheduleCheckState>>();
 
 function nowIso() {
   return new Date().toISOString();
@@ -207,36 +215,14 @@ function parseObject(value: unknown) {
   }
 }
 
-function safeGoogleFormUrl(value: unknown) {
-  const candidate = text(value);
-  if (!candidate) return "";
-  try {
-    const url = new URL(candidate);
-    if (url.protocol !== "https:" || url.hostname !== "docs.google.com") return "";
-    return /^\/forms\/d\/(?:e\/)?[^/]+\/(?:viewform|edit)\/?$/i.test(url.pathname)
-      ? `${url.origin}${url.pathname}`
-      : "";
-  } catch {
-    return "";
-  }
-}
-
-function backupRecord(table: string, record: JsonObject) {
-  if (table !== "Devices") return record;
-  const { deviceTokenHash: _deviceTokenHash, ...safe } = record;
-  return safe;
-}
-
 async function save(
   db: D1DatabaseLike,
   table: string,
   record: JsonObject,
   scope = "master",
-  backup = true
+  _backup = false
 ) {
-  const saved = await upsertRecord(db, table, record, scope);
-  if (backup) await appendOutbox(db, "record.upsert", { scope, table, record: backupRecord(table, saved) });
-  return saved;
+  return upsertRecord(db, table, record, scope);
 }
 
 async function patchRecord(
@@ -245,13 +231,9 @@ async function patchRecord(
   id: string,
   changes: JsonObject,
   scope = "master",
-  backup = true
+  _backup = false
 ) {
-  const updated = await updateRecord(db, table, id, changes, scope);
-  if (updated && backup) {
-    await appendOutbox(db, "record.upsert", { scope, table, record: backupRecord(table, updated) });
-  }
-  return updated;
+  return updateRecord(db, table, id, changes, scope);
 }
 
 async function audit(db: D1DatabaseLike, entry: JsonObject) {
@@ -496,26 +478,76 @@ async function runtimeFor(db: D1DatabaseLike, activity: JsonObject, hotel: JsonO
   } satisfies ActivityRuntime;
 }
 
+function playbackModeForRuntime(runtime: ActivityRuntime | null) {
+  const source = text(runtime?.lastSource).toLowerCase();
+  return source === "player" || source === "bridge" ? source : "";
+}
+
+function cleanPlayerQueueOrder(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((id) => limitedText(id, 160)).filter(Boolean))].slice(0, 1000)
+    : [];
+}
+
+function cleanPlayerPlayback(value: unknown, fallback: JsonObject = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : {};
+  return {
+    currentRequestId: limitedText(
+      source.currentRequestId === undefined ? fallback.currentRequestId : source.currentRequestId,
+      160
+    ),
+    currentTimeSeconds: bounded(
+      source.currentTimeSeconds === undefined ? fallback.currentTimeSeconds : source.currentTimeSeconds,
+      0,
+      0,
+      12 * 60 * 60
+    ),
+    scene: text(source.scene === undefined ? fallback.scene : source.scene) === "karaoke"
+      ? "karaoke"
+      : "lobby",
+    wasPlaying: source.wasPlaying === undefined
+      ? bool(fallback.wasPlaying)
+      : bool(source.wasPlaying),
+    updatedAt: text(source.updatedAt === undefined ? fallback.updatedAt : source.updatedAt) || nowIso()
+  };
+}
+
+async function playerRuntimeFor(db: D1DatabaseLike, activityId: string) {
+  const existing = await getRecord(db, "PlayerActivityRuntime", activityId);
+  const existingPlayback = existing?.playback && typeof existing.playback === "object" && !Array.isArray(existing.playback)
+    ? existing.playback as JsonObject
+    : {};
+  return {
+    playerRuntimeId: activityId,
+    activityId,
+    hotelId: text(existing?.hotelId),
+    queueOrder: cleanPlayerQueueOrder(existing?.queueOrder),
+    playback: cleanPlayerPlayback(existingPlayback, existingPlayback),
+    updatedAt: text(existing?.updatedAt)
+  };
+}
+
 async function recalculateQueue(
   db: D1DatabaseLike,
   hotelId: string,
   activity: JsonObject
 ) {
-  const requests = await activeRequests(db, hotelId, text(activity.activityId));
+  const requests = await currentCycleRequests(db, hotelId, activity);
   const totalSeconds = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
   const defaultTransition = Math.max(0, numberValue(activity.defaultTransitionSeconds, 30));
   let accumulated = 0;
   for (const request of requests) {
-    const excluded = ["Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
+    const excluded = ["Retirada del Player", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
     if (!excluded) accumulated += Math.max(0, request.durationSeconds) + Math.max(0, request.transitionSeconds || defaultTransition);
     const remaining = Math.max(0, totalSeconds - accumulated);
     if (request.accumulatedSeconds === accumulated && request.remainingSeconds === remaining) continue;
-    const updated = await updateActiveRequest(db, hotelId, request.requestId, {
+    await updateActiveRequest(db, hotelId, request.requestId, {
       accumulatedSeconds: accumulated,
       remainingSeconds: remaining,
       updatedAt: nowIso()
     });
-    if (updated) await appendOutbox(db, "request.upsert", { request: updated });
   }
   return accumulated;
 }
@@ -527,13 +559,9 @@ async function stateFor(
   knownRequests?: GuestStarRequest[]
 ) {
   const runtime = await runtimeFor(db, activity, hotel);
-  const requests = knownRequests || await activeRequests(
-    db,
-    text(hotel.hotelId),
-    text(activity.activityId)
-  );
+  const requests = knownRequests || await currentCycleRequests(db, text(hotel.hotelId), activity);
   const accumulatedSeconds = requests.reduce((total, request) => {
-    if (["Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status)) return total;
+    if (["Retirada del Player", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status)) return total;
     return total + Math.max(0, request.durationSeconds) + Math.max(0, request.transitionSeconds || numberValue(activity.defaultTransitionSeconds, 30));
   }, 0);
   const totalSeconds = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
@@ -552,7 +580,8 @@ async function stateFor(
     activityId: runtime.activityId,
     updatedAt: runtime.updatedAt,
     lastAction: runtime.lastAction,
-    lastSource: runtime.lastSource
+    lastSource: runtime.lastSource,
+    playbackMode: playbackModeForRuntime(runtime)
   };
 }
 
@@ -586,25 +615,25 @@ function bridgeRequest(request: GuestStarRequest) {
 }
 
 async function upcomingActivities(db: D1DatabaseLike, hotelId: string) {
-  const activities = await listRecords(db, "Activities");
-  const venues = await listRecords(db, "Venues");
-  return (await listRecords(db, "ActivitySchedules"))
-    .filter((schedule) => text(schedule.hotelId) === hotelId && text(schedule.status) === "active" && Date.parse(text(schedule.scheduledStartAt)) > Date.now())
+  const schedules = (await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", hotelId))
+    .filter((schedule) => text(schedule.status) === "active" && Date.parse(text(schedule.scheduledStartAt)) > Date.now())
     .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)))
-    .slice(0, 3)
-    .map((schedule) => {
-      const activity = activities.find((item) => text(item.activityId) === text(schedule.activityId));
-      const venue = venues.find((item) => text(item.venueId) === text(schedule.venueId));
-      return {
-        scheduleId: text(schedule.scheduleId),
-        activityId: text(schedule.activityId),
-        activityName: text(activity?.name) || "Guest Star Activity",
-        venueName: text(venue?.name),
-        scheduledStartAt: text(schedule.scheduledStartAt),
-        durationSeconds: numberValue(schedule.durationSeconds),
-        showCountdown: bool(schedule.showCountdown)
-      };
-    });
+    .slice(0, 3);
+  return await Promise.all(schedules.map(async (schedule) => {
+    const [activity, venue] = await Promise.all([
+      getRecord(db, "Activities", text(schedule.activityId)),
+      getRecord(db, "Venues", text(schedule.venueId))
+    ]);
+    return {
+      scheduleId: text(schedule.scheduleId),
+      activityId: text(schedule.activityId),
+      activityName: text(activity?.name) || "Guest Star Activity",
+      venueName: text(venue?.name),
+      scheduledStartAt: text(schedule.scheduledStartAt),
+      durationSeconds: numberValue(schedule.durationSeconds),
+      showCountdown: bool(schedule.showCountdown)
+    };
+  }));
 }
 
 async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
@@ -612,7 +641,14 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
   const freshActivity = await getRecord(db, "Activities", text(context.activity.activityId));
   const freshHotel = await getRecord(db, "Hotels", text(context.hotel.hotelId));
   if (!freshActivity || !freshHotel) throw new Error("ACTIVITY_NOT_FOUND");
-  const requests = await activeRequests(db, text(freshHotel.hotelId), text(freshActivity.activityId));
+  const requests = await currentCycleRequests(db, text(freshHotel.hotelId), freshActivity);
+  const schedules = (await listRecordsByJsonField(
+    db,
+    "ActivitySchedules",
+    "hotelId",
+    text(freshHotel.hotelId)
+  )).filter((schedule) => text(schedule.activityId) === text(freshActivity.activityId))
+    .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
   return {
     ok: true,
     codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
@@ -620,6 +656,7 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
     serverNow: nowIso(),
     user: publicUser(auth.user),
     hotel: visibleHotel(auth.user, freshHotel),
+    branding: await safeBranding(db, text(freshHotel.hotelId)),
     venue: context.venue,
     activity: activityWithLanguages(freshActivity),
     permissions: await effectivePermissions(db, auth.user, {
@@ -635,6 +672,8 @@ async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
     requests: requests
       .filter((request) => !["Eliminada", "Cancelada"].includes(request.status))
       .map(bridgeRequest),
+    playerRuntime: await playerRuntimeFor(db, text(freshActivity.activityId)),
+    schedules,
     share: shareInfo(freshHotel),
     upcomingActivities: await upcomingActivities(db, text(freshHotel.hotelId))
   };
@@ -779,7 +818,6 @@ async function adminState(db: D1DatabaseLike, auth: Auth) {
     upcomingActivities: await listRecords(db, "UpcomingActivities"),
     branding: await listRecords(db, "HotelBranding"),
     defaultPublicExperience: await defaultPublicExperienceSetting(db),
-    defaultGoogleFallback: await defaultGoogleFallbackSetting(db),
     auditLog: (await listRecords(db, "AuditLog")).slice(-500)
   };
 }
@@ -847,87 +885,6 @@ async function setDefaultPublicExperience(db: D1DatabaseLike, auth: Auth, body: 
     activityId: settingValue.activityId
   });
   return { ok: true, defaultPublicExperience: await defaultPublicExperienceSetting(db) };
-}
-
-async function defaultGoogleFallbackSetting(db: D1DatabaseLike) {
-  const record = await getRecord(db, "GlobalSettings", DEFAULT_GOOGLE_FALLBACK_SETTING);
-  const setting = parseObject(record?.settingValue);
-  const formUrl = safeGoogleFormUrl(setting.formUrl);
-  const hotelId = text(setting.hotelId);
-  const venueId = text(setting.venueId);
-  const activityId = text(setting.activityId);
-  const userId = text(setting.userId);
-  const configured = bool(setting.enabled) && Boolean(formUrl && hotelId && activityId && userId);
-  let available = false;
-  if (configured) {
-    const [hotel, activity, user] = await Promise.all([
-      getRecord(db, "Hotels", hotelId),
-      getRecord(db, "Activities", activityId),
-      getRecord(db, "Users", userId)
-    ]);
-    available = Boolean(
-      hotel && text(hotel.status) === "active" &&
-      activity && text(activity.status) !== "inactive" && text(activity.hotelId) === hotelId &&
-      (!venueId || text(activity.venueId) === venueId) &&
-      user && text(user.status) === "active"
-    );
-  }
-  return {
-    configured,
-    available,
-    enabled: configured && available,
-    formUrl,
-    hotelId,
-    venueId,
-    activityId,
-    userId,
-    updatedAt: text(record?.updatedAt)
-  };
-}
-
-async function setDefaultGoogleFallback(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
-  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
-  const enabled = body.enabled !== false;
-  let settingValue: JsonObject = {
-    enabled: false, formUrl: "", hotelId: "", venueId: "", activityId: "", userId: ""
-  };
-  if (enabled) {
-    const formUrl = safeGoogleFormUrl(body.formUrl);
-    const userId = text(body.userId);
-    if (!formUrl) return { ok: false, code: "INVALID_GOOGLE_FORM_URL" };
-    const context = await tenantContext(db, auth, {
-      hotelId: body.hotelId,
-      venueId: body.venueId,
-      activityId: body.activityId
-    });
-    const user = await getRecord(db, "Users", userId);
-    if (!context.activity || !user || text(user.status) !== "active") {
-      return { ok: false, code: "GOOGLE_FALLBACK_REQUIRED" };
-    }
-    settingValue = {
-      enabled: true,
-      formUrl,
-      hotelId: text(context.hotel.hotelId),
-      venueId: text(context.venue?.venueId),
-      activityId: text(context.activity.activityId),
-      userId
-    };
-  }
-  const stamp = nowIso();
-  await save(db, "GlobalSettings", {
-    settingKey: DEFAULT_GOOGLE_FALLBACK_SETTING,
-    settingValue: JSON.stringify(settingValue),
-    updatedAt: stamp
-  });
-  await audit(db, {
-    userId: auth.user.userId,
-    action: enabled ? "public.googleFallback.enabled" : "public.googleFallback.disabled",
-    hotelId: settingValue.hotelId,
-    venueId: settingValue.venueId,
-    activityId: settingValue.activityId,
-    fallbackUserId: settingValue.userId
-  });
-  return { ok: true, defaultGoogleFallback: await defaultGoogleFallbackSetting(db) };
 }
 
 async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1342,30 +1299,7 @@ async function selectActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
       updatedAt: nowIso()
     });
   }
-  const runtime = await runtimeFor(db, context.activity, context.hotel);
-  return {
-    ok: true,
-    codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
-    codeBuild: GUEST_STAR_D1_VERSION,
-    serverNow: nowIso(),
-    user: publicUser(auth.user),
-    hotel: visibleHotel(auth.user, context.hotel),
-    venue: context.venue,
-    activity: activityWithLanguages(context.activity),
-    permissions: context.permissions,
-    state: {
-      activityId: context.activity.activityId,
-      activityHours: numberValue(context.activity.defaultDurationSeconds, 7200) / 3600,
-      transitionSeconds: numberValue(context.activity.defaultTransitionSeconds, 30),
-      accepting: runtime.accepting,
-      activityRunning: runtime.running,
-      showPublicStatus: bool(context.activity.showPublicStatus),
-      updatedAt: runtime.updatedAt,
-      lastAction: "select",
-      lastSource: text(body.source) || "web"
-    },
-    share: shareInfo(context.hotel)
-  };
+  return selectedState(db, auth, context);
 }
 
 async function writeRuntime(
@@ -1376,6 +1310,15 @@ async function writeRuntime(
 ) {
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
   const current = await runtimeFor(db, context.activity, context.hotel);
+  const requestedSource = text(body.source).toLowerCase();
+  const lockedMode = current.running && changes.running !== false
+    ? playbackModeForRuntime(current)
+    : "";
+  const nextSource = lockedMode || (
+    ["player", "bridge", "web"].includes(requestedSource)
+      ? requestedSource
+      : text(current.lastSource) || "web"
+  );
   const next: ActivityRuntime = {
     ...current,
     ...changes,
@@ -1383,12 +1326,69 @@ async function writeRuntime(
     hotelId: text(context.hotel.hotelId),
     venueId: text(context.venue?.venueId || context.activity.venueId),
     stateRevision: current.stateRevision + 1,
-    lastSource: text(body.source) === "bridge" ? "bridge" : "web",
+    lastSource: nextSource,
     updatedAt: nowIso()
   };
   await upsertActivityRuntime(db, next);
-  await appendOutbox(db, "activity.runtime", { runtime: next });
   return next;
+}
+
+async function updatePlayerRuntime(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const context = await tenantContext(db, auth, body);
+  if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
+  const runtime = await runtimeFor(db, context.activity, context.hotel);
+  if (!runtime.running || playbackModeForRuntime(runtime) !== "player") {
+    return { ok: false, code: "PLAYER_MODE_NOT_ACTIVE" };
+  }
+  const activityId = text(context.activity.activityId);
+  const existing = await playerRuntimeFor(db, activityId);
+  const queueOrder = body.queueOrder === undefined
+    ? existing.queueOrder
+    : cleanPlayerQueueOrder(body.queueOrder);
+  const stamp = nowIso();
+  const requestedPlayback = body.playback && typeof body.playback === "object" && !Array.isArray(body.playback)
+    ? body.playback as JsonObject
+    : {};
+  const playback = body.playback === undefined
+    ? existing.playback
+    : cleanPlayerPlayback({ ...requestedPlayback, updatedAt: stamp }, existing.playback as JsonObject);
+  const saved = await save(db, "PlayerActivityRuntime", {
+    playerRuntimeId: activityId,
+    activityId,
+    hotelId: text(context.hotel.hotelId),
+    queueOrder,
+    playback,
+    updatedAt: stamp
+  }, "master", false);
+  return {
+    ok: true,
+    playerRuntime: {
+      ...saved,
+      queueOrder: cleanPlayerQueueOrder(saved.queueOrder),
+      playback: cleanPlayerPlayback(saved.playback, playback as JsonObject),
+      updatedAt: stamp
+    }
+  };
+}
+
+async function resetPlayerRuntime(db: D1DatabaseLike, context: Context) {
+  if (!context.activity) return;
+  const activityId = text(context.activity.activityId);
+  const stamp = nowIso();
+  await save(db, "PlayerActivityRuntime", {
+    playerRuntimeId: activityId,
+    activityId,
+    hotelId: text(context.hotel.hotelId),
+    queueOrder: [],
+    playback: {
+      currentRequestId: "",
+      currentTimeSeconds: 0,
+      scene: "lobby",
+      wasPlaying: false,
+      updatedAt: stamp
+    },
+    updatedAt: stamp
+  }, "master", false);
 }
 
 async function ensureCycle(
@@ -1443,17 +1443,28 @@ async function startActivity(
   const context = await tenantContext(db, auth, body);
   if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, startNew ? "canStartNewActivity" : "canStartActivity");
+  const requestedMode = text(body.source).toLowerCase();
+  if (requestedMode !== "player" && requestedMode !== "bridge") {
+    return { ok: false, code: "PLAYBACK_MODE_REQUIRED" };
+  }
+  const previousRuntime = await runtimeFor(db, context.activity, context.hotel);
+  const lockedMode = playbackModeForRuntime(previousRuntime);
+  if (previousRuntime.running && startNew) {
+    return { ok: false, code: "ACTIVITY_ALREADY_RUNNING", playbackMode: lockedMode };
+  }
+  if (previousRuntime.running && lockedMode && lockedMode !== requestedMode) {
+    return { ok: false, code: "PLAYBACK_MODE_LOCKED", playbackMode: lockedMode };
+  }
+  if (previousRuntime.running && lockedMode === requestedMode) {
+    return selectedState(db, auth, context);
+  }
   if (startNew) {
     const archivedAt = nowIso();
     await archiveActiveRequests(db, text(context.hotel.hotelId), text(context.activity.activityId), archivedAt);
-    await appendOutbox(db, "requests.archive", {
-      hotelId: context.hotel.hotelId,
-      activityId: context.activity.activityId,
-      archivedAt
-    });
   }
   const cycle = await ensureCycle(db, auth, context, "in_progress", startNew);
   await activatePublicActivity(db, context);
+  if (startNew || !previousRuntime.running) await resetPlayerRuntime(db, context);
   await writeRuntime(db, context, {
     cycleId: text(cycle.cycleId), accepting: true, running: true,
     startedAt: text(cycle.startedAt) || nowIso(), finishedAt: "",
@@ -1467,6 +1478,8 @@ async function finishActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   const context = await tenantContext(db, auth, body);
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canFinishActivity");
+  await processD1ActivitySchedules(db, text(context.hotel.hotelId));
+  context.activity = await getRecord(db, "Activities", text(context.activity.activityId)) || context.activity;
   const stamp = nowIso();
   const scope = text(context.hotel.hotelId);
   if (text(context.activity.currentCycleId)) {
@@ -1474,8 +1487,18 @@ async function finishActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
       finishedAt: stamp, status: "finished"
     }, scope);
   }
+  const currentScheduleId = text(context.activity.currentScheduleId);
+  const currentSchedule = currentScheduleId
+    ? await getRecord(db, "ActivitySchedules", currentScheduleId)
+    : null;
+  const completedOccurrence = text(
+    currentSchedule?.lastOccurrenceAt || context.activity.currentScheduleOccurrenceAt
+  );
   context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
-    status: "finished", updatedAt: stamp
+    status: "finished",
+    lastCompletedScheduleId: currentScheduleId,
+    lastCompletedScheduleOccurrenceAt: completedOccurrence,
+    updatedAt: stamp
   }) || context.activity;
   await writeRuntime(db, context, { accepting: false, running: false, finishedAt: stamp, lastAction: "activity.finish" }, body);
   await audit(db, { userId: auth.user.userId, action: "activity.finish", hotelId: context.hotel.hotelId, venueId: context.venue?.venueId, activityId: context.activity.activityId });
@@ -1488,13 +1511,13 @@ async function archiveQueue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   requirePermission(context, "canArchiveQueue");
   const stamp = nowIso();
   await archiveActiveRequests(db, text(context.hotel.hotelId), text(context.activity.activityId), stamp);
-  await appendOutbox(db, "requests.archive", { hotelId: context.hotel.hotelId, activityId: context.activity.activityId, archivedAt: stamp });
   if (text(context.activity.currentCycleId)) {
     await patchRecord(db, "ActivityCycles", text(context.activity.currentCycleId), { status: "archived", archivedAt: stamp }, text(context.hotel.hotelId));
   }
   context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
     status: "ready", currentCycleId: "", updatedAt: stamp
   }) || context.activity;
+  await resetPlayerRuntime(db, context);
   await writeRuntime(db, context, { cycleId: "", accepting: false, running: false, startedAt: "", finishedAt: "", lastAction: "queue.archiveClear" }, body);
   await audit(db, { userId: auth.user.userId, action: "queue.archiveClear", hotelId: context.hotel.hotelId, activityId: context.activity.activityId });
   return selectedState(db, auth, context);
@@ -1561,55 +1584,233 @@ async function updateActivitySettings(db: D1DatabaseLike, auth: Auth, body: Json
   return selectedState(db, auth, context);
 }
 
+function scheduleRecurrence(value: unknown) {
+  const requested = text(value).toLowerCase();
+  if (requested === "biweekly") return { type: "weekly", interval: 2, requested };
+  if (["daily", "weekly", "monthly"].includes(requested)) {
+    return { type: requested, interval: 1, requested };
+  }
+  return { type: "none", interval: 1, requested: "none" };
+}
+
+function normalizedRecurrenceDays(value: unknown) {
+  let requested: unknown = value;
+  if (typeof requested === "string") {
+    try { requested = JSON.parse(requested || "[]"); }
+    catch { requested = []; }
+  }
+  return Array.isArray(requested)
+    ? [...new Set(requested.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+    : [];
+}
+
+function scheduleTime(value: unknown) {
+  const candidate = text(value);
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(candidate) ? candidate : "";
+}
+
+function localTimeFor(date: Date, timeZone: unknown) {
+  const local = zonedCalendarDate(date, timeZone);
+  return `${String(local.getUTCHours()).padStart(2, "0")}:${String(local.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+function firstRecurringOccurrence(
+  timeValue: unknown,
+  recurrenceType: string,
+  recurrenceDaysValue: unknown,
+  recurrenceDayOfMonthValue: unknown,
+  timeZone: unknown,
+  after = new Date()
+) {
+  const time = scheduleTime(timeValue);
+  if (!time) return new Date("");
+  const [hour, minute] = time.split(":").map(Number);
+  const allowedDays = normalizedRecurrenceDays(recurrenceDaysValue);
+  const localNow = zonedCalendarDate(after, timeZone);
+  const targetDayOfMonth = Math.min(31, Math.max(1, Math.round(numberValue(
+    recurrenceDayOfMonthValue,
+    localNow.getUTCDate()
+  ))));
+  for (let offset = 0; offset <= 400; offset += 1) {
+    const candidate = new Date(localNow.getTime());
+    candidate.setUTCHours(hour, minute, 0, 0);
+    candidate.setUTCDate(candidate.getUTCDate() + offset);
+    const allowed = recurrenceType === "daily"
+      || (recurrenceType === "weekly" && allowedDays.includes(candidate.getUTCDay()))
+      || (recurrenceType === "monthly" && candidate.getUTCDate() === Math.min(
+        targetDayOfMonth,
+        new Date(Date.UTC(candidate.getUTCFullYear(), candidate.getUTCMonth() + 1, 0)).getUTCDate()
+      ));
+    if (!allowed) continue;
+    const utc = localDateTimeToUtc(localCalendarText(candidate), timeZone);
+    if (Number.isFinite(utc.getTime()) && utc.getTime() > after.getTime()) return utc;
+  }
+  return new Date("");
+}
+
+type WeekdayAnnouncement = {
+  weekday: number;
+  time: string;
+  title: string;
+  message: string;
+};
+
+function normalizedWeekdayAnnouncements(value: unknown, allowedDays: number[] = []) {
+  let requested: unknown = value;
+  if (typeof requested === "string") {
+    try { requested = JSON.parse(requested || "[]"); }
+    catch { requested = []; }
+  }
+  if (requested && typeof requested === "object" && !Array.isArray(requested)) {
+    requested = Object.entries(requested as JsonObject).map(([weekday, announcement]) => ({
+      weekday: Number(weekday),
+      ...parseObject(announcement)
+    }));
+  }
+  if (!Array.isArray(requested)) return [];
+  const unique = new Map<number, WeekdayAnnouncement>();
+  for (const item of requested) {
+    const record = parseObject(item);
+    const weekday = Number(record.weekday);
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) continue;
+    if (allowedDays.length && !allowedDays.includes(weekday)) continue;
+    const announcement = {
+      weekday,
+      time: scheduleTime(record.time),
+      title: limitedText(record.title, 120),
+      message: limitedText(record.message, 500)
+    };
+    if (!announcement.time && !announcement.title && !announcement.message) continue;
+    unique.set(weekday, announcement);
+  }
+  return [...unique.values()].sort((left, right) => left.weekday - right.weekday);
+}
+
+function scheduleInput(
+  context: Context,
+  body: JsonObject,
+  existing: JsonObject | null = null
+) {
+  const requestedRecurrence = body.recurrenceType === undefined
+    ? text(existing?.recurrenceType) === "weekly" && numberValue(existing?.recurrenceInterval, 1) === 2
+      ? "biweekly"
+      : text(existing?.recurrenceType) || "none"
+    : text(body.recurrenceType);
+  const recurrence = scheduleRecurrence(requestedRecurrence);
+  const recurrenceInterval = requestedRecurrence === "biweekly"
+    ? 2
+    : Math.round(bounded(
+      body.recurrenceInterval,
+      numberValue(existing?.recurrenceInterval, recurrence.interval),
+      1,
+      52
+    ));
+  const existingDays = normalizedRecurrenceDays(existing?.recurrenceDaysJson);
+  const recurrenceDays = body.recurrenceDays === undefined
+    ? existingDays
+    : normalizedRecurrenceDays(body.recurrenceDays);
+  const existingStart = new Date(text(existing?.scheduledStartAt));
+  const requestedTime = scheduleTime(
+    body.scheduledTime === undefined
+      ? Number.isFinite(existingStart.getTime()) ? localTimeFor(existingStart, context.hotel.timezone) : ""
+      : body.scheduledTime
+  );
+  const raw = text(body.scheduledStartAt || body.scheduledLocal);
+  let scheduledStart = raw
+    ? localDateTimeToUtc(raw, context.hotel.timezone)
+    : existing && body.scheduledTime === undefined && body.recurrenceType === undefined
+      ? existingStart
+      : firstRecurringOccurrence(
+        requestedTime,
+        recurrence.type,
+        recurrenceDays,
+        body.recurrenceDayOfMonth ?? existing?.recurrenceDayOfMonth,
+        context.hotel.timezone
+      );
+  if (recurrence.type === "none" && !raw && !existing) scheduledStart = new Date("");
+  if (!Number.isFinite(scheduledStart.getTime())) {
+    return { ok: false as const, code: recurrence.type === "none" ? "ONE_TIME_DATE_REQUIRED" : "RECURRENCE_TIME_REQUIRED" };
+  }
+  const localStart = zonedCalendarDate(scheduledStart, context.hotel.timezone);
+  if (recurrence.type === "weekly" && !recurrenceDays.length) {
+    return { ok: false as const, code: "RECURRENCE_DAYS_REQUIRED" };
+  }
+  const durationSeconds = Math.round(bounded(
+    body.durationSeconds,
+    numberValue(existing?.durationSeconds, numberValue(context.activity?.defaultDurationSeconds, 7200)),
+    900,
+    604800
+  ));
+  const previousLead = Number.isFinite(Date.parse(text(existing?.requestOpeningAt)))
+    ? Math.max(0, (Date.parse(text(existing?.scheduledStartAt)) - Date.parse(text(existing?.requestOpeningAt))) / 1000)
+    : 3600;
+  const openingLead = Math.round(bounded(
+    body.requestOpeningLeadSeconds,
+    numberValue(existing?.requestOpeningLeadSeconds, previousLead),
+    0,
+    604800
+  ));
+  const autoOpenRequests = body.autoOpenRequests === undefined
+    ? bool(existing?.autoOpenRequests)
+    : body.autoOpenRequests === true;
+  const allowedAnnouncementDays = recurrence.type === "weekly"
+    ? recurrenceDays
+    : recurrence.type === "none"
+      ? [localStart.getUTCDay()]
+      : [];
+  const announcements = body.weekdayAnnouncements === undefined
+    ? normalizedWeekdayAnnouncements(existing?.weekdayAnnouncementsJson, allowedAnnouncementDays)
+    : normalizedWeekdayAnnouncements(body.weekdayAnnouncements, allowedAnnouncementDays);
+  const recurrenceDayOfMonth = Math.min(31, Math.max(1, Math.round(numberValue(
+    body.recurrenceDayOfMonth,
+    numberValue(existing?.recurrenceDayOfMonth, localStart.getUTCDate())
+  ))));
+  return {
+    ok: true as const,
+    fields: {
+      scheduledStartAt: scheduledStart.toISOString(),
+      durationSeconds,
+      requestOpeningLeadSeconds: openingLead,
+      requestOpeningAt: autoOpenRequests
+        ? new Date(scheduledStart.getTime() - openingLead * 1000).toISOString()
+        : "",
+      autoOpenRequests,
+      autoStartActivity: false,
+      showCountdown: body.showCountdown === undefined ? existing?.showCountdown !== false : body.showCountdown !== false,
+      recurrenceType: recurrence.type,
+      recurrenceInterval,
+      recurrenceDaysJson: JSON.stringify(recurrenceDays),
+      recurrenceDayOfMonth,
+      recurrenceTime: requestedTime || localTimeFor(scheduledStart, context.hotel.timezone),
+      recurrenceEndAt: body.recurrenceEndAt === undefined ? text(existing?.recurrenceEndAt) : text(body.recurrenceEndAt),
+      weekdayAnnouncementsJson: JSON.stringify(announcements)
+    }
+  };
+}
+
 async function scheduleActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   const context = await tenantContext(db, auth, body);
   if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canChangeSchedule");
-  const raw = text(body.scheduledStartAt || body.scheduledLocal);
-  const scheduledStart = localDateTimeToUtc(raw, context.hotel.timezone);
-  if (!raw || !Number.isFinite(scheduledStart.getTime())) return { ok: false, code: "INVALID_SCHEDULE" };
-  const durationSeconds = Math.round(bounded(body.durationSeconds, numberValue(context.activity.defaultDurationSeconds, 7200), 900, 604800));
-  const openingLead = Math.round(bounded(body.requestOpeningLeadSeconds, 3600, 0, 604800));
+  const normalized = scheduleInput(context, body);
+  if (!normalized.ok) return normalized;
   const stamp = nowIso();
-  const requestedRecurrence = text(body.recurrenceType);
-  const recurrenceType = requestedRecurrence === "biweekly"
-    ? "weekly"
-    : ["none", "daily", "weekly", "monthly"].includes(requestedRecurrence)
-      ? requestedRecurrence
-      : "none";
-  const recurrenceInterval = requestedRecurrence === "biweekly"
-    ? 2
-    : Math.round(bounded(body.recurrenceInterval, 1, 1, 52));
-  const requestedDays = Array.isArray(body.recurrenceDays)
-    ? body.recurrenceDays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
-    : [];
-  const recurrenceDays = [...new Set(requestedDays)];
-  const recurrenceDayOfMonth = zonedCalendarDate(scheduledStart, context.hotel.timezone).getUTCDate();
-  if (recurrenceType === "weekly" && !recurrenceDays.length) {
-    recurrenceDays.push(zonedCalendarDate(scheduledStart, context.hotel.timezone).getUTCDay());
-  }
   const schedule = await save(db, "ActivitySchedules", {
     scheduleId: randomId(), hotelId: context.hotel.hotelId, venueId: context.venue.venueId,
-    activityId: context.activity.activityId, scheduledStartAt: scheduledStart.toISOString(),
-    durationSeconds,
-    requestOpeningAt: body.autoOpenRequests === true ? new Date(scheduledStart.getTime() - openingLead * 1000).toISOString() : "",
-    autoOpenRequests: body.autoOpenRequests === true,
-    autoStartActivity: body.autoStartActivity === true,
-    showCountdown: body.showCountdown !== false,
-    recurrenceType,
-    recurrenceInterval,
-    recurrenceDaysJson: JSON.stringify(recurrenceDays),
-    recurrenceDayOfMonth,
-    recurrenceEndAt: text(body.recurrenceEndAt), status: "active",
+    activityId: context.activity.activityId,
+    ...normalized.fields,
+    status: "active", lastOccurrenceAt: "", lastOccurrenceEndAt: "",
     createdByUserId: auth.user.userId, createdAt: stamp, updatedAt: stamp
   });
   context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
     status: text(context.activity.status) === "in_progress" ? "in_progress" : "scheduled",
-    defaultDurationSeconds: durationSeconds,
-    scheduledStartAt: scheduledStart.toISOString(),
-    showCountdown: body.showCountdown !== false,
-    autoStartEnabled: body.autoStartActivity === true,
-    acceptEarlyRequests: body.autoOpenRequests === true,
+    defaultDurationSeconds: normalized.fields.durationSeconds,
+    scheduledStartAt: normalized.fields.scheduledStartAt,
+    currentScheduleId: schedule.scheduleId,
+    currentScheduleOccurrenceAt: normalized.fields.scheduledStartAt,
+    showCountdown: normalized.fields.showCountdown,
+    autoStartEnabled: false,
+    acceptEarlyRequests: normalized.fields.autoOpenRequests,
     updatedAt: stamp
   }) || context.activity;
   await activatePublicActivity(db, context);
@@ -1631,6 +1832,51 @@ async function scheduleActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject
   };
 }
 
+async function updateSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const existing = await getRecord(db, "ActivitySchedules", text(body.scheduleId));
+  if (!existing) return { ok: false, code: "SCHEDULE_NOT_FOUND" };
+  const context = await tenantContext(db, auth, existing);
+  if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
+  requirePermission(context, "canChangeSchedule");
+  if (text(existing.status) !== "active") return { ok: false, code: "SCHEDULE_NOT_ACTIVE" };
+  const normalized = scheduleInput(context, body, existing);
+  if (!normalized.ok) return normalized;
+  const stamp = nowIso();
+  const schedule = await patchRecord(db, "ActivitySchedules", text(existing.scheduleId), {
+    ...normalized.fields,
+    lastOpenedFor: "",
+    updatedAt: stamp
+  }) || existing;
+  if (text(context.activity.status) !== "in_progress") {
+    context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
+      status: "scheduled",
+      defaultDurationSeconds: normalized.fields.durationSeconds,
+      scheduledStartAt: normalized.fields.scheduledStartAt,
+      currentScheduleId: existing.scheduleId,
+      currentScheduleOccurrenceAt: normalized.fields.scheduledStartAt,
+      showCountdown: normalized.fields.showCountdown,
+      autoStartEnabled: false,
+      acceptEarlyRequests: normalized.fields.autoOpenRequests,
+      updatedAt: stamp
+    }) || context.activity;
+  }
+  await activatePublicActivity(db, context);
+  await audit(db, {
+    userId: auth.user.userId,
+    action: "activity.scheduleUpdated",
+    hotelId: context.hotel.hotelId,
+    venueId: context.venue.venueId,
+    activityId: context.activity.activityId,
+    targetId: existing.scheduleId
+  });
+  await processD1ActivitySchedules(db, text(context.hotel.hotelId));
+  return {
+    ok: true,
+    schedule: await getRecord(db, "ActivitySchedules", text(schedule.scheduleId)),
+    activity: activityWithLanguages(await getRecord(db, "Activities", text(context.activity.activityId)))
+  };
+}
+
 async function cancelSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   const schedule = await getRecord(db, "ActivitySchedules", text(body.scheduleId));
   if (!schedule) return { ok: false, code: "SCHEDULE_NOT_FOUND" };
@@ -1640,9 +1886,24 @@ async function cancelSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
     status: "cancelled", updatedAt: nowIso()
   });
+  const remainingSchedules = (await listRecordsByJsonField(
+    db,
+    "ActivitySchedules",
+    "hotelId",
+    text(context.hotel.hotelId)
+  )).filter((candidate) =>
+    text(candidate.scheduleId) !== text(schedule.scheduleId) &&
+    text(candidate.activityId) === text(context.activity?.activityId) &&
+    text(candidate.status) === "active" &&
+    Number.isFinite(Date.parse(text(candidate.scheduledStartAt)))
+  ).sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
+  const nextSchedule = remainingSchedules[0] || null;
   context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
-    scheduledStartAt: "",
-    status: text(context.activity.status) === "in_progress" ? "in_progress" : "ready",
+    scheduledStartAt: text(nextSchedule?.scheduledStartAt),
+    status: text(context.activity.status) === "in_progress"
+      ? "in_progress"
+      : nextSchedule ? "scheduled" : "ready",
+    acceptEarlyRequests: nextSchedule ? bool(nextSchedule.autoOpenRequests) : false,
     updatedAt: nowIso()
   }) || context.activity;
   if (text(context.activity.status) !== "in_progress") {
@@ -1667,6 +1928,71 @@ function recurrenceDays(value: unknown) {
   } catch {
     return [];
   }
+}
+
+function announcementForOccurrence(
+  schedule: JsonObject,
+  occurrenceValue: unknown,
+  hotelTimezone: unknown
+) {
+  const occurrence = new Date(text(occurrenceValue));
+  if (!Number.isFinite(occurrence.getTime())) return null;
+  const localOccurrence = zonedCalendarDate(occurrence, hotelTimezone);
+  const announcement = normalizedWeekdayAnnouncements(schedule.weekdayAnnouncementsJson)
+    .find((item) => item.weekday === localOccurrence.getUTCDay());
+  if (!announcement) return null;
+  let followingEventAt = "";
+  if (announcement.time) {
+    const [hour, minute] = announcement.time.split(":").map(Number);
+    const localEvent = new Date(localOccurrence.getTime());
+    localEvent.setUTCHours(hour, minute, 0, 0);
+    let eventDate = localDateTimeToUtc(localCalendarText(localEvent), hotelTimezone);
+    if (eventDate.getTime() <= occurrence.getTime()) {
+      localEvent.setUTCDate(localEvent.getUTCDate() + 1);
+      eventDate = localDateTimeToUtc(localCalendarText(localEvent), hotelTimezone);
+    }
+    if (Number.isFinite(eventDate.getTime())) followingEventAt = eventDate.toISOString();
+  }
+  const nextGuestStarAt = text(schedule.status) === "active"
+    && Date.parse(text(schedule.scheduledStartAt)) > occurrence.getTime()
+    ? text(schedule.scheduledStartAt)
+    : "";
+  return {
+    scheduleId: text(schedule.scheduleId),
+    weekday: announcement.weekday,
+    title: announcement.title,
+    message: announcement.message,
+    followingEventAt,
+    nextGuestStarAt
+  };
+}
+
+async function postActivityAnnouncement(
+  db: D1DatabaseLike,
+  hotel: JsonObject,
+  activity: JsonObject | null
+) {
+  if (!activity || text(activity.status) !== "finished") return null;
+  const schedules = (await listRecordsByJsonField(
+    db,
+    "ActivitySchedules",
+    "hotelId",
+    text(hotel.hotelId)
+  )).filter((schedule) => text(schedule.activityId) === text(activity.activityId));
+  const requestedScheduleId = text(activity.lastCompletedScheduleId || activity.currentScheduleId);
+  const requestedOccurrence = text(
+    activity.lastCompletedScheduleOccurrenceAt || activity.currentScheduleOccurrenceAt
+  );
+  const selected = schedules.find((schedule) => text(schedule.scheduleId) === requestedScheduleId)
+    || schedules.sort((left, right) =>
+      Date.parse(text(right.lastOccurrenceAt || right.scheduledStartAt))
+      - Date.parse(text(left.lastOccurrenceAt || left.scheduledStartAt))
+    )[0];
+  if (!selected) return null;
+  const occurrence = requestedOccurrence
+    || text(selected.lastOccurrenceAt)
+    || text(selected.scheduledStartAt);
+  return announcementForOccurrence(selected, occurrence, hotel.timezone);
 }
 
 function zonedCalendarDate(date: Date, timeZone: unknown) {
@@ -1732,17 +2058,46 @@ export function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unkn
 
 export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId = "") {
   const now = Date.now();
-  const schedules = (await listRecords(db, "ActivitySchedules"))
-    .filter((schedule) => text(schedule.status) === "active" && (!onlyHotelId || text(schedule.hotelId) === onlyHotelId))
+  const scheduleRows = onlyHotelId
+    ? await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", onlyHotelId)
+    : await listRecords(db, "ActivitySchedules");
+  const schedules = scheduleRows
+    .filter((schedule) => text(schedule.status) === "active")
+    .filter((schedule) => {
+      const startAt = Date.parse(text(schedule.scheduledStartAt));
+      if (!Number.isFinite(startAt)) return false;
+      if (startAt <= now) return true;
+      if (!bool(schedule.autoOpenRequests)) return false;
+      if (text(schedule.lastOpenedFor) === text(schedule.scheduledStartAt)) return false;
+      const explicitOpeningAt = Date.parse(text(schedule.requestOpeningAt));
+      const openingLeadMilliseconds = Math.max(0, numberValue(schedule.requestOpeningLeadSeconds)) * 1000;
+      const openingAt = Number.isFinite(explicitOpeningAt)
+        ? explicitOpeningAt
+        : startAt - openingLeadMilliseconds;
+      return openingAt <= now;
+    })
     .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
   if (!schedules.length) return [];
 
-  const [hotels, activities, venues, users] = await Promise.all([
-    listRecords(db, "Hotels"),
-    listRecords(db, "Activities"),
-    listRecords(db, "Venues"),
-    listRecords(db, "Users")
-  ]);
+  const recordsByIds = async (tableName: string, ids: string[]) => {
+    const records = await Promise.all(
+      [...new Set(ids.filter(Boolean))].map((recordId) => getRecord(db, tableName, recordId))
+    );
+    return records.filter((record): record is JsonObject => Boolean(record));
+  };
+  const [hotels, activities, venues, users] = onlyHotelId
+    ? await Promise.all([
+        recordsByIds("Hotels", schedules.map((schedule) => text(schedule.hotelId))),
+        recordsByIds("Activities", schedules.map((schedule) => text(schedule.activityId))),
+        recordsByIds("Venues", schedules.map((schedule) => text(schedule.venueId))),
+        recordsByIds("Users", schedules.map((schedule) => text(schedule.createdByUserId)))
+      ])
+    : await Promise.all([
+        listRecords(db, "Hotels"),
+        listRecords(db, "Activities"),
+        listRecords(db, "Venues"),
+        listRecords(db, "Users")
+      ]);
   const processed: JsonObject[] = [];
 
   for (const schedule of schedules) {
@@ -1754,14 +2109,65 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
     if (text(activity.hotelId) !== text(hotel.hotelId) || text(venue.hotelId) !== text(hotel.hotelId)) continue;
 
     const occurrence = text(schedule.scheduledStartAt);
-    const openingAt = Date.parse(text(schedule.requestOpeningAt));
+    const startAt = Date.parse(occurrence);
+    const durationMilliseconds = Math.max(900, numberValue(schedule.durationSeconds, 7200)) * 1000;
+    const openingLeadMilliseconds = Math.max(0, numberValue(
+      schedule.requestOpeningLeadSeconds,
+      Number.isFinite(Date.parse(text(schedule.requestOpeningAt))) && Number.isFinite(startAt)
+        ? Math.max(0, startAt - Date.parse(text(schedule.requestOpeningAt))) / 1000
+        : 0
+    )) * 1000;
+    let lastOccurrence = "";
+    let nextOccurrence = occurrence;
+    let cursor = { ...schedule };
+    for (let iteration = 0; iteration < 400; iteration += 1) {
+      const cursorStart = Date.parse(text(cursor.scheduledStartAt));
+      if (!Number.isFinite(cursorStart) || cursorStart > now) {
+        nextOccurrence = text(cursor.scheduledStartAt);
+        break;
+      }
+      lastOccurrence = text(cursor.scheduledStartAt);
+      const next = nextScheduleOccurrence(cursor, hotel.timezone);
+      if (!next) {
+        nextOccurrence = "";
+        break;
+      }
+      nextOccurrence = next;
+      cursor = { ...cursor, scheduledStartAt: next };
+    }
+    const lastOccurrenceAt = Date.parse(lastOccurrence);
+    const occurrenceInProgress = Number.isFinite(lastOccurrenceAt)
+      && now < lastOccurrenceAt + durationMilliseconds;
+    const activeOccurrence = occurrenceInProgress ? lastOccurrence : "";
+    const nextOccurrenceAt = Date.parse(nextOccurrence);
+    const earlyOccurrence = Number.isFinite(nextOccurrenceAt)
+      && nextOccurrenceAt > now
+      && now >= nextOccurrenceAt - openingLeadMilliseconds
+      ? nextOccurrence
+      : "";
+    const openingOccurrence = activeOccurrence || earlyOccurrence;
+    const openingAt = Date.parse(openingOccurrence) - openingLeadMilliseconds;
     if (
       bool(schedule.autoOpenRequests) &&
+      openingOccurrence &&
       Number.isFinite(openingAt) && openingAt <= now &&
       text(activity.status) !== "in_progress" &&
-      text(schedule.lastOpenedFor) !== occurrence
+      text(schedule.lastOpenedFor) !== openingOccurrence
     ) {
       const stamp = nowIso();
+      const scheduleContext: Context = {
+        hotel,
+        venue,
+        activity,
+        permissions: {}
+      };
+      const scheduledCycle = await ensureCycle(
+        db,
+        { user: owner, session: {}, device: null },
+        scheduleContext,
+        "scheduled"
+      );
+      activity = scheduleContext.activity || activity;
       await patchRecord(db, "Hotels", text(hotel.hotelId), {
         activePublicActivityId: activity.activityId,
         updatedAt: stamp
@@ -1769,6 +2175,9 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
       activity = await patchRecord(db, "Activities", text(activity.activityId), {
         status: "scheduled",
         acceptEarlyRequests: true,
+        scheduledStartAt: openingOccurrence,
+        currentScheduleId: text(schedule.scheduleId),
+        currentScheduleOccurrenceAt: openingOccurrence,
         updatedAt: stamp
       }) || activity;
       const currentRuntime = await runtimeFor(db, activity, hotel);
@@ -1776,6 +2185,7 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
         ...currentRuntime,
         hotelId: text(hotel.hotelId),
         venueId: text(venue.venueId),
+        cycleId: text(scheduledCycle.cycleId),
         accepting: true,
         running: false,
         stateRevision: currentRuntime.stateRevision + 1,
@@ -1784,61 +2194,46 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
         updatedAt: stamp
       };
       await upsertActivityRuntime(db, runtime);
-      await appendOutbox(db, "activity.runtime", { runtime });
       await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
-        lastOpenedFor: occurrence,
+        lastOpenedFor: openingOccurrence,
         updatedAt: stamp
       });
       processed.push({ scheduleId: schedule.scheduleId, action: "opened" });
     }
 
-    const startAt = Date.parse(occurrence);
-    if (
-      bool(schedule.autoStartActivity) &&
-      Number.isFinite(startAt) && startAt <= now &&
-      text(activity.status) !== "in_progress" && text(activity.status) !== "finished" &&
-      text(schedule.lastStartedFor) !== occurrence
-    ) {
-      const permissions = await effectivePermissions(db, owner, {
-        hotelId: hotel.hotelId,
-        venueId: venue.venueId,
-        activityId: activity.activityId
-      });
-      if (text(owner.role) === "superhost" || permissions.canStartActivity) {
-        const automatedAuth: Auth = { user: owner, session: {}, device: null };
-        const result = await startActivity(db, automatedAuth, {
-          hotelId: hotel.hotelId,
-          venueId: venue.venueId,
-          activityId: activity.activityId,
-          source: "web"
-        }, false);
-        if (result.ok === true) {
-          await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
-            lastStartedFor: occurrence,
-            updatedAt: nowIso()
-          });
-          processed.push({ scheduleId: schedule.scheduleId, action: "started" });
-        }
-      }
-    }
-
-    if (Number.isFinite(startAt) && startAt <= now) {
-      const nextOccurrence = nextScheduleOccurrence(schedule, hotel.timezone);
+    if (lastOccurrence) {
+      const scheduleChanges: JsonObject = {
+        lastOccurrenceAt: lastOccurrence,
+        lastOccurrenceEndAt: new Date(lastOccurrenceAt + durationMilliseconds).toISOString(),
+        updatedAt: nowIso()
+      };
       if (nextOccurrence) {
-        const leadMilliseconds = Number.isFinite(openingAt) ? Math.max(0, startAt - openingAt) : 0;
-        await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
-          scheduledStartAt: nextOccurrence,
-          requestOpeningAt: text(schedule.requestOpeningAt)
-            ? new Date(Date.parse(nextOccurrence) - leadMilliseconds).toISOString()
-            : "",
-          updatedAt: nowIso()
-        });
+        scheduleChanges.scheduledStartAt = nextOccurrence;
+        scheduleChanges.requestOpeningAt = bool(schedule.autoOpenRequests)
+          ? new Date(Date.parse(nextOccurrence) - openingLeadMilliseconds).toISOString()
+          : "";
       } else if (text(schedule.recurrenceType) === "none") {
-        await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
-          status: "completed",
-          updatedAt: nowIso()
-        });
+        scheduleChanges.status = "completed";
       }
+      await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), scheduleChanges);
+
+      const sameFinishedOccurrence = text(activity.status) === "finished"
+        && text(activity.currentScheduleOccurrenceAt) === lastOccurrence;
+      const activityChanges: JsonObject = {
+        currentScheduleId: text(schedule.scheduleId),
+        currentScheduleOccurrenceAt: lastOccurrence,
+        updatedAt: nowIso()
+      };
+      if (occurrenceInProgress) {
+        activityChanges.scheduledStartAt = lastOccurrence;
+        if (text(activity.status) !== "in_progress" && !sameFinishedOccurrence) {
+          activityChanges.status = "scheduled";
+        }
+      } else if (nextOccurrence && text(activity.status) !== "in_progress") {
+        activityChanges.scheduledStartAt = nextOccurrence;
+        if (text(activity.status) !== "finished") activityChanges.status = "scheduled";
+      }
+      activity = await patchRecord(db, "Activities", text(activity.activityId), activityChanges) || activity;
     }
   }
   return processed;
@@ -2045,7 +2440,7 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
   if (!request || (activityId && request.activityId !== activityId)) return { ok: false, code: "REQUEST_NOT_FOUND" };
   const allowedStatuses = new Set([
     "Pendiente", "Agregada a VirtualDJ", "Ya cantó", "Saltado",
-    "Fuera de VirtualDJ", "No está local", "Eliminada", "Cancelada",
+    "Retirada del Player", "Fuera de VirtualDJ", "No está local", "Eliminada", "Cancelada",
     "Reagregada a VirtualDJ", "Reenviada a VirtualDJ", "Retirada de rotación"
   ]);
   const requestedStatus = text(body.status);
@@ -2088,7 +2483,6 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
     updatedAt: nowIso()
   };
   const updated = await updateActiveRequest(db, hotelId, request.requestId, changes);
-  if (updated) await appendOutbox(db, "request.upsert", { request: updated });
   const activity = activityId ? await getRecord(db, "Activities", activityId) : null;
   if (activity) await recalculateQueue(db, hotelId, activity);
   const refreshed = await findActiveRequest(db, hotelId, request.requestId);
@@ -2108,7 +2502,10 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
   const confirmedMissingIds = Array.isArray(body.confirmedMissingIds)
     ? body.confirmedMissingIds.map(text)
     : [];
-  const existing = await activeRequests(db, hotelId, activityId);
+  const currentActivity = await getRecord(db, "Activities", activityId);
+  const existing = currentActivity
+    ? await currentCycleRequests(db, hotelId, currentActivity)
+    : await activeRequests(db, hotelId, activityId);
   const existingByVirtualId = new Map(
     existing
       .filter((item) => item.virtualDJItemId)
@@ -2179,7 +2576,6 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
       createdAt: stamp, updatedAt: stamp, archivedAt: ""
     };
     await upsertRequest(db, request);
-    await appendOutbox(db, "request.upsert", { request });
     existingByVirtualId.set(virtualId, request);
     if (!match) imported += 1;
     changed += 1;
@@ -2198,7 +2594,6 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
       stateRevision: match.stateRevision + 1, updatedAt: nowIso()
     });
     if (updated) {
-      await appendOutbox(db, "request.upsert", { request: updated });
       changed += 1;
     }
   }
@@ -2309,16 +2704,24 @@ async function resolvePublicHotel(db: D1DatabaseLike, identifier: unknown) {
     .replace(/^https?:\/\/[^/]+\/h\//i, "")
     .replace(/^\/+|\/+$/g, "");
   if (!key) return null;
-  const hotels = (await listRecords(db, "Hotels")).filter((hotel) => text(hotel.status) === "active");
   if (key === "default") {
     const defaultHotelId = await getMeta(db, "default_public_hotel_id");
-    return hotels.find((hotel) => text(hotel.hotelId) === defaultHotelId) || hotels[0] || null;
+    const selected = defaultHotelId ? await getRecord(db, "Hotels", defaultHotelId) : null;
+    if (selected && text(selected.status) === "active") return selected;
+    return (await listRecords(db, "Hotels")).find((hotel) => text(hotel.status) === "active") || null;
   }
-  return hotels.find((hotel) =>
+  const modernCode = key.match(/([a-z0-9]{16,128})$/i)?.[1] || "";
+  const candidates = modernCode
+    ? await listRecordsByJsonField(db, "Hotels", "publicCode", modernCode, "master", 4)
+    : await listRecords(db, "Hotels");
+  if (modernCode && modernCode !== key) {
+    candidates.push(...await listRecordsByJsonField(db, "Hotels", "publicCode", key, "master", 4));
+  }
+  return candidates.find((hotel) => text(hotel.status) === "active" && (
     text(hotel.publicCode) === key ||
     `${text(hotel.slug)}-${text(hotel.publicCode)}` === key ||
     text(hotel.publicUrl).replace(/^https?:\/\/[^/]+\/h\//i, "").replace(/^\/+|\/+$/g, "") === key
-  ) || null;
+  )) || null;
 }
 
 async function resolvePublicContext(db: D1DatabaseLike, identifier: unknown): Promise<ResolvedPublicContext | null> {
@@ -2341,8 +2744,7 @@ async function resolvePublicContext(db: D1DatabaseLike, identifier: unknown): Pr
 }
 
 async function safeBranding(db: D1DatabaseLike, hotelId: string) {
-  const branding = (await listRecords(db, "HotelBranding"))
-    .find((record) => text(record.hotelId) === hotelId) || {};
+  const branding = (await listRecordsByJsonField(db, "HotelBranding", "hotelId", hotelId, "master", 1))[0] || {};
   const safe: JsonObject = {};
   for (const [key, value] of Object.entries(branding)) {
     if (!["hotelBrandingId", "hotelId", "updatedAt"].includes(key)) safe[key] = value;
@@ -2381,6 +2783,7 @@ async function publicExperience(db: D1DatabaseLike, hotel: JsonObject, activityI
       allowedLanguages: normalizeLanguages(activity.allowedLanguagesJson)
     } : null,
     branding: await safeBranding(db, text(hotel.hotelId)),
+    postActivityAnnouncement: await postActivityAnnouncement(db, hotel, activity),
     upcomingActivities: await upcomingActivities(db, text(hotel.hotelId))
   };
 }
@@ -2409,7 +2812,61 @@ function publicGuestKey(request: GuestStarRequest) {
 
 function publicRequestIsActive(request: GuestStarRequest) {
   if (request.sourceType === "virtualdj_external") return false;
-  return !["Ya cantó", "Saltado", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
+  return !["Ya cantó", "Saltado", "Retirada del Player", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
+}
+
+async function currentCycleRequests(
+  db: D1DatabaseLike,
+  hotelId: string,
+  activity: JsonObject
+) {
+  const requests = await activeRequests(db, hotelId, text(activity.activityId));
+  const cycleId = text(activity.currentCycleId);
+  if (!cycleId) return requests;
+  // Old imports can legitimately have no cycle ID. Preserve those records,
+  // while keeping every explicit previous cycle out of the current activity.
+  return requests.filter((request) => !text(request.cycleId) || text(request.cycleId) === cycleId);
+}
+
+async function currentCycleDuplicateSignals(
+  db: D1DatabaseLike,
+  hotelId: string,
+  activityId: string,
+  cycleId: string,
+  guestIdentity: string,
+  singer: string,
+  song: string,
+  artist: string
+) {
+  const activeStatusSql = "status NOT IN ('Retirada del Player', 'Eliminada', 'Cancelada')";
+  const repeatedSingerStatement = guestIdentity
+    ? db.prepare(`
+        SELECT 1 AS found FROM guest_star_requests
+        WHERE hotel_id = ? AND activity_id = ? AND cycle_id = ? AND archived_at = ''
+          AND source_type = ? AND ${activeStatusSql}
+        LIMIT 1
+      `).bind(hotelId, activityId, cycleId, `public_request:${guestIdentity}`)
+    : db.prepare(`
+        SELECT 1 AS found FROM guest_star_requests
+        WHERE hotel_id = ? AND activity_id = ? AND cycle_id = ? AND archived_at = ''
+          AND singer = ? COLLATE NOCASE AND ${activeStatusSql}
+        LIMIT 1
+      `).bind(hotelId, activityId, cycleId, singer);
+  const duplicateSongStatement = db.prepare(`
+    SELECT 1 AS found FROM guest_star_requests
+    WHERE hotel_id = ? AND activity_id = ? AND cycle_id = ? AND archived_at = ''
+      AND ${activeStatusSql}
+      AND (
+        (song = ? COLLATE NOCASE AND artist = ? COLLATE NOCASE) OR
+        (song = ? COLLATE NOCASE AND artist = ? COLLATE NOCASE)
+      )
+    LIMIT 1
+  `).bind(hotelId, activityId, cycleId, song, artist, artist, song);
+  const [repeatedSinger, duplicateSong] = await Promise.all([
+    repeatedSingerStatement.first<{ found: number }>(),
+    duplicateSongStatement.first<{ found: number }>()
+  ]);
+  return { repeatedSinger: Boolean(repeatedSinger), duplicateSong: Boolean(duplicateSong) };
 }
 
 async function publicGuestIdentity(hotelId: string, deviceId: unknown) {
@@ -2418,48 +2875,74 @@ async function publicGuestIdentity(hotelId: string, deviceId: unknown) {
   return (await sha256Hex(`guest-device|${hotelId}|${candidate}`)).slice(0, 32);
 }
 
-export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams) {
-  const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
-  const requestedKey = text(identifier)
-    .replace(/^https?:\/\/[^/]+\/h\//i, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (requestedKey === "default") {
-    const fallback = await defaultGoogleFallbackSetting(db);
-    if (fallback.enabled) {
-      const fallbackHotel = await getRecord(db, "Hotels", fallback.hotelId);
-      if (fallbackHotel) {
-        await processD1ActivitySchedules(db, fallback.hotelId);
-        return {
-          ...await publicExperience(db, fallbackHotel, fallback.activityId),
-          accepting: false,
-          googleFallback: {
-            enabled: true,
-            formUrl: fallback.formUrl,
-            hotelId: fallback.hotelId,
-            activityId: fallback.activityId
-          }
-        };
-      }
-    }
+async function acquirePublicScheduleLease(db: D1DatabaseLike, hotelId: string) {
+  const token = randomToken(32);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + PUBLIC_SCHEDULE_LEASE_MS).toISOString();
+  const key = `public_schedule_check:${hotelId}`;
+  const result = await db.prepare(`
+    INSERT INTO guest_star_meta (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+    WHERE guest_star_meta.updated_at <= ?
+  `).bind(key, token, expiresAt, now.toISOString()).run();
+  const changes = Number(result.meta?.changes);
+  if (Number.isFinite(changes)) return changes > 0;
+  const row = await db.prepare(
+    "SELECT value FROM guest_star_meta WHERE key = ? LIMIT 1"
+  ).bind(key).first<{ value: string }>();
+  return row?.value === token;
+}
+
+async function processPublicSchedules(db: D1DatabaseLike, hotelId: string) {
+  if (!hotelId) return false;
+  let checks = publicScheduleChecks.get(db as object);
+  if (!checks) {
+    checks = new Map<string, PublicScheduleCheckState>();
+    publicScheduleChecks.set(db as object, checks);
   }
+  let state = checks.get(hotelId);
+  if (!state) {
+    state = { nextCheckAt: 0 };
+    checks.set(hotelId, state);
+  }
+  if (state.operation) return state.operation;
+  const now = Date.now();
+  if (state.nextCheckAt > now) return false;
+  state.nextCheckAt = now + PUBLIC_SCHEDULE_CHECK_INTERVAL_MS;
+  const operation = (async () => {
+    if (!await acquirePublicScheduleLease(db, hotelId)) return false;
+    const changes = await processD1ActivitySchedules(db, hotelId);
+    return changes.some((change) => text(change.action) === "opened");
+  })();
+  state.operation = operation;
+  try {
+    return await operation;
+  } finally {
+    if (state.operation === operation) delete state.operation;
+  }
+}
+
+export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams): Promise<JsonObject> {
+  const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
   let context = await resolvePublicContext(db, identifier);
   if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  await processD1ActivitySchedules(db, text(context.hotel.hotelId));
+  if (await processPublicSchedules(db, text(context.hotel.hotelId))) {
+    context = await resolvePublicContext(db, identifier) || context;
+  }
   return publicExperience(db, context.hotel, context.activityId);
 }
 
 export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const action = text(body.action);
   const identifier = body.publicCode || body.hotel || body.hotelCode;
-  const requestedKey = text(identifier)
-    .replace(/^https?:\/\/[^/]+\/h\//i, "")
-    .replace(/^\/+|\/+$/g, "");
-  if (requestedKey === "default" && (await defaultGoogleFallbackSetting(db)).enabled) {
-    return { ok: false, code: "GOOGLE_FALLBACK_ACTIVE" };
-  }
   let publicContext = await resolvePublicContext(db, identifier);
   if (!publicContext) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  await processD1ActivitySchedules(db, text(publicContext.hotel.hotelId));
+  if (await processPublicSchedules(db, text(publicContext.hotel.hotelId))) {
+    publicContext = await resolvePublicContext(db, identifier) || publicContext;
+  }
   const hotel = publicContext.hotel;
   const publicActivityId = publicContext.activityId;
   const hotelId = text(hotel.hotelId);
@@ -2535,17 +3018,22 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   }
   const guestIdentity = await publicGuestIdentity(hotelId, body.guestDeviceId);
   const sourceType = guestIdentity ? `public_request:${guestIdentity}` : "public_request";
-  const requests = (await activeRequests(db, hotelId, text(activity.activityId)))
-    .filter((request) => !["Eliminada", "Cancelada"].includes(request.status));
+  const cycleId = text(activity.currentCycleId);
   const metadataKey = requestMetadataKey(song, artist);
-  const exactExisting = requests.find((request) => {
-    if (duplicateKey(request.singer) !== duplicateKey(singer)) return false;
-    if (requestMetadataKey(request.song, request.artist) !== metadataKey) return false;
-    const existingIdentity = publicGuestIdentityFromSource(request.sourceType);
-    return guestIdentity && existingIdentity
-      ? guestIdentity === existingIdentity
-      : !guestIdentity || !existingIdentity;
-  });
+  const deterministicRequestId = guestIdentity
+    ? `req-${(await sha256Hex([
+        hotelId, text(activity.activityId), cycleId, guestIdentity,
+        duplicateKey(singer), metadataKey
+      ].join("|"))).slice(0, 32)}`
+    : "";
+  const exactExisting = deterministicRequestId
+    ? await findActiveRequest(db, hotelId, deterministicRequestId)
+    : (await currentCycleRequests(db, hotelId, activity)).find((request) => (
+        text(request.cycleId) === cycleId &&
+        !["Retirada del Player", "Eliminada", "Cancelada"].includes(request.status) &&
+        duplicateKey(request.singer) === duplicateKey(singer) &&
+        requestMetadataKey(request.song, request.artist) === metadataKey
+      ));
   if (exactExisting) {
     return {
       ok: true,
@@ -2554,13 +3042,8 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
       backupNeeded: false
     };
   }
-  const repeatedSinger = requests.some((request) => {
-    const existingIdentity = publicGuestIdentityFromSource(request.sourceType);
-    if (guestIdentity && existingIdentity) return guestIdentity === existingIdentity;
-    return duplicateKey(request.singer) === duplicateKey(singer);
-  });
-  const duplicateSong = requests.some((request) =>
-    requestMetadataKey(request.song, request.artist) === metadataKey
+  const { repeatedSinger, duplicateSong } = await currentCycleDuplicateSignals(
+    db, hotelId, text(activity.activityId), cycleId, guestIdentity, singer, song, artist
   );
   if (!bool(body.confirmDuplicate) && (repeatedSinger || duplicateSong)) {
     return {
@@ -2574,30 +3057,22 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   if (!await checkRateLimit(db, rateKey, 8, 60)) return { ok: false, code: "RATE_LIMITED" };
   const durationSeconds = Math.max(0, numberValue(body.durationSeconds));
   const transitionSeconds = Math.max(0, numberValue(activity.defaultTransitionSeconds, 30));
-  const previousAccumulated = requests.reduce((maximum, request) => Math.max(maximum, request.accumulatedSeconds), 0);
-  const accumulatedSeconds = previousAccumulated + durationSeconds + transitionSeconds;
   const total = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
   const stamp = nowIso();
-  const deterministicRequestId = guestIdentity
-    ? `req-${(await sha256Hex([
-        hotelId, text(activity.activityId), text(activity.currentCycleId), guestIdentity,
-        duplicateKey(singer), metadataKey
-      ].join("|"))).slice(0, 32)}`
-    : randomId();
+  const requestId = deterministicRequestId || randomId();
   const request: GuestStarRequest = {
-    rowId: deterministicRequestId, requestId: deterministicRequestId, hotelId,
+    rowId: requestId, requestId, hotelId,
     venueId: text(activity.venueId), activityId: text(activity.activityId),
     cycleId: text(activity.currentCycleId), singer, song, artist,
     comment: limitedText(body.comment, 500), language: limitedText(body.language, 40), languageCode: requestedLanguage,
-    durationSeconds, transitionSeconds, accumulatedSeconds,
-    remainingSeconds: Math.max(0, total - accumulatedSeconds),
+    durationSeconds, transitionSeconds, accumulatedSeconds: 0,
+    remainingSeconds: total,
     sourceUrl: "", status: "Pendiente", fileName: "", sourceType,
-    virtualDJItemId: "", queuePosition: requests.length + 1, syncState: "pending",
+    virtualDJItemId: "", queuePosition: 0, syncState: "pending",
     lastSeenAt: "", stateRevision: 1, createdAt: stamp, updatedAt: stamp, archivedAt: ""
   };
-  await upsertRequest(db, request);
-  await appendOutbox(db, "request.upsert", { request });
-  return { ok: true, id: request.requestId, backupNeeded: true };
+  const savedRequest = await insertPublicRequestAtomically(db, request, total);
+  return { ok: true, id: savedRequest.requestId, backupNeeded: false };
 }
 
 export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): Promise<JsonObject | null> {
@@ -2619,7 +3094,9 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "createOneTimeLoginCode") return await createOneTimeCode(db, auth);
     if (action === "adminState") return await adminState(db, auth);
     if (action === "setDefaultPublicExperience") return await setDefaultPublicExperience(db, auth, body);
-    if (action === "setDefaultGoogleFallback") return await setDefaultGoogleFallback(db, auth, body);
+    if (action === "setDefaultGoogleFallback") {
+      return { ok: false, code: "GOOGLE_REQUEST_BACKUP_DISABLED" };
+    }
     if (action === "createHost") return await createHost(db, auth, body);
     if (action === "updateHost") return await updateHost(db, auth, body);
     if (action === "setHostPassword") return await setHostPassword(db, auth, body);
@@ -2640,11 +3117,13 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     }
     if (action === "startActivityV4") return await startActivity(db, auth, body, false);
     if (action === "startNewActivityV4") return await startActivity(db, auth, body, true);
+    if (action === "playerRuntimeUpdate") return await updatePlayerRuntime(db, auth, body);
     if (action === "finishActivityV4") return await finishActivity(db, auth, body);
     if (action === "archiveClearQueue") return await archiveQueue(db, auth, body);
     if (action === "toggleRequests") return await toggleRequests(db, auth, body);
     if (action === "updateActivitySettings") return await updateActivitySettings(db, auth, body);
     if (action === "scheduleActivity") return await scheduleActivity(db, auth, body);
+    if (action === "updateSchedule") return await updateSchedule(db, auth, body);
     if (action === "cancelSchedule") return await cancelSchedule(db, auth, body);
     if (action === "updateHotelBranding") return await updateBranding(db, auth, body);
     if (action === "listReviews") return await listReviewsAction(db, auth, body);
@@ -2683,6 +3162,7 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
 }
 
 export async function setD1BackendMode(db: D1DatabaseLike, mode: "apps_script" | "d1_primary") {
+  if (mode !== "d1_primary") throw new Error("D1_ONLY_MODE");
   if (mode === "d1_primary") {
     const status = await getMeta(db, "migration_status");
     if (status !== "ready" && status !== "active") throw new Error("D1_MIGRATION_NOT_READY");
@@ -2693,7 +3173,7 @@ export async function setD1BackendMode(db: D1DatabaseLike, mode: "apps_script" |
     }
   }
   await setMeta(db, "backend_mode", mode);
-  await setMeta(db, "migration_status", mode === "d1_primary" ? "active" : "ready");
+  await setMeta(db, "migration_status", "active");
   return { ok: true, mode };
 }
 

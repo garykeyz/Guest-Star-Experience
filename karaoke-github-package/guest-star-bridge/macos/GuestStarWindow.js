@@ -55,7 +55,7 @@ function createDelegate() {
         "openLog:": {
           types: ["void", ["id"]],
           implementation: function () {
-            const path = $.NSHomeDirectory.stringByAppendingPathComponent("Library/Logs/Guest Star Bridge.log");
+            const path = $.NSHomeDirectory.stringByAppendingPathComponent("Library/Logs/Guest Star.log");
             $.NSWorkspace.sharedWorkspace.openURL($.NSURL.fileURLWithPath(path));
           },
         },
@@ -82,14 +82,14 @@ function addMenu(menuBar, title, items) {
 
 function createMenu(app, delegate) {
   const menuBar = $.NSMenu.alloc.init;
-  addMenu(menuBar, "Guest Star Bridge", [
-    menuItem("Acerca de Guest Star Bridge", "showAbout:", "", delegate),
+  addMenu(menuBar, "Guest Star", [
+    menuItem("Acerca de Guest Star", "showAbout:", "", delegate),
     menuItem("Configuración…", "openSettings:", ",", delegate),
     null,
-    menuItem("Salir de Guest Star Bridge", "terminate:", "q", app)
+    menuItem("Salir de Guest Star", "terminate:", "q", app)
   ]);
   addMenu(menuBar, "Actividad", [
-    menuItem("Evento en vivo", "openLiveEvent:", "l", delegate),
+    menuItem("Bridge (VirtualDJ)", "openLiveEvent:", "l", delegate),
     menuItem("Cambiar actividad…", "switchActivity:", "k", delegate),
     menuItem("Administración Superhost", "openAdministration:", "h", delegate)
   ]);
@@ -114,7 +114,7 @@ function createMenu(app, delegate) {
 
 const app = $.NSApplication.sharedApplication;
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
-try { $.NSProcessInfo.processInfo.processName = "Guest Star Bridge"; } catch (_) { /* menu title still owns the visible name */ }
+try { $.NSProcessInfo.processInfo.processName = "Guest Star"; } catch (_) { /* menu title still owns the visible name */ }
 const delegate = createDelegate();
 createMenu(app, delegate);
 
@@ -131,7 +131,7 @@ const window =
     $.NSBackingStoreBuffered,
     false
   );
-window.title = "Guest Star Bridge";
+window.title = "Guest Star";
 windowRef = window;
 window.releasedWhenClosed = false;
 window.minSize = $.NSMakeSize(900, 620);

@@ -1,16 +1,16 @@
-GUEST STAR BRIDGE 4.3.9 UNIVERSAL PARA MAC
+GUEST STAR 4.4.0 UNIVERSAL PARA MAC
 
 Compatible con Mac Intel y Apple Silicon M1, M2, M3, M4 y M5.
 
-1. Mueve Guest Star Bridge.app a Aplicaciones.
+1. Mueve Guest Star.app a Aplicaciones.
 2. La primera vez, haz clic derecho sobre la app y selecciona Abrir.
 3. Inicia sesión con la cuenta Host creada por el Superhost.
 4. Selecciona el hotel, sede y actividad asignados.
-5. Lee GUIA-MAC-SOLO-BRIDGE.txt para configurar VirtualDJ y la biblioteca.
+5. Elige Player interno o Bridge VirtualDJ antes de iniciar la actividad.
 
 No necesitas abrir Sheets, Apps Script, Node, npm ni Terminal. La cuenta Google
 es opcional y puede usarse para iniciar sesión si el Superhost la registró.
-Las credenciales del Bridge se guardan en macOS Keychain.
+Las credenciales de Guest Star se guardan en macOS Keychain.
 
-La aplicación recibe solicitudes, muestra comentarios, reconcilia la cola real
-de VirtualDJ, calcula tiempos exactos y respeta el idioma de cada canción.
+La aplicación recibe solicitudes, reproduce video local en Star Screen o
+reconcilia la cola de VirtualDJ, calcula tiempos exactos y respeta el idioma.

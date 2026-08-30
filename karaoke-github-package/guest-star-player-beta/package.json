@@ -1,0 +1,12 @@
+{
+  "name": "guest-star-beta",
+  "version": "0.3.0-beta.1",
+  "private": true,
+  "type": "module",
+  "description": "Guest Star con modo Player interno y modo Bridge para VirtualDJ.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test"
+  }
+}

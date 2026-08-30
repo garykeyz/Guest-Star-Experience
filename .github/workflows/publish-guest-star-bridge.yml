@@ -1,4 +1,4 @@
-name: Publish Guest Star Bridge Release
+name: Publish Guest Star Release
 
 on:
   push:
@@ -91,11 +91,48 @@ jobs:
         working-directory: karaoke-github-package
         run: npx wrangler deploy --dry-run
 
+  deploy-production:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    steps:
+      - name: Check out verified commit
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: karaoke-github-package/package-lock.json
+
+      - name: Install exact dependencies
+        working-directory: karaoke-github-package
+        run: npm ci --ignore-scripts
+
+      - name: Require production Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+      - name: Deploy the exact verified commit to Cloudflare production
+        working-directory: karaoke-github-package
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
+
   macos-package-check:
     if: github.event_name == 'pull_request'
     needs: validate
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
@@ -105,6 +142,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Set up Node.js for the bundled AI engine
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
 
       - name: Install build dependencies
         run: |
@@ -120,6 +162,43 @@ jobs:
             https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
 
+      - name: Build and exercise the Universal AI Stems engine
+        run: |
+          engine_root="$RUNNER_TEMP/guest-star-stem-engine"
+          mkdir -p "$engine_root"
+          (
+            cd "$engine_root"
+            npm init --yes >/dev/null
+            npm pkg set private=true overrides.adm-zip=0.6.0
+          )
+          npm install \
+            --prefix "$engine_root" \
+            --omit=dev \
+            --no-audit \
+            --no-fund \
+            --save-exact \
+            demucs@1.0.0 \
+            onnxruntime-node@1.23.2 \
+            ffmpeg-static@5.3.0 \
+            ffprobe-static@3.1.0
+          case "$(uname -m)" in
+            arm64) current_arch="arm64"; other_arch="x64" ;;
+            x86_64) current_arch="x64"; other_arch="arm64" ;;
+            *) exit 1 ;;
+          esac
+          ffmpeg_dir="$engine_root/node_modules/ffmpeg-static"
+          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$current_arch"
+          npm_config_arch="$other_arch" npm rebuild --prefix "$engine_root" ffmpeg-static
+          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$other_arch"
+          lipo -create \
+            "$ffmpeg_dir/ffmpeg-arm64" \
+            "$ffmpeg_dir/ffmpeg-x64" \
+            -output "$ffmpeg_dir/ffmpeg"
+          chmod +x "$ffmpeg_dir/ffmpeg"
+          lipo "$ffmpeg_dir/ffmpeg" -verify_arch arm64 x86_64
+          npm audit --prefix "$engine_root" --omit=dev --audit-level=high
+          node karaoke-github-package/guest-star-bridge/scripts/stems-engine-smoke.mjs "$engine_root"
+
       - name: Build and verify the Universal Mac package
         run: |
           version="$(python3 -c 'import json; print(json.load(open("karaoke-github-package/guest-star-bridge/package.json"))["version"])')"
@@ -128,17 +207,18 @@ jobs:
           python3 karaoke-github-package/guest-star-bridge/macos/build_installer.py \
             --node-arm64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" \
             --node-x64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" \
+            --stem-engine-root "$RUNNER_TEMP/guest-star-stem-engine" \
             --output-dir "$output"
-          test -s "$output/Guest-Star-Bridge-Universal-v${version}-app.zip"
-          test -s "$output/Guest-Star-Bridge-Universal-v${version}.dmg"
-          unzip -t "$output/Guest-Star-Bridge-Universal-v${version}-app.zip"
-          hdiutil verify "$output/Guest-Star-Bridge-Universal-v${version}.dmg"
+          test -s "$output/Guest-Star-Universal-v${version}-app.zip"
+          test -s "$output/Guest-Star-Universal-v${version}.dmg"
+          unzip -t "$output/Guest-Star-Universal-v${version}-app.zip"
+          hdiutil verify "$output/Guest-Star-Universal-v${version}.dmg"
 
   release:
     if: github.event_name != 'pull_request'
     needs: validate
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
@@ -148,6 +228,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Set up Node.js for the bundled AI engine
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
 
       - name: Read release version
         id: release_meta
@@ -170,6 +255,43 @@ jobs:
             https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
 
+      - name: Build and exercise the Universal AI Stems engine
+        run: |
+          engine_root="$RUNNER_TEMP/guest-star-stem-engine"
+          mkdir -p "$engine_root"
+          (
+            cd "$engine_root"
+            npm init --yes >/dev/null
+            npm pkg set private=true overrides.adm-zip=0.6.0
+          )
+          npm install \
+            --prefix "$engine_root" \
+            --omit=dev \
+            --no-audit \
+            --no-fund \
+            --save-exact \
+            demucs@1.0.0 \
+            onnxruntime-node@1.23.2 \
+            ffmpeg-static@5.3.0 \
+            ffprobe-static@3.1.0
+          case "$(uname -m)" in
+            arm64) current_arch="arm64"; other_arch="x64" ;;
+            x86_64) current_arch="x64"; other_arch="arm64" ;;
+            *) exit 1 ;;
+          esac
+          ffmpeg_dir="$engine_root/node_modules/ffmpeg-static"
+          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$current_arch"
+          npm_config_arch="$other_arch" npm rebuild --prefix "$engine_root" ffmpeg-static
+          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$other_arch"
+          lipo -create \
+            "$ffmpeg_dir/ffmpeg-arm64" \
+            "$ffmpeg_dir/ffmpeg-x64" \
+            -output "$ffmpeg_dir/ffmpeg"
+          chmod +x "$ffmpeg_dir/ffmpeg"
+          lipo "$ffmpeg_dir/ffmpeg" -verify_arch arm64 x86_64
+          npm audit --prefix "$engine_root" --omit=dev --audit-level=high
+          node karaoke-github-package/guest-star-bridge/scripts/stems-engine-smoke.mjs "$engine_root"
+
       - name: Build app and downloadable packages
         env:
           VERSION: ${{ steps.release_meta.outputs.version }}
@@ -178,6 +300,7 @@ jobs:
           python3 karaoke-github-package/guest-star-bridge/macos/build_installer.py \
             --node-arm64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" \
             --node-x64-tarball "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" \
+            --stem-engine-root "$RUNNER_TEMP/guest-star-stem-engine" \
             --output-dir "$GITHUB_WORKSPACE/release-output"
 
           (
@@ -223,8 +346,8 @@ jobs:
           (
             cd "$GITHUB_WORKSPACE/release-output"
             shasum -a 256 \
-              "Guest-Star-Bridge-Universal-v${VERSION}-app.zip" \
-              "Guest-Star-Bridge-Universal-v${VERSION}.dmg" \
+              "Guest-Star-Universal-v${VERSION}-app.zip" \
+              "Guest-Star-Universal-v${VERSION}.dmg" \
               "guest-star-experience-sync-v${VERSION}.zip" \
               "guest-star-bridge-v${VERSION}-source.zip" \
               "Guest-Star-Experience-v${VERSION}-Guides.zip" \
@@ -241,8 +364,8 @@ jobs:
         run: |
           tag="v${VERSION}"
           assets=(
-            "release-output/Guest-Star-Bridge-Universal-v${VERSION}-app.zip"
-            "release-output/Guest-Star-Bridge-Universal-v${VERSION}.dmg"
+            "release-output/Guest-Star-Universal-v${VERSION}-app.zip"
+            "release-output/Guest-Star-Universal-v${VERSION}.dmg"
             "release-output/guest-star-experience-sync-v${VERSION}.zip"
             "release-output/guest-star-bridge-v${VERSION}-source.zip"
             "release-output/Guest-Star-Experience-v${VERSION}-Guides.zip"
@@ -261,5 +384,5 @@ jobs:
             gh release create "$tag" "${assets[@]}" \
               --target "$GITHUB_SHA" \
               --title "Guest Star Experience ${VERSION} Universal" \
-              --notes "Guest Star ${VERSION} keeps the origin of every physical VirtualDJ row strict and durable. A row added directly in VirtualDJ remains an external VDJ track and cannot be adopted by a request merely because its file, title, artist or duration matches. Inferred request links require the physical VirtualDJ singer to match the requesting singer; stale inferred links from earlier versions are re-evaluated against the original request singer. An explicit Bridge insertion or replacement remains authoritative through reordering and low metadata confidence, and only its exact stable physical identifier can override external provenance. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, Code.gs, source packages, checksums and guides."
+              --notes "Guest Star ${VERSION} integrates the internal Player and the optional VirtualDJ Bridge in one application. The Host selects one playback mode before starting and that choice remains locked for the entire activity. Player includes Star Screen, local karaoke video, queue controls, background music, three-band EQ and cached AI stems. Running activities resume from D1 after restarting or opening another authorized Mac. This release also adds editable one-time and recurring schedules with weekday-specific post-event announcements, and keeps the public request path fully on Cloudflare D1 for concurrent events. Universal download for Intel and Apple Silicon Macs; includes APP ZIP, DMG, source packages, checksums and guides."
           fi

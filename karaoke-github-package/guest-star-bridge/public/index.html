@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#100715" />
     <meta name="google" content="notranslate" />
-    <title>Guest Star Bridge</title>
+    <title>Guest Star</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/player-beta.css" />
   </head>
   <body>
     <div class="glow glow-one"></div>
@@ -14,8 +15,8 @@
     <header class="topbar">
       <div>
         <p class="eyebrow notranslate" translate="no" data-brand>✦ GUEST STAR EXPERIENCE</p>
-        <h1 class="notranslate" translate="no" data-brand>Guest Star <span>Bridge</span></h1>
-        <p class="subtitle">Local library · YouTube · Live VirtualDJ Karaoke queue</p>
+        <h1 class="notranslate" translate="no" data-brand>Guest Star</h1>
+        <p class="subtitle">Solicitudes · Biblioteca local · Player interno · Bridge VirtualDJ</p>
       </div>
       <div class="topbar-actions">
         <label class="bridge-language-control" aria-label="Bridge language">
@@ -26,21 +27,152 @@
           </select>
         </label>
         <button class="button ghost hidden" id="openHostPanel">Superhost</button>
-        <button class="button ghost hidden" id="liveEventButton">Evento en vivo</button>
+        <button class="button ghost hidden" id="liveEventButton">Bridge (VirtualDJ)</button>
+        <button class="button player-beta-button hidden" id="playerBetaButton">Player</button>
+        <button class="button ghost hidden" id="playbackModeButton">Elegir modo</button>
         <button class="button ghost hidden" id="switchActivity">Switch Activity</button>
         <button class="button ghost hidden" id="changePasswordButton">Change Password</button>
         <button class="button ghost hidden" id="logoutButton">Log Out</button>
-        <div class="live-pill"><i></i> LOCAL BRIDGE</div>
+        <div class="live-pill"><i></i> GUEST STAR 4.4.0</div>
       </div>
     </header>
 
     <main>
+      <section id="playerWorkspace" class="player-workspace hidden" aria-live="polite">
+        <header class="player-hero">
+          <div class="player-branding">
+            <img id="playerHotelLogo" class="player-hotel-logo hidden" alt="Logo del hotel" />
+            <div id="playerHotelFallback" class="player-hotel-fallback">GS</div>
+            <div><p class="eyebrow">GUEST STAR PLAYER</p><h2 id="playerActivityName">Actividad actual</h2><p id="playerHotelName">Selecciona un hotel y una actividad.</p></div>
+          </div>
+          <div class="player-mode-actions">
+            <div class="player-mode-lock"><span id="playerModeBadge">PLAYER</span><small id="playerModeLock">Configura el modo antes de iniciar</small></div>
+            <button class="button primary" id="playerOpenStarScreen">Abrir Star Screen ↗</button>
+            <button class="button ghost" id="playerClose">Volver a Guest Star</button>
+          </div>
+          <nav class="player-live-dock" aria-label="Paneles del Host">
+            <button class="button ghost" type="button" data-player-drawer="summary">Resumen</button>
+            <button class="button ghost" type="button" data-player-drawer="library">Biblioteca</button>
+            <button class="button ghost" type="button" data-player-drawer="background">Ambiente</button>
+            <button class="button ghost" type="button" data-player-drawer="history">Historial</button>
+          </nav>
+        </header>
+
+        <section class="player-drawer player-summary-drawer" data-player-drawer-panel="summary" aria-label="Resumen de la actividad">
+          <header><div><p class="eyebrow">OPERACIÓN EN VIVO</p><h2>Resumen de la actividad</h2></div><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></header>
+        <div class="player-status-grid" aria-label="Estado del Player">
+          <article><i>♫</i><div><small>BIBLIOTECA</small><strong id="playerLibraryMetric">0 pistas</strong><p id="playerLibraryDetail">Preparando biblioteca local</p></div></article>
+          <article><i>◎</i><div><small>SOLICITUDES</small><strong id="playerRequestsMetric">0 solicitudes</strong><p id="playerRequestsDetail">Esperando sincronización</p></div></article>
+          <article><i>▶</i><div><small>PLAYER INTERNO</small><strong id="playerEngineMetric">Listo</strong><p id="playerEngineDetail">Sin VirtualDJ</p></div></article>
+          <article><i>●</i><div><small>ACTIVIDAD</small><strong id="playerActivityMetric">Lista para iniciar</strong><p id="playerActivityDetail">Elige el modo de reproducción</p></div></article>
+        </div>
+
+        <div class="player-time-grid" aria-label="Resumen de tiempos">
+          <article><small>TIEMPO TRANSCURRIDO</small><strong id="playerElapsedTime">0:00:00</strong><p id="playerElapsedDetail">El reloj inicia con la actividad</p></article>
+          <article><small>CANTADAS + EN FILA</small><strong id="playerConfirmedTime">0:00:00</strong><p id="playerConfirmedDetail">0 canciones confirmadas</p></article>
+          <article><small>TOTAL SOLICITADO</small><strong id="playerPlannedTime">0:00:00</strong><p id="playerPlannedDetail">Las omitidas no se incluyen</p></article>
+          <article id="playerCoverageCard"><small>COBERTURA DE LA ACTIVIDAD</small><strong id="playerCoverageTime">0:00:00 pendiente</strong><p id="playerCoverageDetail">Calculando rotación</p></article>
+        </div>
+
+        <div class="player-event-end"><div><small>HORA DE FINALIZACIÓN</small><strong id="playerEventEndTime">Sin iniciar</strong></div><p id="playerEventEndDetail">Configura la actividad y selecciona el modo de reproducción.</p></div>
+        </section>
+
+        <section class="player-activity-toolbar">
+          <div><p class="eyebrow" id="playerTenantPath">SELECCIONA UNA ACTIVIDAD</p><h2 id="playerSelectedActivityName">Guest Star Activity</h2><p id="playerActivityHeadline">Configura la actividad antes de iniciar.</p></div>
+          <div class="player-operation-actions">
+            <div><button class="button ghost" id="playerShare">Compartir</button><button class="button ghost" id="playerSettings" aria-label="Configurar actividad">⚙</button></div>
+            <label class="toggle">Solicitudes <b id="playerRequestsToggleLabel">Cerradas</b><input id="playerRequestsToggle" type="checkbox" /><span></span></label>
+            <button class="button primary" id="playerPrimaryActivity">Iniciar actividad</button>
+            <div><button class="button ghost" id="playerScan">↻ Escanear biblioteca</button><button class="button ghost" id="playerSync">Actualizar solicitudes</button></div>
+          </div>
+        </section>
+
+        <div class="player-layout">
+          <section class="player-screen-card">
+            <header class="player-preview-head"><div><p class="eyebrow">STAR SCREEN</p><h3>Preview de la segunda pantalla</h3></div><span><i></i> EN TIEMPO REAL</span></header>
+            <div class="player-star-screen-shell"><iframe id="playerStarScreenPreview" src="/star-screen.html?preview=1" title="Preview en vivo de Star Screen" allow="autoplay"></iframe></div>
+            <video id="playerMedia" class="player-engine-media" playsinline preload="metadata"></video>
+            <audio id="playerInstrumentalAudio" preload="metadata"></audio>
+            <audio id="playerVocalsAudio" preload="metadata"></audio>
+            <div class="player-transport-panel" aria-label="Controles compactos del Player">
+              <div class="player-transport-summary"><div class="player-now"><span>PISTA KARAOKE SELECCIONADA</span><h3 id="playerNowSong">Selecciona una canción</h3><p id="playerNowSinger">La cola se toma de las solicitudes de esta actividad.</p></div><span id="playerMediaStatus">Motor preparado</span></div>
+              <canvas id="playerWaveform" class="player-waveform" width="1200" height="90" aria-label="Forma de onda en vivo"></canvas>
+              <div class="player-timecode"><span id="playerCurrentTime">0:00</span><span id="playerDuration">0:00</span></div>
+              <input id="playerSeek" type="range" min="0" max="0" value="0" aria-label="Posición de reproducción" />
+              <div class="player-controls">
+                <button class="button ghost" id="playerRestart"><span>⏮ Reiniciar</span><kbd>⇧R</kbd></button>
+                <button class="button primary" id="playerPlay"><span id="playerPlayLabel">▶ Reproducir</span><kbd>⇧Espacio</kbd></button>
+                <button class="button ghost" id="playerReturn"><span>↩ Devolver</span><kbd>⇧B</kbd></button>
+                <button class="button ghost" id="playerSkip"><span>↷ Saltar</span><kbd>⇧S</kbd></button>
+                <button class="button primary" id="playerComplete"><span>✓ Ya cantó</span><kbd>⇧C</kbd></button>
+                <button class="button danger" id="playerRemove"><span>× Quitar</span><kbd>⇧X</kbd></button>
+              </div>
+              <div class="player-audio-controls"><button class="button ghost" id="playerMute">🔊 Audio</button><input id="playerVolume" type="range" min="0" max="1" value="1" step="0.05" aria-label="Volumen del Player" /><small>Atajos: ⇧↑/⇧↓ cambian el turno seleccionado</small></div>
+              <section class="player-audio-lab" id="playerAudioLab" aria-label="Audio profesional del Player">
+                <header><strong>EQ KARAOKE</strong><button class="button ghost" type="button" id="playerEqReset">Reset</button></header>
+                <div class="player-eq-grid" aria-label="Ecualizador de tres bandas para karaoke">
+                  <label for="playerEqLow"><span class="player-knob-shell"><input id="playerEqLow" type="range" min="-12" max="12" value="0" step="1" /></span><b>Graves</b><output id="playerEqLowValue">0 dB</output></label>
+                  <label for="playerEqMid"><span class="player-knob-shell"><input id="playerEqMid" type="range" min="-12" max="12" value="0" step="1" /></span><b>Medios</b><output id="playerEqMidValue">0 dB</output></label>
+                  <label for="playerEqHigh"><span class="player-knob-shell"><input id="playerEqHigh" type="range" min="-12" max="12" value="0" step="1" /></span><b>Agudos</b><output id="playerEqHighValue">0 dB</output></label>
+                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control hidden"><span>Voz guía IA</span><input id="playerVocalLevel" type="range" min="0" max="1" value="0" step="0.01" /><output id="playerVocalLevelValue">0%</output></label>
+                </div>
+              </section>
+            </div>
+          </section>
+          <section class="player-queue-card">
+            <header><div><p class="eyebrow">FILA DEL PLAYER</p><h3>Solicitudes activas</h3><small>Selecciona, sube, baja, marca o retira cualquier turno.</small></div><span id="playerQueueCount">0</span></header>
+            <div id="playerQueue" class="player-queue-list"></div>
+          </section>
+        </div>
+        <section class="player-library-card player-drawer" data-player-drawer-panel="library">
+          <header><div><p class="eyebrow">BIBLIOTECA KARAOKE LOCAL</p><h3>Busca una pista y asígnala a un cantante</h3></div><div class="player-library-tools"><small id="playerLibraryAutoState">Detección automática activa</small><div class="player-library-search"><input id="playerLibrarySearch" type="search" placeholder="Buscar título o archivo…"><button class="button ghost" id="playerLibraryRefresh">Buscar / mostrar</button><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></div></div></header>
+          <div id="playerLibraryList" class="player-library-list"><p class="player-empty">Al seleccionar una pista, Guest Star te pedirá inmediatamente el nombre del cantante.</p></div>
+        </section>
+        <section class="player-background-card player-drawer" data-player-drawer-panel="background">
+          <header>
+            <div><p class="eyebrow">MÚSICA DE FONDO · STAR SCREEN</p><h3>Ambientación automática entre cantantes</h3><p>Se reproduce aleatoriamente solo mientras Star Screen muestra Star Lineup.</p></div>
+            <div class="player-drawer-title-actions"><span id="playerBackgroundCount">0 pistas</span><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></div>
+          </header>
+          <div class="player-background-layout">
+            <div class="player-background-now"><small>SONANDO EN EL LOBBY</small><strong id="playerBackgroundSong">Sin música configurada</strong><p id="playerBackgroundArtist">Selecciona una carpeta o un archivo de audio.</p><em id="playerBackgroundStatus">En espera</em></div>
+            <div class="player-background-controls">
+              <div><button class="button primary" id="playerBackgroundToggle"><span id="playerBackgroundToggleLabel">▶ Reproducir ambiente</span><kbd>⇧A</kbd></button><button class="button ghost" id="playerBackgroundNext"><span>Siguiente aleatoria</span><kbd>⇧N</kbd></button></div>
+              <label for="playerBackgroundVolume"><span>Volumen de música de fondo</span><output id="playerBackgroundVolumeValue">55%</output></label>
+              <input id="playerBackgroundVolume" type="range" min="0" max="1" value="0.55" step="0.01" aria-label="Volumen independiente de música de fondo" />
+            </div>
+            <div class="player-background-sources">
+              <div><button class="button ghost" id="playerBackgroundChooseFolder">Elegir carpeta de audio</button><button class="button ghost" id="playerBackgroundChooseFile">Elegir archivo de audio</button></div>
+              <div class="player-background-picker">
+                <label for="playerBackgroundTrackSelect">Reproducir una canción específica</label>
+                <input id="playerBackgroundSearch" type="search" placeholder="Buscar música de fondo…" autocomplete="off" />
+                <div><select id="playerBackgroundTrackSelect" aria-label="Canción ambiental específica"><option value="">Selecciona una canción…</option></select><button class="button primary" id="playerBackgroundPlaySelected" type="button">▶ Reproducir</button></div>
+              </div>
+              <div id="playerBackgroundSources"><p class="player-empty">Aún no se configuró música de fondo.</p></div>
+            </div>
+          </div>
+          <audio id="playerBackgroundAudio" preload="metadata"></audio>
+        </section>
+        <section class="player-completed-card player-drawer" data-player-drawer-panel="history"><header><div><p class="eyebrow">HISTORIAL DE LA ACTIVIDAD</p><h3>Completadas / Omitidas</h3><p>Solo Deshacer puede devolverlas a la fila del Player.</p></div><div class="player-drawer-title-actions"><span id="playerCompletedCount">0</span><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></div></header><div id="playerCompleted" class="player-completed-list"></div></section>
+        <section class="player-share-card"><div><p class="eyebrow">SOLICITUDES DEL HOTEL</p><strong id="playerShareHotel">Guest Star</strong><small id="playerShareUrl">El QR usará el enlace público de la actividad actual.</small></div><img id="playerQr" alt="QR de solicitudes" /></section>
+      </section>
+
+      <dialog id="playerAssignSingerDialog" class="player-assign-dialog">
+        <form id="playerAssignSingerForm">
+          <header><div><p class="eyebrow">AGREGAR A LA FILA DEL PLAYER</p><h2>¿Quién va a cantar?</h2></div><button type="button" class="close-button" id="playerAssignSingerClose" aria-label="Cerrar">×</button></header>
+          <div class="player-assign-track"><span>VIDEO LOCAL</span><strong id="playerAssignSong">Canción</strong><small id="playerAssignArtist">Artista</small></div>
+          <label for="playerAssignSinger">Nombre del cantante</label>
+          <input id="playerAssignSinger" name="singer" autocomplete="off" maxlength="100" placeholder="Ej.: Gary" required />
+          <label id="playerAssignStemsOption" class="player-assign-stems hidden"><input id="playerAssignStems" type="checkbox" /><span><strong>Preparar instrumental con IA</strong><small>No entra en Star Lineup hasta terminar y validar instrumental + voz.</small></span></label>
+          <p>Esta pista se agregará como una entrada propia del Player y conservará este cantante.</p>
+          <div class="button-row"><button type="button" class="button ghost" id="playerAssignSingerCancel">Cancelar</button><button type="submit" class="button primary">Agregar a la fila</button></div>
+        </form>
+      </dialog>
       <section id="superhostWorkspace" class="superhost-workspace hidden" aria-live="polite">
         <header class="superhost-hero">
           <div>
             <p class="eyebrow notranslate" translate="no" data-brand>GUEST STAR EXPERIENCE</p>
             <h2 id="superhostTitle">Panel Superhost</h2>
-            <p id="superhostSubtitle">Administra toda la operación desde el Bridge.</p>
+            <p id="superhostSubtitle">Administra toda la operación desde Guest Star.</p>
           </div>
           <div class="language-switch" role="group" aria-label="Language">
             <button type="button" class="button ghost" data-superhost-language="es">Español</button>
@@ -273,7 +405,7 @@
 
     <dialog id="loginDialog" class="auth-dialog">
       <form id="loginForm">
-        <p class="eyebrow"><span>WELCOME TO</span> <span class="notranslate" translate="no" data-brand>GUEST STAR BRIDGE</span> · <span id="bridgeVersion">v—</span></p>
+        <p class="eyebrow"><span>WELCOME TO</span> <span class="notranslate" translate="no" data-brand>GUEST STAR</span> · <span id="bridgeVersion">v—</span></p>
         <h2>Sign in</h2>
         <p>Use the account created for you by the Superhost.</p>
         <label for="loginUsername">Username or email</label>
@@ -318,6 +450,17 @@
         </label>
         <p id="selectionError" class="form-error hidden"></p>
         <button type="submit" class="button primary">Use This Activity</button>
+      </form>
+    </dialog>
+
+    <dialog id="playbackModeDialog" class="playback-mode-dialog">
+      <form method="dialog">
+        <header><div><p class="eyebrow">MODO DE REPRODUCCIÓN</p><h2>¿Cómo funcionará esta actividad?</h2><p>Configura todo primero. Al iniciar, el modo elegido quedará bloqueado hasta finalizar.</p></div><button type="button" class="close-button" id="closePlaybackMode" aria-label="Cerrar">×</button></header>
+        <div class="playback-mode-options">
+          <button type="button" class="playback-mode-option player" data-playback-mode="player"><span>▶</span><div><strong>Player interno</strong><p>Guest Star reproduce los videos locales y controla Star Screen sin depender de otro programa.</p><small>RECOMENDADO</small></div></button>
+          <button type="button" class="playback-mode-option bridge" data-playback-mode="bridge"><span>VDJ</span><div><strong>Bridge con VirtualDJ</strong><p>Guest Star administra solicitudes y sincroniza la cola externa de VirtualDJ.</p><small>MODO COMPATIBILIDAD</small></div></button>
+        </div>
+        <div class="mode-warning"><strong>Bloqueo de seguridad</strong><p>No se podrá cambiar entre Player y Bridge mientras la actividad esté en curso.</p></div>
       </form>
     </dialog>
 

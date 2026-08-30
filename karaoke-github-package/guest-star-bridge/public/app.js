@@ -2,6 +2,7 @@ import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
 import { initSuperhostPanel } from "./superhost.js";
 import { createBridgeI18n } from "./bridge-i18n.js";
 import { preserveBridgeScroll } from "./scroll-preserver.js";
+import { initPlayerBeta } from "./player-beta.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const ACTIVITY_LANGUAGES = [
@@ -18,6 +19,7 @@ const successDialog = $("#successDialog");
 const confirmDialog = $("#confirmDialog");
 const loginDialog = $("#loginDialog");
 const selectionDialog = $("#selectionDialog");
+const playbackModeDialog = $("#playbackModeDialog");
 const passwordDialog = $("#passwordDialog");
 const shareDialog = $("#shareDialog");
 const moreDialog = $("#moreDialog");
@@ -30,16 +32,29 @@ let scanBusy = false;
 let syncBusy = false;
 let passwordChangeRequired = false;
 let rotationItems = [];
+let pendingActivityAction = "";
 const actionLocks = new Set();
 const hitSearchLocks = new Set();
 const expandedRequestIds = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
+let autoRestoredPlayerActivityId = "";
 const superhostPanel = initSuperhostPanel({
   api,
   showNotice,
   copyLink,
   openExternal
+});
+const playerPanel = initPlayerBeta({
+  api,
+  showNotice,
+  confirmAction,
+  operations: {
+    controlActivity: (action) => controlActivity(action),
+    openShare: () => $("#shareButton").click(),
+    openSettings: () => $("#settingsButton").click(),
+    scanLibrary: () => scan()
+  }
 });
 
 async function api(path, options = {}) {
@@ -377,6 +392,9 @@ function updateStatus() {
   const accepting = activity.accepting !== false;
   const summary = liveActivitySummary();
   const running = summary.activityRunning;
+  const selectedMode = state.operatingMode?.selected || "";
+  document.body.classList.toggle("player-activity-locked", running && selectedMode === "player");
+  document.body.classList.toggle("bridge-activity-locked", running && selectedMode === "bridge");
   setStatus(
     "#activityStatus",
     running ? "ok" : accepting ? "" : "error",
@@ -436,7 +454,15 @@ function updateStatus() {
   $("#settingsButton").disabled = !selectedActivity;
   const isSuperhost = authenticated && state.account?.user?.role === "superhost";
   $("#openHostPanel").classList.toggle("hidden", !isSuperhost || superhostPanel.isOpen());
-  $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen());
+  $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen() || (running && selectedMode === "player"));
+  $("#playerBetaButton").classList.toggle("hidden", !authenticated || playerPanel.isOpen() || (running && selectedMode === "bridge"));
+  $("#playbackModeButton").classList.toggle("hidden", !authenticated);
+  $("#playbackModeButton").disabled = running;
+  $("#playbackModeButton").textContent = running
+    ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"} 🔒`
+    : selectedMode
+      ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}`
+      : "Elegir modo";
   $("#switchActivity").classList.toggle("hidden", !authenticated);
   $("#changePasswordButton").classList.toggle("hidden", !authenticated);
   $("#logoutButton").classList.toggle("hidden", !authenticated);
@@ -1656,9 +1682,44 @@ function syncWhenActive() {
   void syncRequests({ quiet: true });
 }
 
+function openPlaybackModeDialog(action = "") {
+  if (state?.operatingMode?.locked) {
+    showNotice("El modo de reproducción está bloqueado hasta finalizar la actividad.", true);
+    return;
+  }
+  pendingActivityAction = action;
+  playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.playbackMode === state?.operatingMode?.selected);
+  });
+  if (!playbackModeDialog.open) playbackModeDialog.showModal();
+}
+
+async function selectPlaybackMode(mode) {
+  try {
+    const next = await api("/api/activity/mode", {
+      method: "POST",
+      body: JSON.stringify({ mode })
+    });
+    applyState(next);
+    if (playbackModeDialog.open) playbackModeDialog.close();
+    const action = pendingActivityAction;
+    pendingActivityAction = "";
+    showNotice(mode === "player"
+      ? "Player interno seleccionado. Este modo se bloqueará al iniciar."
+      : "Bridge con VirtualDJ seleccionado. Este modo se bloqueará al iniciar.");
+    if (action) await controlActivity(action);
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+}
+
 async function controlActivity(action) {
   if (activityBusy) {
     showNotice("An activity change is already in progress.");
+    return;
+  }
+  if (["start", "start-new"].includes(action) && !state?.operatingMode?.selected) {
+    openPlaybackModeDialog(action);
     return;
   }
   if (
@@ -1903,6 +1964,13 @@ $("#selectionForm").addEventListener("submit", async (event) => {
 $("#closeSelection").addEventListener("click", () => {
   if (state.account?.current?.activityId) selectionDialog.close();
 });
+$("#closePlaybackMode").addEventListener("click", () => {
+  pendingActivityAction = "";
+  if (playbackModeDialog.open) playbackModeDialog.close();
+});
+playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => {
+  button.addEventListener("click", () => void selectPlaybackMode(button.dataset.playbackMode));
+});
 $("#switchActivity").addEventListener("click", () => {
   fillSelection();
   selectionDialog.showModal();
@@ -1922,13 +1990,21 @@ async function logout() {
 $("#logoutButton").addEventListener("click", logout);
 $("#menuLogout").addEventListener("click", logout);
 $("#openHostPanel").addEventListener("click", () => {
+  playerPanel.close();
   superhostPanel.open();
   updateStatus();
 });
 $("#liveEventButton").addEventListener("click", () => {
+  playerPanel.close();
   superhostPanel.close();
   updateStatus();
 });
+$("#playerBetaButton").addEventListener("click", () => {
+  superhostPanel.close();
+  playerPanel.open();
+  updateStatus();
+});
+$("#playbackModeButton").addEventListener("click", () => openPlaybackModeDialog());
 
 $("#primaryActivity").addEventListener("click", () =>
   controlActivity($("#primaryActivity").dataset.action || "start")
@@ -2128,6 +2204,19 @@ function applyState(nextState) {
     renderRandomRotation();
     updateAuthUi();
     superhostPanel.sync(state);
+    playerPanel.sync(state);
+    const activePlayerActivityId = state.account?.authenticated === true &&
+      state.activity?.activityRunning === true &&
+      state.operatingMode?.selected === "player"
+        ? String(state.account?.current?.activityId || state.activity?.activityId || "")
+        : "";
+    if (activePlayerActivityId && autoRestoredPlayerActivityId !== activePlayerActivityId) {
+      autoRestoredPlayerActivityId = activePlayerActivityId;
+      superhostPanel.close();
+      playerPanel.open();
+    } else if (!activePlayerActivityId) {
+      autoRestoredPlayerActivityId = "";
+    }
     updateStatus();
     bridgeI18n.refresh();
   });
