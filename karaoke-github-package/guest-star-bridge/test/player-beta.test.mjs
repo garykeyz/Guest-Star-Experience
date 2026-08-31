@@ -34,7 +34,7 @@ async function waitForState(url, predicate, timeoutMs = 10000) {
   throw new Error(`El Player no llegó al estado esperado: ${JSON.stringify(latest)}`);
 }
 
-test("el Player crea una fila local con cantante y permite resolverla aun sin iniciar Play", async (t) => {
+test("el Player crea una fila local antes de iniciar la actividad y la conserva al comenzar", async (t) => {
   const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const tempRoot = await mkdtemp(join(tmpdir(), "guest-star-player-beta-"));
   const bridgeRoot = join(tempRoot, "bridge");
@@ -47,7 +47,8 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   await writeFile(join(karaokeFolder, "Marc Anthony - Vivir Mi Vida.mp4"), Buffer.alloc(64));
   await writeFile(join(backgroundFolder, "Purple Disco Machine - Save Me Lonely.mp3"), Buffer.alloc(64));
 
-  const startedAt = "2026-08-27T15:00:00.000Z";
+  const activityStartTime = "2026-08-27T15:00:00.000Z";
+  let activityRunning = false;
   const guestStarService = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -60,21 +61,22 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
         selection: {
           hotels: [{ hotelId: "hotel-1", name: "Moon Palace" }],
           venues: [{ venueId: "venue-1", hotelId: "hotel-1", name: "Lobby Bar" }],
-          activities: [{ activityId: "activity-1", hotelId: "hotel-1", venueId: "venue-1", name: "Karaoke Night", status: "in_progress" }]
+          activities: [{ activityId: "activity-1", hotelId: "hotel-1", venueId: "venue-1", name: "Karaoke Night", status: activityRunning ? "in_progress" : "ready" }]
         }
       };
-    } else if (["activityState", "selectActivity"].includes(body.action)) {
+    } else if (["activityState", "selectActivity", "startActivityV4"].includes(body.action)) {
+      if (body.action === "startActivityV4") activityRunning = true;
       payload = {
         ok: true,
         hotel: { hotelId: "hotel-1", name: "Moon Palace" },
         branding: { showHotelLogo: true, hotelLogoUrl: "https://cdn.example.com/moon-palace.png" },
         venue: { venueId: "venue-1", name: "Lobby Bar" },
-        activity: { activityId: "activity-1", name: "Karaoke Night", status: "in_progress" },
+        activity: { activityId: "activity-1", name: "Karaoke Night", status: activityRunning ? "in_progress" : "ready" },
         share: { publicUrl: "https://request.gstarxp.com/h/moon-palace" },
         state: {
           activityId: "activity-1",
-          activityStartedAt: startedAt,
-          activityRunning: true,
+          activityStartedAt: activityRunning ? activityStartTime : "",
+          activityRunning,
           activityHours: 2,
           transitionSeconds: 30,
           accepting: true,
@@ -112,8 +114,8 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   }, null, 2)}\n`);
   await writeFile(join(bridgeRoot, "data", "queue-state.json"), `${JSON.stringify({
     activityId: "activity-1",
-    activityStartedAt: startedAt,
-    operatingMode: "",
+    activityStartedAt: "",
+    operatingMode: "player",
     entries: [],
     suppressedIds: [],
     recoveries: [],
@@ -137,7 +139,7 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   let state = await waitForState(url, (candidate) =>
     candidate.account?.authenticated === true &&
     candidate.operatingMode?.selected === "player" &&
-    candidate.activity?.activityRunning === true &&
+    candidate.activity?.activityRunning === false &&
     candidate.library?.count === 1 &&
     candidate.backgroundMusic?.count === 1
   );
@@ -178,6 +180,15 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   const local = state.requests.find((item) => item.id === created.item.id);
   assert.equal(local.status, "En fila del Player");
   assert.equal(local.localAvailable, true);
+  assert.equal(state.activity.activityRunning, false);
+
+  const started = await fetch(`${url}/api/activity/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  assert.equal(started.ok, true, started.error || childError);
+  assert.equal(started.activity.activityRunning, true);
 
   const completed = await fetch(`${url}/api/player/requests/${encodeURIComponent(local.id)}/outcome`, {
     method: "POST",

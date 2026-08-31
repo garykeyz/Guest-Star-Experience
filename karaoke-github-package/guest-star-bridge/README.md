@@ -1,4 +1,4 @@
-# Guest Star 4.4.0
+# Guest Star 4.4.1
 
 Aplicación local Universal para Mac con Player interno, Star Screen y Bridge
 opcional para VirtualDJ. Solicitudes, hotel, actividad, cola e historial son
@@ -18,7 +18,7 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Universal-v4.4.0-app.zip` o abre el DMG.
+1. Descomprime `Guest-Star-Universal-v4.4.1-app.zip` o abre el DMG.
 2. Mueve **Guest Star.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.

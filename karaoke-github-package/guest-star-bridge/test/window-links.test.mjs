@@ -11,6 +11,7 @@ const windowSource = await readFile(
   "utf8"
 );
 const serverSource = await readFile(resolve(root, "src/server.mjs"), "utf8");
+const starScreenWindowSource = await readFile(resolve(root, "src/star-screen-window.jxa"), "utf8");
 const formSource = await readFile(
   resolve(root, "../components/KaraokeExperience.tsx"),
   "utf8"
@@ -388,6 +389,8 @@ test("obliga a elegir Player o Bridge y bloquea el modo durante la actividad", (
   assert.match(serverSource, /operatingMode !== "bridge"/);
   assert.match(serverSource, /operatingMode !== "player"/);
   assert.match(serverSource, /The playback mode is locked until this activity finishes/);
+  assert.match(serverSource, /Select a hotel, venue and activity before choosing the playback mode/);
+  assert.match(appSource, /Selecciona el hotel, venue y actividad antes de elegir el modo/);
 });
 
 test("Player ofrece controles operativos completos y un preview real de Star Screen", () => {
@@ -409,6 +412,19 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
   assert.match(playerSource, /data-player-row-outcome/);
   assert.match(playerSource, /event\.shiftKey/);
   assert.match(playerSource, /fadeVolume/);
+  assert.match(playerStyles, /body\.player-mode \.player-star-screen-shell[^}]+aspect-ratio:16\/9!important/);
+  assert.doesNotMatch(playerStyles, /player-star-screen-shell[^}]+aspect-ratio:auto/);
+});
+
+test("Star Screen abre una ventana nativa en la pantalla secundaria", () => {
+  assert.match(playerSource, /\/api\/player\/star-screen\/open/);
+  assert.doesNotMatch(playerSource, /playerOpenStarScreen[^\n]+\/api\/external\/open/);
+  assert.match(serverSource, /openStarScreenWindow/);
+  assert.match(serverSource, /pathname === "\/api\/player\/star-screen\/open"/);
+  assert.match(starScreenWindowSource, /function secondaryScreen/);
+  assert.match(starScreenWindowSource, /NSWindowStyleMaskBorderless/);
+  assert.match(starScreenWindowSource, /window\.setFrameDisplay\(output\.frame, true\)/);
+  assert.match(starScreenWindowSource, /NSMakeRect\(0, 0, 1280, 720\)/);
 });
 
 test("Star Screen muestra video limpio y reserva Sonando ahora para la música ambiental", () => {
@@ -434,6 +450,9 @@ test("la biblioteca local exige cantante y crea una entrada propia del Player", 
   assert.match(serverSource, /createPlayerLocalRequest/);
   assert.match(serverSource, /sourceType: "player_local"/);
   assert.match(serverSource, /playerLocalRequests/);
+  assert.match(bridgeHtml, /¿Separar voces con IA\?/);
+  assert.match(playerSource, /playerPreparationReady\(\)/);
+  assert.match(serverSource, /Select an activity and Player mode before adding a local singer/);
 });
 
 test("la música ambiental tiene fuentes, mezcla aleatoria y volumen independiente", () => {
@@ -450,6 +469,7 @@ test("la música ambiental tiene fuentes, mezcla aleatoria y volumen independien
   assert.match(playerSource, /\/api\/player\/background\/config/);
   assert.match(serverSource, /BACKGROUND_AUDIO_EXTENSIONS/);
   assert.match(serverSource, /backgroundMusicVolume/);
+  assert.match(playerSource, /if \(!playerPreparationReady\(\) \|\| stageMode === 'karaoke'\) return/);
 });
 
 test("cada turno del Player despliega versiones Karaoke para copiar o abrir", () => {
@@ -500,6 +520,25 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(stemsSmokeTest, /instrumentalBytes/);
   assert.match(playerSource, /setTargetAtTime/);
   assert.match(playerStyles, /\.player-audio-lab/);
+  assert.match(playerSource, /shell\.addEventListener\('pointermove'/);
+  assert.match(playerSource, /audioContext\?\.resume\(\)/);
+  assert.match(playerStyles, /\.player-knob-shell input\{pointer-events:none\}/);
+  assert.match(playerSource, /now - lastStemSyncAt < 750/);
+  assert.match(playerSource, /Math\.abs\(drift\) > 0\.45/);
+  assert.doesNotMatch(playerSource, /element\.playbackRate = Math\.max/);
+  assert.match(playerSource, /media\.addEventListener\('waiting', pauseStemTracks\)/);
+  assert.match(playerSource, /media\.addEventListener\('seeked'/);
+  assert.match(serverSource, /stems-v2/);
+  assert.match(serverSource, /aresample=44100:first_pts=0/);
+});
+
+test("la fila y el progreso Stems permanecen compactos hasta solicitar opciones", () => {
+  assert.match(playerSource, /expandedRequestIds/);
+  assert.match(playerSource, /data-player-expand/);
+  assert.match(playerSource, /player-queue-details \$\{expanded \? '' : 'hidden'\}/);
+  assert.match(playerSource, /class="player-stem-progress/);
+  assert.match(playerStyles, /\.player-stem-progress\{[^}]+width:34px;height:34px/);
+  assert.match(playerStyles, /\.player-queue-details\.hidden\{display:none\}/);
 });
 
 test("el QR de Star Screen es grande y el preview conserva legibilidad", () => {
@@ -536,7 +575,7 @@ test("el cambio a karaoke espera reproducción real y la música ambiental no pu
 });
 
 test("el lanzador web de prueba sigue aislado de la aplicación oficial", () => {
-  assert.match(bridgeHtml, /GUEST STAR 4\.4\.0/);
+  assert.match(bridgeHtml, /GUEST STAR 4\.4\.1/);
   assert.match(serverSource, /process\.env\.GUEST_STAR_PORT/);
   assert.match(serverSource, /process\.env\.GUEST_STAR_WEB_BETA/);
   assert.match(webBetaLauncher, /GUEST_STAR_PORT=8790/);

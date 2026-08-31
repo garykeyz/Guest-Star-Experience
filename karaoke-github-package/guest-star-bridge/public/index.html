@@ -33,7 +33,7 @@
         <button class="button ghost hidden" id="switchActivity">Switch Activity</button>
         <button class="button ghost hidden" id="changePasswordButton">Change Password</button>
         <button class="button ghost hidden" id="logoutButton">Log Out</button>
-        <div class="live-pill"><i></i> GUEST STAR 4.4.0</div>
+        <div class="live-pill"><i></i> GUEST STAR 4.4.1</div>
       </div>
     </header>
 
@@ -92,8 +92,8 @@
             <header class="player-preview-head"><div><p class="eyebrow">STAR SCREEN</p><h3>Preview de la segunda pantalla</h3></div><span><i></i> EN TIEMPO REAL</span></header>
             <div class="player-star-screen-shell"><iframe id="playerStarScreenPreview" src="/star-screen.html?preview=1" title="Preview en vivo de Star Screen" allow="autoplay"></iframe></div>
             <video id="playerMedia" class="player-engine-media" playsinline preload="metadata"></video>
-            <audio id="playerInstrumentalAudio" preload="metadata"></audio>
-            <audio id="playerVocalsAudio" preload="metadata"></audio>
+            <audio id="playerInstrumentalAudio" preload="auto"></audio>
+            <audio id="playerVocalsAudio" preload="auto"></audio>
             <div class="player-transport-panel" aria-label="Controles compactos del Player">
               <div class="player-transport-summary"><div class="player-now"><span>PISTA KARAOKE SELECCIONADA</span><h3 id="playerNowSong">Selecciona una canción</h3><p id="playerNowSinger">La cola se toma de las solicitudes de esta actividad.</p></div><span id="playerMediaStatus">Motor preparado</span></div>
               <canvas id="playerWaveform" class="player-waveform" width="1200" height="90" aria-label="Forma de onda en vivo"></canvas>
@@ -162,7 +162,7 @@
           <div class="player-assign-track"><span>VIDEO LOCAL</span><strong id="playerAssignSong">Canción</strong><small id="playerAssignArtist">Artista</small></div>
           <label for="playerAssignSinger">Nombre del cantante</label>
           <input id="playerAssignSinger" name="singer" autocomplete="off" maxlength="100" placeholder="Ej.: Gary" required />
-          <label id="playerAssignStemsOption" class="player-assign-stems hidden"><input id="playerAssignStems" type="checkbox" /><span><strong>Preparar instrumental con IA</strong><small>No entra en Star Lineup hasta terminar y validar instrumental + voz.</small></span></label>
+          <label id="playerAssignStemsOption" class="player-assign-stems hidden"><input id="playerAssignStems" type="checkbox" /><span><strong>¿Separar voces con IA?</strong><small>Opcional: prepara instrumental y control de voz antes de añadirla a Star Lineup.</small></span></label>
           <p>Esta pista se agregará como una entrada propia del Player y conservará este cantante.</p>
           <div class="button-row"><button type="button" class="button ghost" id="playerAssignSingerCancel">Cancelar</button><button type="submit" class="button primary">Agregar a la fila</button></div>
         </form>

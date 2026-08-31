@@ -53,6 +53,7 @@ jobs:
           node --check guest-star-bridge/public/app.js
           node --check guest-star-bridge/public/superhost.js
           node --check guest-star-bridge/macos/GuestStarWindow.js
+          node --check < guest-star-bridge/src/star-screen-window.jxa
           node --check guest-star-bridge/src/server.mjs
           node --check guest-star-bridge/src/apps-script.mjs
 

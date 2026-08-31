@@ -1,0 +1,81 @@
+#!/usr/bin/osascript -l JavaScript
+
+ObjC.import("Cocoa");
+ObjC.import("WebKit");
+
+let windowRef = null;
+let webView = null;
+
+function createDelegate() {
+  if (!$.GuestStarScreenWindowDelegate) {
+    ObjC.registerSubclass({
+      name: "GuestStarScreenWindowDelegate",
+      superclass: "NSObject",
+      protocols: ["NSWindowDelegate"],
+      methods: {
+        "windowWillClose:": {
+          types: ["void", ["id"]],
+          implementation: function () {
+            $.NSApplication.sharedApplication.terminate(null);
+          },
+        },
+      },
+    });
+  }
+  return $.GuestStarScreenWindowDelegate.alloc.init;
+}
+
+function secondaryScreen() {
+  const screens = $.NSScreen.screens;
+  const main = $.NSScreen.mainScreen;
+  if (screens.count < 2) return null;
+  for (let index = 0; index < screens.count; index += 1) {
+    const candidate = screens.objectAtIndex(index);
+    if (!candidate.isEqual(main)) return candidate;
+  }
+  return screens.objectAtIndex(1);
+}
+
+function run(argv) {
+  const url = String(argv[0] || "http://127.0.0.1:8787/star-screen.html?display=1");
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+  try { $.NSProcessInfo.processInfo.processName = "Guest Star · Star Screen"; } catch (_) { /* best effort */ }
+
+  const output = secondaryScreen();
+  const fullDisplay = output !== null;
+  const styleMask = fullDisplay
+    ? $.NSWindowStyleMaskBorderless
+    : $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable;
+  const frame = fullDisplay ? output.frame : $.NSMakeRect(0, 0, 1280, 720);
+  const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
+    frame,
+    styleMask,
+    $.NSBackingStoreBuffered,
+    false
+  );
+  windowRef = window;
+  window.releasedWhenClosed = false;
+  window.backgroundColor = $.NSColor.blackColor;
+  window.title = fullDisplay ? "Guest Star · Pantalla secundaria" : "Guest Star · Preview 16:9";
+  window.collectionBehavior = $.NSWindowCollectionBehaviorCanJoinAllSpaces |
+    $.NSWindowCollectionBehaviorFullScreenAuxiliary;
+  if (fullDisplay) {
+    window.setFrameDisplay(output.frame, true);
+    window.level = $.NSMainMenuWindowLevel - 1;
+  } else {
+    window.minSize = $.NSMakeSize(800, 450);
+    window.center;
+  }
+
+  const configuration = $.WKWebViewConfiguration.alloc.init;
+  configuration.preferences.javaScriptCanOpenWindowsAutomatically = false;
+  webView = $.WKWebView.alloc.initWithFrameConfiguration(window.contentView.bounds, configuration);
+  webView.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable;
+  window.delegate = createDelegate();
+  window.contentView.addSubview(webView);
+  webView.loadRequest($.NSURLRequest.requestWithURL($.NSURL.URLWithString(url)));
+
+  window.orderFrontRegardless;
+  app.run;
+}

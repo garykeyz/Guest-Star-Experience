@@ -1,4 +1,4 @@
-GUEST STAR 4.4.0 — INSTALACIÓN PASO A PASO EN OTRA MAC
+GUEST STAR 4.4.1 — INSTALACIÓN PASO A PASO EN OTRA MAC
 
 Compatible con Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5.
 No necesitas instalar Node, npm ni usar Terminal.
@@ -12,14 +12,14 @@ REQUISITOS
 
 INSTALAR
 
-1. Descarga Guest-Star-Universal-v4.4.0-app.zip o el DMG.
+1. Descarga Guest-Star-Universal-v4.4.1-app.zip o el DMG.
 2. Descomprime y mueve Guest Star.app a Aplicaciones.
 3. La primera vez, usa clic derecho sobre Guest Star y elige Abrir.
 4. Si macOS bloquea la app, usa Privacidad y seguridad → Abrir de todos modos.
 
 CONFIGURAR
 
-1. Abre Guest Star y confirma que la pantalla muestre v4.4.0.
+1. Abre Guest Star y confirma que la pantalla muestre v4.4.1.
 2. Inicia sesión con el usuario Host y su contraseña permanente.
 3. Selecciona hotel, sede y actividad asignados.
 4. En Settings, elige la carpeta de karaoke.

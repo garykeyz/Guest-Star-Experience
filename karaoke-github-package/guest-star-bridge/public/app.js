@@ -455,10 +455,12 @@ function updateStatus() {
   const isSuperhost = authenticated && state.account?.user?.role === "superhost";
   $("#openHostPanel").classList.toggle("hidden", !isSuperhost || superhostPanel.isOpen());
   $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen() || (running && selectedMode === "player"));
-  $("#playerBetaButton").classList.toggle("hidden", !authenticated || playerPanel.isOpen() || (running && selectedMode === "bridge"));
+  $("#playerBetaButton").classList.toggle("hidden", !authenticated || !selectedActivity || playerPanel.isOpen() || (running && selectedMode === "bridge"));
   $("#playbackModeButton").classList.toggle("hidden", !authenticated);
-  $("#playbackModeButton").disabled = running;
-  $("#playbackModeButton").textContent = running
+  $("#playbackModeButton").disabled = running || !selectedActivity;
+  $("#playbackModeButton").textContent = !selectedActivity
+    ? "Selecciona una actividad"
+    : running
     ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"} 🔒`
     : selectedMode
       ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}`
@@ -1683,6 +1685,10 @@ function syncWhenActive() {
 }
 
 function openPlaybackModeDialog(action = "") {
+  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
+    showNotice("Selecciona el hotel, venue y actividad antes de elegir el modo.", true);
+    return;
+  }
   if (state?.operatingMode?.locked) {
     showNotice("El modo de reproducción está bloqueado hasta finalizar la actividad.", true);
     return;
@@ -2000,6 +2006,10 @@ $("#liveEventButton").addEventListener("click", () => {
   updateStatus();
 });
 $("#playerBetaButton").addEventListener("click", () => {
+  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
+    showNotice("Selecciona una actividad antes de abrir el Player.", true);
+    return;
+  }
   superhostPanel.close();
   playerPanel.open();
   updateStatus();

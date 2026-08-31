@@ -1,7 +1,7 @@
 GUEST STAR WEB BETA 0.9.0
 
 Esta versión abre Guest Star en Chrome para probar y refinar el Player interno.
-No instala ni reemplaza Guest Star 4.4.0 y no modifica Cloudflare.
+No instala ni reemplaza Guest Star 4.4.1 y no modifica Cloudflare.
 
 PARA ABRIR
 
