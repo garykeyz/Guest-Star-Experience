@@ -118,6 +118,24 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
 
   const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
+  function paintRange(input) {
+    if (!input) return;
+    const minimum = Number(input.min) || 0;
+    const maximum = Number(input.max) || 0;
+    const value = Math.max(minimum, Math.min(maximum || minimum, Number(input.value) || 0));
+    const progress = maximum > minimum ? ((value - minimum) / (maximum - minimum)) * 100 : 0;
+    input.style.setProperty('--range-progress', `${progress}%`);
+  }
+
+  function renderKaraokeVolume() {
+    const volume = $('#playerVolume');
+    if (!volume) return;
+    volume.value = String(mediaTargetVolume);
+    paintRange(volume);
+    const output = $('#playerVolumeValue');
+    if (output) output.textContent = `${Math.round(mediaTargetVolume * 100)}%`;
+  }
+
   function persistAudioSettings() {
     localStorage.setItem(audioSettingsKey, JSON.stringify(audioSettings));
   }
@@ -154,6 +172,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (vocal) vocal.value = String(audioSettings.vocalLevel);
     const vocalOutput = $('#playerVocalLevelValue');
     if (vocalOutput) vocalOutput.textContent = `${Math.round(audioSettings.vocalLevel * 100)}%`;
+    paintRange(vocal);
     const vocalControl = $('#playerVocalControl');
     const stemsReady = current()?.stem?.ready === true;
     if (vocalControl) vocalControl.classList.remove('hidden');
@@ -625,6 +644,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerPlayLabel').textContent = stageMode === 'karaoke' && !media.paused ? '⏸ Pausar' : '▶ Reproducir';
     $('#playerCurrentTime').textContent = formatDuration(media.currentTime, true);
     $('#playerDuration').textContent = formatDuration(Number.isFinite(media.duration) ? media.duration : 0, true);
+    paintRange($('#playerSeek'));
+    renderKaraokeVolume();
     $('#playerMediaStatus').textContent = transitionBusy
       ? scenePhase === 'to-karaoke' ? 'Fade a karaoke…' : 'Fade a Star Lineup…'
       : !item ? 'Motor preparado' : media.error ? 'Formato no compatible' : media.readyState >= 3 ? (stageMode === 'karaoke' ? 'Video en Star Screen' : 'Video listo · Star Lineup visible') : 'Cargando archivo local…';
@@ -653,6 +674,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (!$('#playerBackgroundVolume').matches(':active') && !backgroundTransition && Math.abs(configuredVolume - backgroundTargetVolume) > 0.001) backgroundTargetVolume = configuredVolume;
     $('#playerBackgroundVolume').value = String(backgroundTargetVolume);
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
+    paintRange($('#playerBackgroundVolume'));
     $('#playerBackgroundCount').textContent = `${Number(background.count) || 0} pistas`;
     $('#playerBackgroundSong').textContent = track?.song || 'Sin música configurada';
     $('#playerBackgroundArtist').textContent = track?.artist || (background.error || 'Selecciona una carpeta o un archivo de audio.');
@@ -1431,6 +1453,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (mediaTargetVolume > 0) karaokeMuted = false;
     if (!transitionBusy) setKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume);
     $('#playerMute').textContent = karaokeMuted || mediaTargetVolume === 0 ? '🔇 Silenciado' : '🔊 Audio';
+    renderKaraokeVolume();
     publish();
   });
   for (const band of ['low', 'mid', 'high']) {
@@ -1508,6 +1531,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     backgroundTargetVolume = Math.max(0, Math.min(1, Number(event.target.value)));
     if (!backgroundTransition && !backgroundAudio.paused) backgroundAudio.volume = backgroundTargetVolume;
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
+    paintRange(event.currentTarget);
     publish();
   });
   $('#playerBackgroundVolume').addEventListener('change', async () => {
@@ -1541,7 +1565,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     const detail = { 1: 'reproducción cancelada', 2: 'archivo no disponible', 3: 'formato o códec no compatible', 4: 'formato no compatible' }[media.error?.code] || 'error desconocido';
     transitionToken += 1; transitionBusy = false; setScene('lobby'); $('#playerMediaStatus').textContent = `Error: ${detail}`; showNotice(`El video local no pudo reproducirse: ${detail}.`, true); publish(); void ensureBackgroundPlaying();
   });
-  $('#playerSeek').addEventListener('input', (event) => { media.currentTime = Number(event.target.value); publish(); scheduleRuntimeSave(150); });
+  $('#playerSeek').addEventListener('input', (event) => { media.currentTime = Number(event.target.value); paintRange(event.currentTarget); publish(); scheduleRuntimeSave(150); });
   instrumentalAudio.addEventListener('loadedmetadata', () => syncStemTimes(true));
   vocalsAudio.addEventListener('loadedmetadata', () => syncStemTimes(true));
   backgroundAudio.addEventListener('play', () => { renderBackground(); publish(); });

@@ -89,3 +89,210 @@ body.player-mode .player-queue-list{max-height:min(56vh,565px);overflow:auto;ove
 @media(max-height:820px) and (min-width:1051px){body.player-mode .player-star-screen-shell{height:min(21vh,180px)!important}.player-transport-panel .player-waveform{height:14px}.player-transport-summary>.player-now p{display:none}.player-live-mixer>section{padding:4px}.player-knob-shell{width:27px;height:27px}.player-knob-shell:after{left:12px}}
 @media(max-width:1320px) and (min-width:1051px){body.player-mode .player-hero{grid-template-columns:minmax(220px,1fr) auto}.player-live-dock{grid-column:1/-1!important}.player-live-mixer{grid-template-columns:minmax(180px,.8fr) minmax(220px,1fr)}.player-background-live{grid-column:1/-1}.player-background-quick-pick{grid-template-columns:minmax(100px,.7fr) minmax(160px,1fr) 30px}}
 @media(max-width:1050px){body.player-mode .player-live-dock{grid-column:1;width:100%}.player-live-mixer{grid-template-columns:1fr}.player-audio-lab{display:grid;grid-template-columns:auto 1fr}.player-plan-b-row{grid-template-columns:70px minmax(0,1fr)}.player-plan-b-row>em,.player-plan-b-row>.button{justify-self:start}body.player-mode .player-queue-card{max-height:none}body.player-mode .player-queue-list{max-height:55vh}}
+
+/* Player 4.4.1 visual polish: explicit controls, a fitted preview and a Player-only summary. */
+.player-range{
+  --range-progress:0%;
+  -webkit-appearance:none;
+  appearance:none;
+  display:block;
+  width:100%;
+  min-width:0;
+  height:18px;
+  min-height:18px!important;
+  margin:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  cursor:pointer;
+}
+.player-range::-webkit-slider-runnable-track{
+  height:6px;
+  border:1px solid #6a526d;
+  border-radius:999px;
+  background:linear-gradient(90deg,var(--player-pink) 0%,var(--player-pink) var(--range-progress),#4a3b4f var(--range-progress),#4a3b4f 100%);
+  box-shadow:0 0 0 1px #0008,inset 0 1px 2px #0009;
+}
+.player-range::-webkit-slider-thumb{
+  -webkit-appearance:none;
+  appearance:none;
+  width:16px;
+  height:16px;
+  margin-top:-5px;
+  border:2px solid #fff;
+  border-radius:50%;
+  background:var(--player-pink);
+  box-shadow:0 0 0 3px #ff35ad35,0 2px 7px #000b;
+}
+.player-range::-moz-range-track{
+  height:6px;
+  border:1px solid #6a526d;
+  border-radius:999px;
+  background:linear-gradient(90deg,var(--player-pink) 0%,var(--player-pink) var(--range-progress),#4a3b4f var(--range-progress),#4a3b4f 100%);
+  box-shadow:0 0 0 1px #0008,inset 0 1px 2px #0009;
+}
+.player-range::-moz-range-thumb{
+  width:13px;
+  height:13px;
+  border:2px solid #fff;
+  border-radius:50%;
+  background:var(--player-pink);
+  box-shadow:0 0 0 3px #ff35ad35,0 2px 7px #000b;
+}
+.player-range:focus-visible{outline:2px solid #ff91d4;outline-offset:3px}
+.player-range:disabled{opacity:.58;cursor:not-allowed}
+.player-vocal-control .player-range:disabled{opacity:.72}
+.player-range:disabled::-webkit-slider-thumb{background:#8f7b91;box-shadow:none}
+.player-range:disabled::-moz-range-thumb{background:#8f7b91;box-shadow:none}
+.player-seek-range{margin-block:1px 3px!important}
+.player-karaoke-volume{
+  display:grid;
+  grid-template-columns:auto minmax(110px,1fr) auto;
+  align-items:center;
+  gap:7px;
+  min-width:0;
+  color:#e1d3e2;
+  font-size:.6rem;
+}
+.player-karaoke-volume span{color:#e1d3e2!important;text-align:left!important;white-space:nowrap}
+.player-karaoke-volume output,.player-vocal-control output,.player-background-volume output{
+  min-width:30px;
+  color:var(--player-gold);
+  font-size:.56rem;
+  font-weight:900;
+  text-align:right;
+}
+.player-background-live{
+  grid-template-columns:minmax(0,1fr);
+  grid-auto-flow:row;
+  align-content:start;
+}
+.player-background-live>header,.player-background-live-actions,.player-background-volume,.player-background-quick-pick{
+  grid-column:1/-1;
+  width:100%;
+  min-width:0;
+}
+.player-background-live-actions{
+  display:grid;
+  grid-template-columns:minmax(0,1.35fr) minmax(82px,.65fr);
+  gap:5px;
+}
+.player-background-live-actions .button{
+  width:100%;
+  overflow:hidden;
+}
+.player-background-live-actions .button span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.player-background-live-actions kbd{flex:none}
+.player-background-volume{grid-template-columns:auto minmax(90px,1fr) auto}
+.player-background-quick-pick{grid-template-columns:minmax(76px,.75fr) minmax(120px,1.25fr) 30px}
+body.player-mode .player-star-screen-shell{
+  height:min(24vh,250px)!important;
+}
+
+/* The Host preview is a complete 16:9 composition instead of a tall page clipped by the iframe. */
+.star-screen-preview .star-screen-stage{
+  width:100%;
+  height:100vh;
+  min-height:0;
+  padding:8px;
+  gap:6px;
+  grid-template-rows:36px minmax(0,1fr) 38px;
+  overflow:hidden;
+}
+.star-screen-preview .star-screen-ambient{border-width:4px}
+.star-screen-preview .star-screen-topbar{min-height:0;gap:7px}
+.star-screen-preview .star-screen-logo,.star-screen-preview .star-screen-fallback{
+  width:32px;
+  height:32px;
+  border-radius:7px;
+  padding:3px;
+  font-size:.72rem;
+}
+.star-screen-preview .star-screen-hotel-mark{gap:7px}
+.star-screen-preview .star-screen-hotel-mark span{font-size:.72rem}
+.star-screen-preview .star-screen-hotel-mark small{font-size:.48rem}
+.star-screen-preview .star-screen-live{gap:4px;padding:4px 7px;font-size:.48rem}
+.star-screen-preview .star-screen-live i{width:5px;height:5px}
+.star-screen-preview .star-screen-welcome{
+  display:grid;
+  grid-template-columns:1fr;
+  align-items:stretch;
+  min-height:0;
+  height:100%;
+  gap:0;
+  overflow:hidden;
+}
+.star-screen-preview .star-screen-invite{display:none}
+.star-screen-preview .star-screen-lineup{
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  min-height:0;
+  height:100%;
+  padding:6px 8px;
+  overflow:hidden;
+}
+.star-screen-preview .star-screen-lineup-head{min-height:0;margin:0 0 4px;gap:6px}
+.star-screen-preview .star-screen-lineup-head p{font-size:.46rem}
+.star-screen-preview .star-screen-lineup-head h2{margin:0;font-size:1rem;line-height:1}
+.star-screen-preview .star-screen-lineup-tools{gap:6px}
+.star-screen-preview .star-screen-lineup-head>.star-screen-lineup-tools .star-screen-qr-card img{
+  width:54px;
+  height:54px;
+  padding:3px;
+  border-radius:6px;
+}
+.star-screen-preview .star-screen-lineup-tools>span{
+  width:27px;
+  height:27px;
+  font-size:.7rem;
+}
+.star-screen-preview .star-screen-lineup ol{align-content:start;min-height:0;gap:3px;overflow:hidden}
+.star-screen-preview .star-screen-lineup li{
+  grid-template-columns:25px minmax(0,1fr) auto;
+  min-height:29px;
+  gap:6px;
+  padding:3px 5px;
+}
+.star-screen-preview .star-screen-lineup li:nth-child(n+4){display:none}
+.star-screen-preview .star-screen-lineup li>b{font-size:.72rem}
+.star-screen-preview .star-screen-lineup li strong{font-size:.63rem}
+.star-screen-preview .star-screen-lineup li small{font-size:.48rem}
+.star-screen-preview .star-screen-lineup li>span{font-size:.42rem}
+.star-screen-preview .star-screen-lineup li.empty{padding:8px}
+.star-screen-preview .star-screen-now{
+  min-height:0;
+  align-items:center;
+  gap:10px;
+  padding:4px 8px;
+  overflow:hidden;
+}
+.star-screen-preview .star-screen-now span,.star-screen-preview .star-screen-next small{font-size:.42rem}
+.star-screen-preview .star-screen-now h2{margin:0;font-size:.72rem;line-height:1.1}
+.star-screen-preview .star-screen-now p{font-size:.5rem}
+.star-screen-preview .star-screen-next strong{font-size:.56rem}
+
+/* Returning from Player shows activity information, never the VirtualDJ console. */
+body.player-selected-mode:not(.player-mode) #vdjStatus,
+body.player-selected-mode:not(.player-mode) #vdjQueuePanel,
+body.player-selected-mode:not(.player-mode) #syncButton,
+body.player-selected-mode:not(.player-mode) #hitSuggestions{
+  display:none!important;
+}
+body.player-selected-mode:not(.player-mode) .status-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+body.player-selected-mode:not(.player-mode) .live-queue-workspace{grid-template-columns:minmax(0,1fr)}
+body.player-selected-mode:not(.player-mode) #requests .request-details{display:none!important}
+body.player-selected-mode:not(.player-mode) .secondary-actions{justify-content:flex-end}
+
+@media(max-height:820px) and (min-width:1051px){
+  body.player-mode .player-star-screen-shell{height:min(20vh,175px)!important}
+}
+@media(max-width:720px){
+  .player-karaoke-volume{grid-template-columns:1fr auto}
+  .player-karaoke-volume span{grid-column:1/-1}
+  body.player-selected-mode:not(.player-mode) .status-grid{grid-template-columns:1fr}
+}

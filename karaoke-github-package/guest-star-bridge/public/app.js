@@ -241,9 +241,54 @@ function liveActivitySummary() {
   return summary;
 }
 
+function playerActivityDisplaySummary(summary) {
+  if (state?.operatingMode?.selected !== "player") return summary;
+  const requests = Array.isArray(state?.requests) ? state.requests : [];
+  const fallbackTransition = Math.max(0, Number(state?.activity?.transitionSeconds) || 0);
+  const secondsFor = (item) =>
+    (Math.max(0, Number(item?.durationSeconds) || 240) +
+      Math.max(0, Number(item?.transitionSeconds) || fallbackTransition));
+  const completed = [];
+  const skipped = [];
+  const active = [];
+  for (const item of requests) {
+    const outcome = String(item?.outcome || "").toLowerCase();
+    const status = String(item?.status || "");
+    if (outcome === "completed" || status === "Ya cantó") completed.push(item);
+    else if (["skipped", "removed"].includes(outcome) || ["Saltado", "Retirada del Player"].includes(status)) skipped.push(item);
+    else if (!item?.stem || item.stem.status === "ready") active.push(item);
+  }
+  const plannedSeconds = requests
+    .filter((item) => !skipped.includes(item))
+    .reduce((total, item) => total + secondsFor(item), 0);
+  const completedSeconds = completed.reduce((total, item) => total + secondsFor(item), 0);
+  const queued = active.filter((item) => item.localAvailable);
+  const queuedSeconds = queued.reduce((total, item) => total + secondsFor(item), 0);
+  const skippedSeconds = skipped.reduce((total, item) => total + secondsFor(item), 0);
+  const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
+  const confirmedSeconds = completedSeconds + queuedSeconds;
+  const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
+  const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
+  return {
+    ...summary,
+    plannedSeconds,
+    completedSeconds,
+    skippedSeconds,
+    queuedSeconds,
+    queueSongCount: queued.length,
+    confirmedSeconds,
+    gapSeconds,
+    overrunSeconds,
+    coveragePercent: targetSeconds ? Math.round((confirmedSeconds / targetSeconds) * 100) : 0,
+    suggestClose: state?.activity?.accepting !== false && targetSeconds > 0 && confirmedSeconds >= targetSeconds,
+    suggestHits: queued.length === 0 && gapSeconds > 0
+  };
+}
+
 function updateTimeDashboard() {
   if (!state) return;
-  const summary = liveActivitySummary();
+  const playerSelected = state.operatingMode?.selected === "player";
+  const summary = playerActivityDisplaySummary(liveActivitySummary());
   const target = Number(summary.targetSeconds) || 0;
   $("#elapsedTime").textContent = activityDuration(summary.elapsedSeconds);
   const activityDetail = $("#activityStatus p");
@@ -259,9 +304,11 @@ function updateTimeDashboard() {
       : `${activityDuration(summary.clockRemainingSeconds)} remaining`;
   $("#confirmedTime").textContent = activityDuration(summary.confirmedSeconds);
   const queueCount = Number(summary.queueSongCount) || 0;
-  $("#confirmedDetail").textContent =
-    `${queueCount} live VDJ ${queueCount === 1 ? "track" : "tracks"} · ` +
-    `${activityDuration(summary.completedSeconds)} already performed`;
+  $("#confirmedDetail").textContent = playerSelected
+    ? `${queueCount} active Player ${queueCount === 1 ? "request" : "requests"} · ` +
+      `${activityDuration(summary.completedSeconds)} already performed`
+    : `${queueCount} live VDJ ${queueCount === 1 ? "track" : "tracks"} · ` +
+      `${activityDuration(summary.completedSeconds)} already performed`;
   $("#plannedTime").textContent = activityDuration(summary.plannedSeconds);
   $("#plannedDetail").textContent = summary.skippedSeconds
     ? `${activityDuration(summary.skippedSeconds)} excluded as skipped`
@@ -294,24 +341,27 @@ function updateTimeDashboard() {
     card.classList.add("warning");
     $("#coverageTime").textContent =
       `${activityDuration(summary.gapSeconds)} missing`;
-    $("#coverageDetail").textContent =
-      `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
+    $("#coverageDetail").textContent = playerSelected
+      ? `${summary.coveragePercent || 0}% covered by completed songs and the Player queue`
+      : `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
   }
 
   const advice = $("#coverageAdvice");
   advice.innerHTML = "";
   if (summary.suggestClose) {
     const text = document.createElement("div");
-    text.innerHTML =
-      "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
+    text.innerHTML = playerSelected
+      ? "<strong>You have enough confirmed time.</strong><p>Completed songs and the active Player queue cover the activity duration.</p>"
+      : "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
     advice.append(
       text,
       button("Close Requests Now", "danger", () => controlActivity("close"))
     );
     advice.classList.remove("hidden");
   } else if (summary.suggestHits) {
-    advice.innerHTML =
-      "<div><strong>The VirtualDJ queue is empty.</strong><p>Use the hit suggestions below for the EMCEE or a random singer.</p></div>";
+    advice.innerHTML = playerSelected
+      ? "<div><strong>The Player queue is empty.</strong><p>Open Player to use Plan B or add a singer.</p></div>"
+      : "<div><strong>The VirtualDJ queue is empty.</strong><p>Use the hit suggestions below for the EMCEE or a random singer.</p></div>";
     advice.classList.remove("hidden");
   } else {
     advice.classList.add("hidden");
@@ -392,6 +442,7 @@ function updateStatus() {
   const summary = liveActivitySummary();
   const running = summary.activityRunning;
   const selectedMode = state.operatingMode?.selected || "";
+  document.body.classList.toggle("player-selected-mode", selectedMode === "player");
   document.body.classList.toggle("player-activity-locked", running && selectedMode === "player");
   document.body.classList.toggle("bridge-activity-locked", running && selectedMode === "bridge");
   setStatus(

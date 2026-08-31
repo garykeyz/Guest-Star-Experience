@@ -420,6 +420,46 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
   assert.match(playerStyles, /\.player-queue-card\{align-self:start;height:auto/);
 });
 
+test("los sliders del Player muestran pista, avance y porcentaje en macOS", () => {
+  for (const id of [
+    "playerSeek", "playerVolume", "playerVolumeValue",
+    "playerVocalLevel", "playerVocalLevelValue",
+    "playerBackgroundVolume", "playerBackgroundVolumeValue"
+  ]) assert.match(bridgeHtml, new RegExp(`id="${id}"`));
+  assert.match(bridgeHtml, /id="playerSeek" class="player-range player-seek-range"/);
+  assert.match(bridgeHtml, /id="playerVolume" class="player-range"/);
+  assert.match(bridgeHtml, /Volumen karaoke/);
+  assert.match(bridgeHtml, /Volumen ambiente/);
+  assert.match(playerStyles, /\.player-range::\-webkit-slider-runnable-track/);
+  assert.match(playerStyles, /--range-progress/);
+  assert.match(playerSource, /function paintRange/);
+  assert.match(playerSource, /style\.setProperty\('--range-progress'/);
+  assert.match(playerSource, /function renderKaraokeVolume/);
+});
+
+test("la consola ambiental no solapa botones ni controles de volumen", () => {
+  assert.match(playerStyles, /\.player-background-live-actions\{[\s\S]*?grid-template-columns:minmax\(0,1\.35fr\)/);
+  assert.match(playerStyles, /\.player-background-live>header,\.player-background-live-actions,\.player-background-volume,\.player-background-quick-pick/);
+  assert.match(playerStyles, /\.player-background-live-actions \.button span\{[\s\S]*?text-overflow:ellipsis/);
+});
+
+test("el preview del Host encaja toda la composición Star Screen dentro de 16:9", () => {
+  assert.match(playerStyles, /The Host preview is a complete 16:9 composition/);
+  assert.match(playerStyles, /\.star-screen-preview \.star-screen-stage\{[\s\S]*?height:100vh;[\s\S]*?grid-template-rows:36px minmax\(0,1fr\) 38px/);
+  assert.match(playerStyles, /\.star-screen-preview \.star-screen-welcome\{[\s\S]*?height:100%;[\s\S]*?overflow:hidden/);
+  assert.match(playerStyles, /\.star-screen-preview \.star-screen-now\{[\s\S]*?overflow:hidden/);
+});
+
+test("al volver desde Player muestra la actividad y oculta la consola VirtualDJ", () => {
+  assert.match(appSource, /classList\.toggle\("player-selected-mode", selectedMode === "player"\)/);
+  assert.match(appSource, /function playerActivityDisplaySummary/);
+  assert.match(playerStyles, /player-selected-mode:not\(\.player-mode\) #vdjStatus/);
+  assert.match(playerStyles, /player-selected-mode:not\(\.player-mode\) #vdjQueuePanel/);
+  assert.match(playerStyles, /player-selected-mode:not\(\.player-mode\) #requests \.request-details/);
+  assert.match(appSource, /active Player/);
+  assert.match(appSource, /Player queue cover the activity duration/);
+});
+
 test("Player recibe solicitudes públicas sin reconciliar VirtualDJ", () => {
   assert.match(serverSource, /pathname === "\/api\/player\/requests\/pull"/);
   assert.match(playerSource, /\/api\/player\/requests\/pull/);

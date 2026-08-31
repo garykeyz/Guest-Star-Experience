@@ -99,7 +99,7 @@
               <div class="player-transport-summary"><div class="player-now"><span>PISTA KARAOKE SELECCIONADA</span><h3 id="playerNowSong">Selecciona una canción</h3><p id="playerNowSinger">La cola se toma de las solicitudes de esta actividad.</p></div><span id="playerMediaStatus">Motor preparado</span></div>
               <canvas id="playerWaveform" class="player-waveform" width="1200" height="90" aria-label="Forma de onda en vivo"></canvas>
               <div class="player-timecode"><span id="playerCurrentTime">0:00</span><span id="playerDuration">0:00</span></div>
-              <input id="playerSeek" type="range" min="0" max="0" value="0" aria-label="Posición de reproducción" />
+              <input id="playerSeek" class="player-range player-seek-range" type="range" min="0" max="0" value="0" aria-label="Posición de reproducción" />
               <div class="player-controls">
                 <button class="button ghost" id="playerRestart"><span>⏮ Reiniciar</span><kbd>⇧R</kbd></button>
                 <button class="button primary" id="playerPlay"><span id="playerPlayLabel">▶ Reproducir</span><kbd>⇧Espacio</kbd></button>
@@ -108,7 +108,7 @@
                 <button class="button primary" id="playerComplete"><span>✓ Ya cantó</span><kbd>⇧C</kbd></button>
                 <button class="button danger" id="playerRemove"><span>× Quitar</span><kbd>⇧X</kbd></button>
               </div>
-              <div class="player-audio-controls"><button class="button ghost" id="playerMute">🔊 Audio</button><input id="playerVolume" type="range" min="0" max="1" value="1" step="0.05" aria-label="Volumen del Player" /><small>Atajos: ⇧↑/⇧↓ cambian el turno seleccionado</small></div>
+              <div class="player-audio-controls"><button class="button ghost" id="playerMute">🔊 Audio</button><label class="player-karaoke-volume" for="playerVolume"><span>Volumen karaoke</span><input id="playerVolume" class="player-range" type="range" min="0" max="1" value="1" step="0.05" aria-label="Volumen del audio karaoke" /><output id="playerVolumeValue">100%</output></label><small>Atajos: ⇧↑/⇧↓ cambian el turno seleccionado</small></div>
               <section class="player-live-mixer" aria-label="Mezclador en vivo del Player">
                 <section class="player-audio-lab" id="playerAudioLab" aria-label="Ecualizador del video karaoke">
                   <header><strong>EQ KARAOKE</strong><button class="button ghost" type="button" id="playerEqReset">Reset</button></header>
@@ -125,12 +125,12 @@
                     <button class="button ghost" type="button" id="playerStemOriginal">Original</button>
                     <button class="button ghost active" type="button" id="playerStemSeparated">Instrumental</button>
                   </div>
-                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control"><span>Voz guía IA</span><input id="playerVocalLevel" type="range" min="0" max="1" value="0" step="0.01" disabled /><output id="playerVocalLevelValue">0%</output></label>
+                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control"><span>Voz guía IA</span><input id="playerVocalLevel" class="player-range" type="range" min="0" max="1" value="0" step="0.01" disabled /><output id="playerVocalLevelValue">0%</output></label>
                 </section>
                 <section class="player-background-live" aria-label="Música ambiente">
                   <header><span>AMBIENTE</span><strong id="playerBackgroundSong">Sin música configurada</strong><small><b id="playerBackgroundArtist">Selecciona una fuente.</b> · <em id="playerBackgroundStatus">En espera</em></small></header>
                   <div class="player-background-live-actions"><button class="button primary" id="playerBackgroundToggle"><span id="playerBackgroundToggleLabel">▶ Ambiente</span><kbd>⇧A</kbd></button><button class="button ghost" id="playerBackgroundNext"><span>Siguiente</span><kbd>⇧N</kbd></button></div>
-                  <label class="player-background-volume" for="playerBackgroundVolume"><span>Volumen</span><input id="playerBackgroundVolume" type="range" min="0" max="1" value="0.55" step="0.01" aria-label="Volumen independiente de música de fondo" /><output id="playerBackgroundVolumeValue">55%</output></label>
+                  <label class="player-background-volume" for="playerBackgroundVolume"><span>Volumen ambiente</span><input id="playerBackgroundVolume" class="player-range" type="range" min="0" max="1" value="0.55" step="0.01" aria-label="Volumen independiente de música de fondo" /><output id="playerBackgroundVolumeValue">55%</output></label>
                   <div class="player-background-quick-pick"><input id="playerBackgroundSearch" type="search" placeholder="Buscar ambiente…" autocomplete="off" /><select id="playerBackgroundTrackSelect" aria-label="Canción ambiental específica"><option value="">Canción específica…</option></select><button class="button ghost" id="playerBackgroundPlaySelected" type="button">▶</button></div>
                 </section>
               </section>
