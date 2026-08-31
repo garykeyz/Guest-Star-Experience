@@ -69,6 +69,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   let libraryOffset = 0;
   let libraryHasMore = false;
   let libraryBrowseAll = false;
+  let planBItems = [];
+  let planBLoading = false;
   let pendingTrack = null;
   let stageMode = 'lobby';
   let scenePhase = 'lobby';
@@ -108,9 +110,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
         low: Math.max(-12, Math.min(12, Number(saved.low) || 0)),
         mid: Math.max(-12, Math.min(12, Number(saved.mid) || 0)),
         high: Math.max(-12, Math.min(12, Number(saved.high) || 0)),
-        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0))
+        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0)),
+        stemMode: saved.stemMode === 'original' ? 'original' : 'separated'
       };
-    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0 }; }
+    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0, stemMode: 'separated' }; }
   })();
 
   const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -132,9 +135,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     setAudioParam(mediaAudioGraph.mid.gain, audioSettings.mid);
     setAudioParam(mediaAudioGraph.high.gain, audioSettings.high);
     const stemsReady = current()?.stem?.ready === true;
-    setAudioParam(mediaAudioGraph.normalGain.gain, stemsReady ? 0 : 1, 0.025);
-    setAudioParam(mediaAudioGraph.instrumentalGain.gain, stemsReady ? 1 : 0, 0.025);
-    setAudioParam(mediaAudioGraph.vocalsGain.gain, stemsReady ? audioSettings.vocalLevel : 0, 0.025);
+    const separated = stemsReady && audioSettings.stemMode === 'separated';
+    setAudioParam(mediaAudioGraph.normalGain.gain, separated ? 0 : 1, 0.025);
+    setAudioParam(mediaAudioGraph.instrumentalGain.gain, separated ? 1 : 0, 0.025);
+    setAudioParam(mediaAudioGraph.vocalsGain.gain, separated ? audioSettings.vocalLevel : 0, 0.025);
   }
 
   function renderAudioSettings() {
@@ -151,7 +155,12 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     const vocalOutput = $('#playerVocalLevelValue');
     if (vocalOutput) vocalOutput.textContent = `${Math.round(audioSettings.vocalLevel * 100)}%`;
     const vocalControl = $('#playerVocalControl');
-    if (vocalControl) vocalControl.classList.toggle('hidden', current()?.stem?.ready !== true);
+    const stemsReady = current()?.stem?.ready === true;
+    if (vocalControl) vocalControl.classList.remove('hidden');
+    if (vocal) vocal.disabled = !stemsReady || audioSettings.stemMode !== 'separated';
+    $('#playerStemOriginal')?.classList.toggle('active', audioSettings.stemMode === 'original');
+    $('#playerStemSeparated')?.classList.toggle('active', audioSettings.stemMode === 'separated');
+    if ($('#playerStemSeparated')) $('#playerStemSeparated').disabled = !stemsReady;
   }
 
   function setScene(modeName, phase = modeName) {
@@ -447,6 +456,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerScan').disabled = !configured;
     $('#playerSync').disabled = !configured;
     $('#playerOpenStarScreen').disabled = !preparationReady;
+    $('#playerClose').classList.toggle('hidden', activityRunning() && selectedMode === 'player');
     document.querySelectorAll('[data-player-drawer]').forEach((button) => { button.disabled = !configured; });
     $('#playerPlay').disabled = !ready || (!current() && !queue().length);
     $('#playerRestart').disabled = !ready || !current() || !media.src || transitionBusy;
@@ -457,6 +467,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerBackgroundToggle').disabled = !preparationReady || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
     $('#playerBackgroundNext').disabled = !preparationReady || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
     $('#playerBackgroundPlaySelected').disabled = !preparationReady || !backgroundSelectedId || stageMode === 'karaoke' || Boolean(backgroundTransition);
+    const stemTarget = current() || queue()[0] || null;
+    const stemQuick = $('#playerStemQuickAction');
+    const stemStatus = $('#playerStemQuickStatus');
+    const stemReady = stemTarget?.stem?.ready === true;
+    const stemBusy = stemTarget?.stem && !stemReady && stemTarget.stem.status !== 'failed';
+    if (!state?.stemEngine?.available) stemStatus.textContent = 'Motor IA no disponible';
+    else if (!stemTarget) stemStatus.textContent = 'Selecciona una pista';
+    else if (!stemTarget.localAvailable) stemStatus.textContent = 'Falta el archivo local';
+    else if (stemReady) stemStatus.textContent = 'Instrumental y voz listos';
+    else if (stemBusy) stemStatus.textContent = `${Math.round(Number(stemTarget.stem.progress) || 0)}% · ${stemTarget.stem.phase || 'Preparando'}`;
+    else if (stemTarget.stem?.status === 'failed') stemStatus.textContent = 'Falló · se puede reintentar';
+    else stemStatus.textContent = `${guest(stemTarget)} · lista para preparar`;
+    stemQuick.textContent = stemReady ? '✓ IA lista' : stemBusy ? 'Preparando…' : stemTarget?.stem?.status === 'failed' ? '↻ Reintentar' : '✦ Preparar IA';
+    stemQuick.disabled = !preparationReady || !state?.stemEngine?.available || !stemTarget?.localAvailable || stemReady || stemBusy;
   }
 
   function youtubeDropdown(item) {
@@ -525,6 +549,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   function renderCompleted() {
     const items = (state?.requests || []).filter(terminalRequest);
     $('#playerCompletedCount').textContent = String(items.length);
+    $('#playerHistoryBadge').textContent = String(items.length);
     $('#playerCompleted').innerHTML = items.length
       ? items.map((item) => {
         const removed = item.outcome === 'removed' || item.status === 'Retirada del Player';
@@ -532,6 +557,65 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
         return `<article class="player-completed-row ${removed ? 'removed' : skipped ? 'skipped' : 'completed'}"><span>${removed ? '×' : skipped ? '−' : '✓'}</span><div><strong>${escapeHtml(guest(item))}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''} · ${removed ? 'Retirada' : skipped ? 'Omitida' : 'Cantada'}</small></div><button class="button ghost" data-player-undo="${escapeHtml(item.id)}">Deshacer</button></article>`;
       }).join('')
       : '<p class="player-empty">Las canciones cantadas u omitidas aparecerán aquí.</p>';
+  }
+
+  function activePlanBItems() {
+    if (planBItems.length) return planBItems;
+    return Array.isArray(state?.hitSuggestions) ? state.hitSuggestions : [];
+  }
+
+  function renderPlanB() {
+    const items = activePlanBItems();
+    $('#playerPlanBBadge').textContent = String(items.length);
+    if (planBLoading) {
+      $('#playerPlanB').innerHTML = '<p class="player-empty">Preparando una rotación Plan B…</p>';
+      return;
+    }
+    $('#playerPlanB').innerHTML = items.length
+      ? items.map((item, index) => {
+        const youtube = Array.isArray(item.youtube) ? item.youtube[0] : null;
+        const localAction = item.localAvailable && item.trackId
+          ? `<button class="button primary" type="button" data-player-plan-b-assign="${index}">Asignar cantante</button>`
+          : youtube
+            ? `<button class="button ghost" type="button" data-player-plan-b-open="${escapeHtml(youtube.url)}">Abrir Karaoke ↗</button>`
+            : `<button class="button ghost" type="button" data-player-plan-b-youtube="${index}">${item.youtubeSearching ? 'Buscando…' : 'Buscar Karaoke'}</button>`;
+        return `<article class="player-plan-b-row"><span>${escapeHtml(item.language || item.list || 'Plan B')}</span><div><strong>${escapeHtml(item.song)}</strong><small>${escapeHtml(item.artist || 'Artista no indicado')}</small></div><em class="${item.localAvailable ? 'available' : ''}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</em>${localAction}</article>`;
+      }).join('')
+      : '<p class="player-empty">Pulsa Balanceada, Español, English o Favoritos para preparar el Plan B.</p>';
+  }
+
+  async function drawPlanB(list) {
+    if (planBLoading) return;
+    planBLoading = true;
+    renderPlanB();
+    try {
+      const data = await api('/api/rotation/draw', {
+        method: 'POST',
+        body: JSON.stringify({ list, count: 8 })
+      });
+      planBItems = data.items || [];
+      showNotice(planBItems.length
+        ? 'Plan B actualizado. Las pistas locales se pueden asignar directamente a un cantante.'
+        : 'Esa lista todavía no tiene pistas disponibles.');
+    } catch (error) { showNotice(error.message, true); }
+    finally { planBLoading = false; renderPlanB(); }
+  }
+
+  async function searchPlanBYoutube(index) {
+    const item = activePlanBItems()[Number(index)];
+    if (!item || item.youtubeSearching) return;
+    item.youtubeSearching = true;
+    renderPlanB();
+    try {
+      const data = await api('/api/suggestions/youtube', {
+        method: 'POST',
+        body: JSON.stringify({ song: item.song, artist: item.artist, language: item.language, list: item.list, force: true })
+      });
+      item.youtube = data.items || [];
+      item.youtubeSearched = true;
+      showNotice(item.youtube.length ? 'Versión Karaoke encontrada para el Plan B.' : 'No se encontró una versión Karaoke confiable.');
+    } catch (error) { showNotice(error.message, true); }
+    finally { item.youtubeSearching = false; renderPlanB(); }
   }
 
   function renderNow() {
@@ -588,7 +672,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
 
   function render() {
     if (!state) return;
-    renderBranding(); renderQueue(); renderCompleted(); renderNow(); renderBackground(); renderAudioSettings(); renderOperations(); publish();
+    renderBranding(); renderQueue(); renderCompleted(); renderPlanB(); renderNow(); renderBackground(); renderAudioSettings(); renderOperations(); publish();
   }
 
   async function loadRequest(id, autoplay = false) {
@@ -1145,7 +1229,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   }
 
   async function syncPlayer() {
-    try { $('#playerSync').classList.add('is-loading'); sync(await api('/api/player/sync', { method: 'POST', body: '{}' })); showNotice('Solicitudes y biblioteca del Player actualizadas.'); }
+    try { $('#playerSync').classList.add('is-loading'); sync(await api('/api/player/requests/pull', { method: 'POST', body: '{}' })); showNotice('Solicitudes públicas del Player actualizadas.'); }
     catch (error) { showNotice(error.message, true); }
     finally { $('#playerSync').classList.remove('is-loading'); }
   }
@@ -1174,9 +1258,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     render(); void ensureBackgroundPlaying();
   }
 
-  function close() {
+  function close({ force = false } = {}) {
+    if (!force && playerReady()) {
+      showNotice('La actividad está en curso en Player. Finalízala antes de salir de este modo.', true);
+      return false;
+    }
     closeDrawers();
     opened = false; document.body.classList.remove('player-mode'); $('#playerWorkspace').classList.add('hidden'); publish();
+    return true;
   }
 
   function closeDrawers() {
@@ -1202,13 +1291,13 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (previousActivity !== activityId()) {
       transitionToken += 1; backgroundGeneration += 1; transitionBusy = false; backgroundTransition = null;
       currentId = ''; setScene('lobby'); clearPlayerMedia(); clearBackgroundMedia();
-      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; loadOrder();
+      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; planBItems = []; loadOrder();
     }
     if (Array.isArray(state?.playerRuntime?.queueOrder)) {
       order = [...new Set(state.playerRuntime.queueOrder.map(String).filter(Boolean))];
       localStorage.setItem(storageKey(), JSON.stringify(order));
     }
-    if (state?.operatingMode?.locked && mode() === 'bridge' && opened) close();
+    if (state?.operatingMode?.locked && mode() === 'bridge' && opened) close({ force: true });
     if (!playerReady()) {
       setScene('lobby'); media.pause(); instrumentalAudio.pause(); vocalsAudio.pause();
     }
@@ -1262,6 +1351,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   document.querySelectorAll('[data-player-drawer-close]').forEach((button) => {
     button.addEventListener('click', closeDrawers);
   });
+  document.querySelectorAll('[data-player-plan-b-list]').forEach((button) => {
+    button.addEventListener('click', () => void drawPlanB(button.dataset.playerPlanBList));
+  });
+  $('#playerPlanB').addEventListener('click', (event) => {
+    const assign = event.target.closest('[data-player-plan-b-assign]');
+    if (assign) {
+      const item = activePlanBItems()[Number(assign.dataset.playerPlanBAssign)];
+      if (item?.trackId) openSingerAssignment({ id: item.trackId, song: item.song, artist: item.artist, extension: 'LOCAL' });
+      return;
+    }
+    const youtube = event.target.closest('[data-player-plan-b-youtube]');
+    if (youtube) { void searchPlanBYoutube(youtube.dataset.playerPlanBYoutube); return; }
+    const open = event.target.closest('[data-player-plan-b-open]');
+    if (open) void openPlayerYoutube(open.dataset.playerPlanBOpen);
+  });
   $('#playerQueue').addEventListener('toggle', (event) => {
     const details = event.target.closest?.('[data-player-youtube-details]');
     if (!details) return;
@@ -1278,7 +1382,18 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   $('#playerSkip').addEventListener('click', () => void advance('skipped'));
   $('#playerComplete').addEventListener('click', () => void advance('completed'));
   $('#playerRemove').addEventListener('click', () => void advance('removed'));
-  $('#playerClose').addEventListener('click', close);
+  $('#playerClose').addEventListener('click', () => close());
+  $('#playerStemQuickAction').addEventListener('click', () => {
+    const item = current() || queue()[0];
+    if (item) void preparePlayerStems(item.id);
+  });
+  $('#playerStemOriginal').addEventListener('click', () => {
+    audioSettings.stemMode = 'original'; persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+  });
+  $('#playerStemSeparated').addEventListener('click', () => {
+    if (current()?.stem?.ready !== true) return;
+    audioSettings.stemMode = 'separated'; persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+  });
   $('#playerOpenStarScreen').addEventListener('click', async () => {
     if (!playerPreparationReady()) return showNotice('Selecciona una actividad y el modo Player antes de abrir Star Screen.', true);
     try {

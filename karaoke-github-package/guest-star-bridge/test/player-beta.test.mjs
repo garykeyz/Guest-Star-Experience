@@ -49,6 +49,8 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
 
   const activityStartTime = "2026-08-27T15:00:00.000Z";
   let activityRunning = false;
+  const publicRequests = [];
+  let youtubeSearchStarted = false;
   const guestStarService = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -83,8 +85,12 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
           playbackMode: "player",
           lastSource: "player"
         },
-        requests: []
+        requests: publicRequests
       };
+    } else if (body.action === "youtubeSearchV4") {
+      youtubeSearchStarted = true;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1200));
+      payload = { ok: true, items: [] };
     } else if (body.action === "pollBridgeCommands") {
       payload = { ok: true, commands: [] };
     }
@@ -140,6 +146,8 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
     candidate.account?.authenticated === true &&
     candidate.operatingMode?.selected === "player" &&
     candidate.activity?.activityRunning === false &&
+    candidate.tenant?.branding?.hotelLogoUrl &&
+    candidate.tenant?.share?.publicUrl &&
     candidate.library?.count === 1 &&
     candidate.backgroundMusic?.count === 1
   );
@@ -189,6 +197,57 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
   }).then((response) => response.json());
   assert.equal(started.ok, true, started.error || childError);
   assert.equal(started.activity.activityRunning, true);
+
+  publicRequests.push({
+    id: "public-request-slow-maintenance",
+    timestamp: "2026-08-27T15:00:30.000Z",
+    singer: "Diana",
+    song: "Pista Que No Existe",
+    artist: "Artista Remoto",
+    language: "Español",
+    sourceType: "guest_request",
+    status: "Pendiente",
+    durationSeconds: 240,
+    transitionSeconds: 30
+  });
+  await fetch(`${url}/api/player/requests/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  });
+  const maintenanceDeadline = Date.now() + 2000;
+  while (!youtubeSearchStarted && Date.now() < maintenanceDeadline) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  assert.equal(youtubeSearchStarted, true, "the slow optional YouTube maintenance must be running in the background");
+
+  publicRequests.push({
+    id: "public-request-live-1",
+    timestamp: "2026-08-27T15:01:00.000Z",
+    singer: "Moises",
+    song: "Yo Perreo Sola",
+    artist: "Bad Bunny",
+    language: "Español",
+    sourceType: "guest_request",
+    status: "Pendiente",
+    durationSeconds: 240,
+    transitionSeconds: 30
+  });
+  const pullStartedAt = performance.now();
+  const pulled = await fetch(`${url}/api/player/requests/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  const pullElapsedMs = performance.now() - pullStartedAt;
+  assert.equal(pulled.ok, true, pulled.error || childError);
+  assert.equal(
+    pulled.requests.some((item) => item.id === "public-request-live-1" && item.singer === "Moises"),
+    true,
+    "a public request must enter the running Player without any VirtualDJ dependency"
+  );
+  assert.ok(pullElapsedMs < 700,
+    `public requests must not wait for YouTube/local maintenance (${pullElapsedMs.toFixed(1)} ms)`);
 
   const completed = await fetch(`${url}/api/player/requests/${encodeURIComponent(local.id)}/outcome`, {
     method: "POST",

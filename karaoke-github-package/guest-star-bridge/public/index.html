@@ -53,8 +53,9 @@
           <nav class="player-live-dock" aria-label="Paneles del Host">
             <button class="button ghost" type="button" data-player-drawer="summary">Resumen</button>
             <button class="button ghost" type="button" data-player-drawer="library">Biblioteca</button>
-            <button class="button ghost" type="button" data-player-drawer="background">Ambiente</button>
-            <button class="button ghost" type="button" data-player-drawer="history">Historial</button>
+            <button class="button ghost" type="button" data-player-drawer="background">Fuentes ambiente</button>
+            <button class="button ghost" type="button" data-player-drawer="history">Completadas / Omitidas <span id="playerHistoryBadge">0</span></button>
+            <button class="button ghost" type="button" data-player-drawer="plan-b">Plan B <span id="playerPlanBBadge">0</span></button>
           </nav>
         </header>
 
@@ -108,19 +109,35 @@
                 <button class="button danger" id="playerRemove"><span>× Quitar</span><kbd>⇧X</kbd></button>
               </div>
               <div class="player-audio-controls"><button class="button ghost" id="playerMute">🔊 Audio</button><input id="playerVolume" type="range" min="0" max="1" value="1" step="0.05" aria-label="Volumen del Player" /><small>Atajos: ⇧↑/⇧↓ cambian el turno seleccionado</small></div>
-              <section class="player-audio-lab" id="playerAudioLab" aria-label="Audio profesional del Player">
-                <header><strong>EQ KARAOKE</strong><button class="button ghost" type="button" id="playerEqReset">Reset</button></header>
-                <div class="player-eq-grid" aria-label="Ecualizador de tres bandas para karaoke">
-                  <label for="playerEqLow"><span class="player-knob-shell"><input id="playerEqLow" type="range" min="-12" max="12" value="0" step="1" /></span><b>Graves</b><output id="playerEqLowValue">0 dB</output></label>
-                  <label for="playerEqMid"><span class="player-knob-shell"><input id="playerEqMid" type="range" min="-12" max="12" value="0" step="1" /></span><b>Medios</b><output id="playerEqMidValue">0 dB</output></label>
-                  <label for="playerEqHigh"><span class="player-knob-shell"><input id="playerEqHigh" type="range" min="-12" max="12" value="0" step="1" /></span><b>Agudos</b><output id="playerEqHighValue">0 dB</output></label>
-                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control hidden"><span>Voz guía IA</span><input id="playerVocalLevel" type="range" min="0" max="1" value="0" step="0.01" /><output id="playerVocalLevelValue">0%</output></label>
-                </div>
+              <section class="player-live-mixer" aria-label="Mezclador en vivo del Player">
+                <section class="player-audio-lab" id="playerAudioLab" aria-label="Ecualizador del video karaoke">
+                  <header><strong>EQ KARAOKE</strong><button class="button ghost" type="button" id="playerEqReset">Reset</button></header>
+                  <div class="player-eq-grid" aria-label="Ecualizador de tres bandas para karaoke">
+                    <label for="playerEqLow"><span class="player-knob-shell"><input id="playerEqLow" type="range" min="-12" max="12" value="0" step="1" /></span><b>Graves</b><output id="playerEqLowValue">0 dB</output></label>
+                    <label for="playerEqMid"><span class="player-knob-shell"><input id="playerEqMid" type="range" min="-12" max="12" value="0" step="1" /></span><b>Medios</b><output id="playerEqMidValue">0 dB</output></label>
+                    <label for="playerEqHigh"><span class="player-knob-shell"><input id="playerEqHigh" type="range" min="-12" max="12" value="0" step="1" /></span><b>Agudos</b><output id="playerEqHighValue">0 dB</output></label>
+                  </div>
+                </section>
+                <section class="player-stems-live" aria-label="Controles Stems IA">
+                  <header><strong>STEMS IA</strong><span id="playerStemQuickStatus">Selecciona una pista</span></header>
+                  <div class="player-stem-mode-buttons">
+                    <button class="button ghost" type="button" id="playerStemQuickAction">Preparar IA</button>
+                    <button class="button ghost" type="button" id="playerStemOriginal">Original</button>
+                    <button class="button ghost active" type="button" id="playerStemSeparated">Instrumental</button>
+                  </div>
+                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control"><span>Voz guía IA</span><input id="playerVocalLevel" type="range" min="0" max="1" value="0" step="0.01" disabled /><output id="playerVocalLevelValue">0%</output></label>
+                </section>
+                <section class="player-background-live" aria-label="Música ambiente">
+                  <header><span>AMBIENTE</span><strong id="playerBackgroundSong">Sin música configurada</strong><small><b id="playerBackgroundArtist">Selecciona una fuente.</b> · <em id="playerBackgroundStatus">En espera</em></small></header>
+                  <div class="player-background-live-actions"><button class="button primary" id="playerBackgroundToggle"><span id="playerBackgroundToggleLabel">▶ Ambiente</span><kbd>⇧A</kbd></button><button class="button ghost" id="playerBackgroundNext"><span>Siguiente</span><kbd>⇧N</kbd></button></div>
+                  <label class="player-background-volume" for="playerBackgroundVolume"><span>Volumen</span><input id="playerBackgroundVolume" type="range" min="0" max="1" value="0.55" step="0.01" aria-label="Volumen independiente de música de fondo" /><output id="playerBackgroundVolumeValue">55%</output></label>
+                  <div class="player-background-quick-pick"><input id="playerBackgroundSearch" type="search" placeholder="Buscar ambiente…" autocomplete="off" /><select id="playerBackgroundTrackSelect" aria-label="Canción ambiental específica"><option value="">Canción específica…</option></select><button class="button ghost" id="playerBackgroundPlaySelected" type="button">▶</button></div>
+                </section>
               </section>
             </div>
           </section>
           <section class="player-queue-card">
-            <header><div><p class="eyebrow">FILA DEL PLAYER</p><h3>Solicitudes activas</h3><small>Selecciona, sube, baja, marca o retira cualquier turno.</small></div><span id="playerQueueCount">0</span></header>
+            <header><div><p class="eyebrow">FILA DEL PLAYER</p><h3>Solicitudes activas</h3><small>Vista compacta. Despliega un turno solo cuando necesites sus opciones.</small></div><span id="playerQueueCount">0</span></header>
             <div id="playerQueue" class="player-queue-list"></div>
           </section>
         </div>
@@ -134,25 +151,15 @@
             <div class="player-drawer-title-actions"><span id="playerBackgroundCount">0 pistas</span><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></div>
           </header>
           <div class="player-background-layout">
-            <div class="player-background-now"><small>SONANDO EN EL LOBBY</small><strong id="playerBackgroundSong">Sin música configurada</strong><p id="playerBackgroundArtist">Selecciona una carpeta o un archivo de audio.</p><em id="playerBackgroundStatus">En espera</em></div>
-            <div class="player-background-controls">
-              <div><button class="button primary" id="playerBackgroundToggle"><span id="playerBackgroundToggleLabel">▶ Reproducir ambiente</span><kbd>⇧A</kbd></button><button class="button ghost" id="playerBackgroundNext"><span>Siguiente aleatoria</span><kbd>⇧N</kbd></button></div>
-              <label for="playerBackgroundVolume"><span>Volumen de música de fondo</span><output id="playerBackgroundVolumeValue">55%</output></label>
-              <input id="playerBackgroundVolume" type="range" min="0" max="1" value="0.55" step="0.01" aria-label="Volumen independiente de música de fondo" />
-            </div>
             <div class="player-background-sources">
               <div><button class="button ghost" id="playerBackgroundChooseFolder">Elegir carpeta de audio</button><button class="button ghost" id="playerBackgroundChooseFile">Elegir archivo de audio</button></div>
-              <div class="player-background-picker">
-                <label for="playerBackgroundTrackSelect">Reproducir una canción específica</label>
-                <input id="playerBackgroundSearch" type="search" placeholder="Buscar música de fondo…" autocomplete="off" />
-                <div><select id="playerBackgroundTrackSelect" aria-label="Canción ambiental específica"><option value="">Selecciona una canción…</option></select><button class="button primary" id="playerBackgroundPlaySelected" type="button">▶ Reproducir</button></div>
-              </div>
               <div id="playerBackgroundSources"><p class="player-empty">Aún no se configuró música de fondo.</p></div>
             </div>
           </div>
           <audio id="playerBackgroundAudio" preload="metadata"></audio>
         </section>
         <section class="player-completed-card player-drawer" data-player-drawer-panel="history"><header><div><p class="eyebrow">HISTORIAL DE LA ACTIVIDAD</p><h3>Completadas / Omitidas</h3><p>Solo Deshacer puede devolverlas a la fila del Player.</p></div><div class="player-drawer-title-actions"><span id="playerCompletedCount">0</span><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></div></header><div id="playerCompleted" class="player-completed-list"></div></section>
+        <section class="player-plan-b-card player-drawer" data-player-drawer-panel="plan-b"><header><div><p class="eyebrow">PLAN B DE ROTACIÓN</p><h3>Sugerencias para completar la actividad</h3><p>Una sola rotación balanceada; sin listas aleatorias duplicadas.</p></div><button class="close-button" type="button" data-player-drawer-close aria-label="Cerrar">×</button></header><div class="player-plan-b-controls" role="group" aria-label="Lista para Plan B"><button class="button ghost" type="button" data-player-plan-b-list="spanish">Español</button><button class="button ghost" type="button" data-player-plan-b-list="english">English</button><button class="button ghost" type="button" data-player-plan-b-list="favorites">Favoritos</button><button class="button primary" type="button" data-player-plan-b-list="both">Balanceada</button></div><div id="playerPlanB" class="player-plan-b-list"><p class="player-empty">Abre Plan B para preparar una rotación de respaldo.</p></div></section>
         <section class="player-share-card"><div><p class="eyebrow">SOLICITUDES DEL HOTEL</p><strong id="playerShareHotel">Guest Star</strong><small id="playerShareUrl">El QR usará el enlace público de la actividad actual.</small></div><img id="playerQr" alt="QR de solicitudes" /></section>
       </section>
 
@@ -162,7 +169,7 @@
           <div class="player-assign-track"><span>VIDEO LOCAL</span><strong id="playerAssignSong">Canción</strong><small id="playerAssignArtist">Artista</small></div>
           <label for="playerAssignSinger">Nombre del cantante</label>
           <input id="playerAssignSinger" name="singer" autocomplete="off" maxlength="100" placeholder="Ej.: Gary" required />
-          <label id="playerAssignStemsOption" class="player-assign-stems hidden"><input id="playerAssignStems" type="checkbox" /><span><strong>¿Separar voces con IA?</strong><small>Opcional: prepara instrumental y control de voz antes de añadirla a Star Lineup.</small></span></label>
+          <label id="playerAssignStemsOption" class="player-assign-stems hidden"><input id="playerAssignStems" type="checkbox" /><span class="player-assign-stems-copy"><strong>¿Separar voces con IA?</strong><small>Opcional: prepara instrumental y control de voz antes de añadirla a Star Lineup.</small></span></label>
           <p>Esta pista se agregará como una entrada propia del Player y conservará este cantante.</p>
           <div class="button-row"><button type="button" class="button ghost" id="playerAssignSingerCancel">Cancelar</button><button type="submit" class="button primary">Agregar a la fila</button></div>
         </form>
@@ -276,23 +283,6 @@
         </section>
       </section>
       <section id="finishedRequests" class="request-results" aria-live="polite"></section>
-      <section id="randomRotation" class="hit-suggestions rotation-panel hidden">
-        <div class="hit-header rotation-header">
-          <div>
-            <p class="eyebrow">ALEATORIO · RANDOM</p>
-            <h2>Listas infinitas para llenar la rotación</h2>
-            <p>Sin repetir temas hasta completar cada vuelta.</p>
-          </div>
-          <div class="rotation-controls">
-            <button class="button ghost" id="randomSpanish">Español</button>
-            <button class="button ghost" id="randomEnglish">English</button>
-            <button class="button ghost" id="randomFavorites">Favoritos</button>
-            <button class="button primary" id="randomBoth">Ambas listas</button>
-          </div>
-        </div>
-        <p id="rotationEmpty" class="group-empty">Elige una lista para generar los próximos temas.</p>
-        <div id="rotationGrid" class="hit-grid"></div>
-      </section>
       <section id="hitSuggestions" class="hit-suggestions hidden"></section>
     </main>
 

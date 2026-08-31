@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { homedir, setPriority } from "node:os";
+import { availableParallelism, homedir, setPriority } from "node:os";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
@@ -91,6 +91,7 @@ const BRIDGE_VERSION = "4.4.1";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
+const STEM_IDLE_THREADS = Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -156,6 +157,8 @@ let requests = [];
 let scanning = false;
 let syncing = false;
 let syncAgain = false;
+let syncMaintenanceRunning = false;
+let syncMaintenanceAgain = false;
 let lastScanAt = null;
 let lastSyncAt = null;
 let libraryError = "";
@@ -280,6 +283,7 @@ function rotationItemView(item, list) {
     ...item,
     list,
     localAvailable: Boolean(match?.exact),
+    trackId: match?.exact ? Buffer.from(match.filePath).toString("base64url") : "",
     filePath: match?.exact ? match.filePath : "",
     fileName: match?.exact ? match.fileName : "",
     youtube: hitYoutubeCache.get(key) || [],
@@ -1624,6 +1628,7 @@ function stateView() {
           const key = hitSuggestionKey(item);
           return {
             ...item,
+            trackId: item.filePath ? Buffer.from(item.filePath).toString("base64url") : "",
             youtube: hitYoutubeCache.get(key) || [],
             youtubeSearched: hitYoutubeCache.has(key)
           };
@@ -1907,6 +1912,7 @@ async function syncNow() {
   }
   syncing = true;
   sheetError = "";
+  let refreshed = false;
   broadcastState();
   try {
     const data = await fetchBridgeQueue(config);
@@ -1964,9 +1970,27 @@ async function syncNow() {
         reportedDuplicateIds.add(duplicate.id);
       }
     }
+    refreshed = true;
   } catch (error) {
     sheetError = errorMessage(error);
+  } finally {
+    syncing = false;
+    broadcastState();
+    if (refreshed) void runSyncMaintenance();
+    if (syncAgain) {
+      syncAgain = false;
+      void syncNow();
+    }
   }
+}
+
+async function runSyncMaintenance() {
+  if (!guestStarConfigured()) return;
+  if (syncMaintenanceRunning) {
+    syncMaintenanceAgain = true;
+    return;
+  }
+  syncMaintenanceRunning = true;
   try {
     if (operatingMode === "bridge") await reconcileVirtualDjQueue();
     await reportLocalStates();
@@ -1978,11 +2002,11 @@ async function syncNow() {
   } catch (error) {
     if (!sheetError) sheetError = errorMessage(error);
   } finally {
-    syncing = false;
+    syncMaintenanceRunning = false;
     broadcastState();
-    if (syncAgain) {
-      syncAgain = false;
-      void syncNow();
+    if (syncMaintenanceAgain) {
+      syncMaintenanceAgain = false;
+      void runSyncMaintenance();
     }
   }
 }
@@ -2105,10 +2129,10 @@ async function runStemCommand(command, args, job, phase, onOutput = null) {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      OMP_NUM_THREADS: "1",
-      MKL_NUM_THREADS: "1",
-      OPENBLAS_NUM_THREADS: "1",
-      VECLIB_MAXIMUM_THREADS: "1",
+      OMP_NUM_THREADS: String(STEM_IDLE_THREADS),
+      MKL_NUM_THREADS: String(STEM_IDLE_THREADS),
+      OPENBLAS_NUM_THREADS: String(STEM_IDLE_THREADS),
+      VECLIB_MAXIMUM_THREADS: String(STEM_IDLE_THREADS),
       UV_THREADPOOL_SIZE: "1"
     }
   });
@@ -2177,7 +2201,7 @@ async function prepareStemJob(job) {
     ], job, "Extrayendo audio");
     job.progress = 10;
     await runStemCommand(process.execPath, [
-      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.10"
+      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.05"
     ], job, "Separando voz e instrumental", (output) => {
       const matches = [...output.matchAll(/(\d+)\/(\d+)/g)];
       const latest = matches.at(-1);
@@ -3155,11 +3179,19 @@ async function findHitSuggestionYoutube(body = {}) {
     activityState.activityId,
     6
   );
+  const requested = {
+    song: String(body.song || "").trim(),
+    artist: String(body.artist || "").trim(),
+    language: String(body.language || "Español")
+  };
+  const favorites = config.lastHotelId ? favoritesForHotel(config.lastHotelId) : [];
   const suggestion = suggestions.find(
     (item) =>
       normalizeText(item.song) === normalizeText(body.song) &&
       normalizeText(item.artist) === normalizeText(body.artist)
-  );
+  ) || (isKnownRotationSong(requested, favorites)
+    ? rotationItemView(requested, String(body.list || "favorites"))
+    : null);
   if (!suggestion) throw new Error("The suggestion is no longer available.");
   const key = hitSuggestionKey(suggestion);
   if (body.force === true) hitYoutubeCache.delete(key);
@@ -3897,7 +3929,13 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && pathname === "/api/requests/sync") {
     await syncNow();
-    await reconcileVirtualDjQueue(true);
+    if (operatingMode === "bridge") await reconcileVirtualDjQueue(true);
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/requests/pull") {
+    requireSignedInBridge();
+    await syncNow();
     json(response, 200, stateView());
     return;
   }

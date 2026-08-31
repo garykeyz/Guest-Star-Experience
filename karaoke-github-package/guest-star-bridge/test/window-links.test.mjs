@@ -398,12 +398,14 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
     "playerPlay", "playerRestart", "playerReturn", "playerSkip",
     "playerComplete", "playerRemove", "playerSeek", "playerVolume", "playerMute",
     "playerRequestsToggle", "playerPrimaryActivity", "playerScan",
-    "playerSync", "playerShare", "playerSettings", "playerCompleted"
+    "playerSync", "playerShare", "playerSettings", "playerCompleted",
+    "playerStemQuickAction", "playerStemOriginal", "playerStemSeparated",
+    "playerBackgroundToggle", "playerBackgroundVolume"
   ]) assert.match(bridgeHtml, new RegExp(`id="${id}"`));
   assert.match(playerSource, /media\.addEventListener\('ended'/);
   assert.match(playerSource, /\/api\/player\/requests\/\$\{encodeURIComponent\(item\.id\)\}\/outcome/);
   assert.match(playerSource, /\/api\/player\/requests\/\$\{encodeURIComponent\(id\)\}\/undo/);
-  assert.match(playerSource, /\/api\/player\/sync/);
+  assert.match(playerSource, /\/api\/player\/requests\/pull/);
   assert.match(starScreenSource, /const drift = target - \(video\.currentTime/);
   assert.match(starScreenSource, /video\.playbackRate = Math\.max\(0\.97/);
   assert.match(starScreenSource, /setInterval\(\(\) => .*200\)/);
@@ -414,6 +416,15 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
   assert.match(playerSource, /fadeVolume/);
   assert.match(playerStyles, /body\.player-mode \.player-star-screen-shell[^}]+aspect-ratio:16\/9!important/);
   assert.doesNotMatch(playerStyles, /player-star-screen-shell[^}]+aspect-ratio:auto/);
+  assert.match(playerStyles, /\.player-live-mixer\{display:grid/);
+  assert.match(playerStyles, /\.player-queue-card\{align-self:start;height:auto/);
+});
+
+test("Player recibe solicitudes públicas sin reconciliar VirtualDJ", () => {
+  assert.match(serverSource, /pathname === "\/api\/player\/requests\/pull"/);
+  assert.match(playerSource, /\/api\/player\/requests\/pull/);
+  assert.match(serverSource, /if \(operatingMode === "bridge"\) await reconcileVirtualDjQueue\(true\)/);
+  assert.match(serverSource, /void runSyncMaintenance\(\)/);
 });
 
 test("Star Screen abre una ventana nativa en la pantalla secundaria", () => {
@@ -530,6 +541,9 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(playerSource, /media\.addEventListener\('seeked'/);
   assert.match(serverSource, /stems-v2/);
   assert.match(serverSource, /aresample=44100:first_pts=0/);
+  assert.match(serverSource, /STEM_IDLE_THREADS/);
+  assert.match(serverSource, /"--overlap", "0\.05"/);
+  assert.match(serverSource, /pauseStemWorker\(clean\.playback\.scene === "karaoke"\)/);
 });
 
 test("la fila y el progreso Stems permanecen compactos hasta solicitar opciones", () => {
@@ -539,6 +553,24 @@ test("la fila y el progreso Stems permanecen compactos hasta solicitar opciones"
   assert.match(playerSource, /class="player-stem-progress/);
   assert.match(playerStyles, /\.player-stem-progress\{[^}]+width:34px;height:34px/);
   assert.match(playerStyles, /\.player-queue-details\.hidden\{display:none\}/);
+  assert.match(playerStyles, /max-height:min\(56vh,565px\)/);
+});
+
+test("historial y Plan B viven dentro del Player y la lista infinita ya no se duplica", () => {
+  assert.match(bridgeHtml, /data-player-drawer="history"/);
+  assert.match(bridgeHtml, /data-player-drawer="plan-b"/);
+  assert.match(bridgeHtml, /id="playerPlanB"/);
+  assert.match(playerSource, /function drawPlanB/);
+  assert.match(playerSource, /data-player-plan-b-assign/);
+  assert.doesNotMatch(bridgeHtml, /Listas infinitas para llenar la rotación/);
+  assert.doesNotMatch(bridgeHtml, /id="randomRotation"/);
+});
+
+test("una actividad en curso bloquea la salida del modo operativo", () => {
+  assert.match(playerSource, /if \(!force && playerReady\(\)\)/);
+  assert.match(playerSource, /#playerClose'\)\.classList\.toggle\('hidden', activityRunning\(\)/);
+  assert.match(appSource, /Finaliza la actividad antes de cambiar hotel, actividad o modo/);
+  assert.match(appSource, /playerPanel\.close\(\{ force: true \}\)/);
 });
 
 test("el QR de Star Screen es grande y el preview conserva legibilidad", () => {
