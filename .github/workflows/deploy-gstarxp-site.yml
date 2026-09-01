@@ -19,6 +19,7 @@ jobs:
   deploy:
     name: Publish the presentation site
     runs-on: ubuntu-latest
+    environment: production
     defaults:
       run:
         working-directory: presentation-site/cloudflare
