@@ -1,5 +1,10 @@
 # Guest Star Experience — Presentation Site
 
-This folder contains the marketing and product-presentation site for Guest Star Experience.
+Landing page de producto para Guest Star Experience.
 
-It is deliberately isolated from the karaoke application so the product site can evolve without changing the production app.
+- Público: hoteles, bares, bodas, eventos corporativos, festivales, DJs y hosts.
+- CTA principal: WhatsApp +1 829-749-4229.
+- Correo: gueststarexperience@hotmail.com.
+- Producción actual: https://gstarxp.palmbeatsproductions.chatgpt.site
+
+Esta presentación está aislada en la rama \`site/gstarxp-presentation\` para no cambiar la app principal de Guest Star ni su rama \`main\`. El visual principal se sirve desde la versión publicada mientras se añade el asset binario al repositorio.
