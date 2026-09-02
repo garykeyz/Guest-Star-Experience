@@ -53,6 +53,7 @@ jobs:
           node --check guest-star-bridge/public/app.js
           node --check guest-star-bridge/public/superhost.js
           node --check guest-star-bridge/macos/GuestStarWindow.js
+          node --check < guest-star-bridge/src/star-screen-window.jxa
           node --check guest-star-bridge/src/server.mjs
           node --check guest-star-bridge/src/apps-script.mjs
 
@@ -213,6 +214,14 @@ jobs:
           test -s "$output/Guest-Star-Universal-v${version}.dmg"
           unzip -t "$output/Guest-Star-Universal-v${version}-app.zip"
           hdiutil verify "$output/Guest-Star-Universal-v${version}.dmg"
+
+      - name: Upload the verified Mac DMG test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Guest-Star-Universal-v4.4.1-DMG-test
+          path: ${{ runner.temp }}/guest-star-release/Guest-Star-Universal-v4.4.1.dmg
+          if-no-files-found: error
+          retention-days: 7
 
   release:
     if: github.event_name != 'pull_request'

@@ -34,7 +34,7 @@ async function waitForState(url, predicate, timeoutMs = 10000) {
   throw new Error(`El Player no llegó al estado esperado: ${JSON.stringify(latest)}`);
 }
 
-test("el Player crea una fila local con cantante y permite resolverla aun sin iniciar Play", async (t) => {
+test("el Player crea una fila local antes de iniciar la actividad y la conserva al comenzar", async (t) => {
   const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const tempRoot = await mkdtemp(join(tmpdir(), "guest-star-player-beta-"));
   const bridgeRoot = join(tempRoot, "bridge");
@@ -47,7 +47,10 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   await writeFile(join(karaokeFolder, "Marc Anthony - Vivir Mi Vida.mp4"), Buffer.alloc(64));
   await writeFile(join(backgroundFolder, "Purple Disco Machine - Save Me Lonely.mp3"), Buffer.alloc(64));
 
-  const startedAt = "2026-08-27T15:00:00.000Z";
+  const activityStartTime = "2026-08-27T15:00:00.000Z";
+  let activityRunning = false;
+  const publicRequests = [];
+  let youtubeSearchStarted = false;
   const guestStarService = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -60,29 +63,34 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
         selection: {
           hotels: [{ hotelId: "hotel-1", name: "Moon Palace" }],
           venues: [{ venueId: "venue-1", hotelId: "hotel-1", name: "Lobby Bar" }],
-          activities: [{ activityId: "activity-1", hotelId: "hotel-1", venueId: "venue-1", name: "Karaoke Night", status: "in_progress" }]
+          activities: [{ activityId: "activity-1", hotelId: "hotel-1", venueId: "venue-1", name: "Karaoke Night", status: activityRunning ? "in_progress" : "ready" }]
         }
       };
-    } else if (["activityState", "selectActivity"].includes(body.action)) {
+    } else if (["activityState", "selectActivity", "startActivityV4"].includes(body.action)) {
+      if (body.action === "startActivityV4") activityRunning = true;
       payload = {
         ok: true,
         hotel: { hotelId: "hotel-1", name: "Moon Palace" },
         branding: { showHotelLogo: true, hotelLogoUrl: "https://cdn.example.com/moon-palace.png" },
         venue: { venueId: "venue-1", name: "Lobby Bar" },
-        activity: { activityId: "activity-1", name: "Karaoke Night", status: "in_progress" },
+        activity: { activityId: "activity-1", name: "Karaoke Night", status: activityRunning ? "in_progress" : "ready" },
         share: { publicUrl: "https://request.gstarxp.com/h/moon-palace" },
         state: {
           activityId: "activity-1",
-          activityStartedAt: startedAt,
-          activityRunning: true,
+          activityStartedAt: activityRunning ? activityStartTime : "",
+          activityRunning,
           activityHours: 2,
           transitionSeconds: 30,
           accepting: true,
           playbackMode: "player",
           lastSource: "player"
         },
-        requests: []
+        requests: publicRequests
       };
+    } else if (body.action === "youtubeSearchV4") {
+      youtubeSearchStarted = true;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1200));
+      payload = { ok: true, items: [] };
     } else if (body.action === "pollBridgeCommands") {
       payload = { ok: true, commands: [] };
     }
@@ -112,8 +120,8 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   }, null, 2)}\n`);
   await writeFile(join(bridgeRoot, "data", "queue-state.json"), `${JSON.stringify({
     activityId: "activity-1",
-    activityStartedAt: startedAt,
-    operatingMode: "",
+    activityStartedAt: "",
+    operatingMode: "player",
     entries: [],
     suppressedIds: [],
     recoveries: [],
@@ -137,7 +145,9 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   let state = await waitForState(url, (candidate) =>
     candidate.account?.authenticated === true &&
     candidate.operatingMode?.selected === "player" &&
-    candidate.activity?.activityRunning === true &&
+    candidate.activity?.activityRunning === false &&
+    candidate.tenant?.branding?.hotelLogoUrl &&
+    candidate.tenant?.share?.publicUrl &&
     candidate.library?.count === 1 &&
     candidate.backgroundMusic?.count === 1
   );
@@ -178,6 +188,66 @@ test("el Player crea una fila local con cantante y permite resolverla aun sin in
   const local = state.requests.find((item) => item.id === created.item.id);
   assert.equal(local.status, "En fila del Player");
   assert.equal(local.localAvailable, true);
+  assert.equal(state.activity.activityRunning, false);
+
+  const started = await fetch(`${url}/api/activity/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  assert.equal(started.ok, true, started.error || childError);
+  assert.equal(started.activity.activityRunning, true);
+
+  publicRequests.push({
+    id: "public-request-slow-maintenance",
+    timestamp: "2026-08-27T15:00:30.000Z",
+    singer: "Diana",
+    song: "Pista Que No Existe",
+    artist: "Artista Remoto",
+    language: "Español",
+    sourceType: "guest_request",
+    status: "Pendiente",
+    durationSeconds: 240,
+    transitionSeconds: 30
+  });
+  await fetch(`${url}/api/player/requests/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  });
+  const maintenanceDeadline = Date.now() + 2000;
+  while (!youtubeSearchStarted && Date.now() < maintenanceDeadline) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  assert.equal(youtubeSearchStarted, true, "the slow optional YouTube maintenance must be running in the background");
+
+  publicRequests.push({
+    id: "public-request-live-1",
+    timestamp: "2026-08-27T15:01:00.000Z",
+    singer: "Moises",
+    song: "Yo Perreo Sola",
+    artist: "Bad Bunny",
+    language: "Español",
+    sourceType: "guest_request",
+    status: "Pendiente",
+    durationSeconds: 240,
+    transitionSeconds: 30
+  });
+  const pullStartedAt = performance.now();
+  const pulled = await fetch(`${url}/api/player/requests/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  const pullElapsedMs = performance.now() - pullStartedAt;
+  assert.equal(pulled.ok, true, pulled.error || childError);
+  assert.equal(
+    pulled.requests.some((item) => item.id === "public-request-live-1" && item.singer === "Moises"),
+    true,
+    "a public request must enter the running Player without any VirtualDJ dependency"
+  );
+  assert.ok(pullElapsedMs < 700,
+    `public requests must not wait for YouTube/local maintenance (${pullElapsedMs.toFixed(1)} ms)`);
 
   const completed = await fetch(`${url}/api/player/requests/${encodeURIComponent(local.id)}/outcome`, {
     method: "POST",

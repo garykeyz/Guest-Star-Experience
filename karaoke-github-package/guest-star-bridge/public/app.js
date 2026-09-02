@@ -31,7 +31,6 @@ let activityBusy = false;
 let scanBusy = false;
 let syncBusy = false;
 let passwordChangeRequired = false;
-let rotationItems = [];
 let pendingActivityAction = "";
 const actionLocks = new Set();
 const hitSearchLocks = new Set();
@@ -242,9 +241,54 @@ function liveActivitySummary() {
   return summary;
 }
 
+function playerActivityDisplaySummary(summary) {
+  if (state?.operatingMode?.selected !== "player") return summary;
+  const requests = Array.isArray(state?.requests) ? state.requests : [];
+  const fallbackTransition = Math.max(0, Number(state?.activity?.transitionSeconds) || 0);
+  const secondsFor = (item) =>
+    (Math.max(0, Number(item?.durationSeconds) || 240) +
+      Math.max(0, Number(item?.transitionSeconds) || fallbackTransition));
+  const completed = [];
+  const skipped = [];
+  const active = [];
+  for (const item of requests) {
+    const outcome = String(item?.outcome || "").toLowerCase();
+    const status = String(item?.status || "");
+    if (outcome === "completed" || status === "Ya cantó") completed.push(item);
+    else if (["skipped", "removed"].includes(outcome) || ["Saltado", "Retirada del Player"].includes(status)) skipped.push(item);
+    else if (!item?.stem || item.stem.status === "ready") active.push(item);
+  }
+  const plannedSeconds = requests
+    .filter((item) => !skipped.includes(item))
+    .reduce((total, item) => total + secondsFor(item), 0);
+  const completedSeconds = completed.reduce((total, item) => total + secondsFor(item), 0);
+  const queued = active.filter((item) => item.localAvailable);
+  const queuedSeconds = queued.reduce((total, item) => total + secondsFor(item), 0);
+  const skippedSeconds = skipped.reduce((total, item) => total + secondsFor(item), 0);
+  const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
+  const confirmedSeconds = completedSeconds + queuedSeconds;
+  const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
+  const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
+  return {
+    ...summary,
+    plannedSeconds,
+    completedSeconds,
+    skippedSeconds,
+    queuedSeconds,
+    queueSongCount: queued.length,
+    confirmedSeconds,
+    gapSeconds,
+    overrunSeconds,
+    coveragePercent: targetSeconds ? Math.round((confirmedSeconds / targetSeconds) * 100) : 0,
+    suggestClose: state?.activity?.accepting !== false && targetSeconds > 0 && confirmedSeconds >= targetSeconds,
+    suggestHits: queued.length === 0 && gapSeconds > 0
+  };
+}
+
 function updateTimeDashboard() {
   if (!state) return;
-  const summary = liveActivitySummary();
+  const playerSelected = state.operatingMode?.selected === "player";
+  const summary = playerActivityDisplaySummary(liveActivitySummary());
   const target = Number(summary.targetSeconds) || 0;
   $("#elapsedTime").textContent = activityDuration(summary.elapsedSeconds);
   const activityDetail = $("#activityStatus p");
@@ -260,9 +304,11 @@ function updateTimeDashboard() {
       : `${activityDuration(summary.clockRemainingSeconds)} remaining`;
   $("#confirmedTime").textContent = activityDuration(summary.confirmedSeconds);
   const queueCount = Number(summary.queueSongCount) || 0;
-  $("#confirmedDetail").textContent =
-    `${queueCount} live VDJ ${queueCount === 1 ? "track" : "tracks"} · ` +
-    `${activityDuration(summary.completedSeconds)} already performed`;
+  $("#confirmedDetail").textContent = playerSelected
+    ? `${queueCount} active Player ${queueCount === 1 ? "request" : "requests"} · ` +
+      `${activityDuration(summary.completedSeconds)} already performed`
+    : `${queueCount} live VDJ ${queueCount === 1 ? "track" : "tracks"} · ` +
+      `${activityDuration(summary.completedSeconds)} already performed`;
   $("#plannedTime").textContent = activityDuration(summary.plannedSeconds);
   $("#plannedDetail").textContent = summary.skippedSeconds
     ? `${activityDuration(summary.skippedSeconds)} excluded as skipped`
@@ -295,24 +341,27 @@ function updateTimeDashboard() {
     card.classList.add("warning");
     $("#coverageTime").textContent =
       `${activityDuration(summary.gapSeconds)} missing`;
-    $("#coverageDetail").textContent =
-      `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
+    $("#coverageDetail").textContent = playerSelected
+      ? `${summary.coveragePercent || 0}% covered by completed songs and the Player queue`
+      : `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
   }
 
   const advice = $("#coverageAdvice");
   advice.innerHTML = "";
   if (summary.suggestClose) {
     const text = document.createElement("div");
-    text.innerHTML =
-      "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
+    text.innerHTML = playerSelected
+      ? "<strong>You have enough confirmed time.</strong><p>Completed songs and the active Player queue cover the activity duration.</p>"
+      : "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
     advice.append(
       text,
       button("Close Requests Now", "danger", () => controlActivity("close"))
     );
     advice.classList.remove("hidden");
   } else if (summary.suggestHits) {
-    advice.innerHTML =
-      "<div><strong>The VirtualDJ queue is empty.</strong><p>Use the hit suggestions below for the EMCEE or a random singer.</p></div>";
+    advice.innerHTML = playerSelected
+      ? "<div><strong>The Player queue is empty.</strong><p>Open Player to use Plan B or add a singer.</p></div>"
+      : "<div><strong>The VirtualDJ queue is empty.</strong><p>Use the hit suggestions below for the EMCEE or a random singer.</p></div>";
     advice.classList.remove("hidden");
   } else {
     advice.classList.add("hidden");
@@ -393,6 +442,7 @@ function updateStatus() {
   const summary = liveActivitySummary();
   const running = summary.activityRunning;
   const selectedMode = state.operatingMode?.selected || "";
+  document.body.classList.toggle("player-selected-mode", selectedMode === "player");
   document.body.classList.toggle("player-activity-locked", running && selectedMode === "player");
   document.body.classList.toggle("bridge-activity-locked", running && selectedMode === "bridge");
   setStatus(
@@ -453,23 +503,25 @@ function updateStatus() {
   $("#shareButton").disabled = !tenant.share?.publicUrl;
   $("#settingsButton").disabled = !selectedActivity;
   const isSuperhost = authenticated && state.account?.user?.role === "superhost";
-  $("#openHostPanel").classList.toggle("hidden", !isSuperhost || superhostPanel.isOpen());
-  $("#liveEventButton").classList.toggle("hidden", !isSuperhost || !superhostPanel.isOpen() || (running && selectedMode === "player"));
-  $("#playerBetaButton").classList.toggle("hidden", !authenticated || playerPanel.isOpen() || (running && selectedMode === "bridge"));
+  $("#openHostPanel").classList.toggle("hidden", running || !isSuperhost || superhostPanel.isOpen());
+  $("#liveEventButton").classList.toggle("hidden", running || !isSuperhost || !superhostPanel.isOpen());
+  $("#playerBetaButton").classList.toggle("hidden", running || !authenticated || !selectedActivity || playerPanel.isOpen());
   $("#playbackModeButton").classList.toggle("hidden", !authenticated);
-  $("#playbackModeButton").disabled = running;
-  $("#playbackModeButton").textContent = running
+  $("#playbackModeButton").disabled = running || !selectedActivity;
+  $("#playbackModeButton").textContent = !selectedActivity
+    ? "Selecciona una actividad"
+    : running
     ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"} 🔒`
     : selectedMode
       ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}`
       : "Elegir modo";
-  $("#switchActivity").classList.toggle("hidden", !authenticated);
-  $("#changePasswordButton").classList.toggle("hidden", !authenticated);
-  $("#logoutButton").classList.toggle("hidden", !authenticated);
+  $("#switchActivity").classList.toggle("hidden", running || !authenticated);
+  $("#changePasswordButton").classList.toggle("hidden", running || !authenticated);
+  $("#logoutButton").classList.toggle("hidden", running || !authenticated);
   $("#archiveQueue").disabled = !selectedActivity || !can("canArchiveQueue");
-  $("#viewPrevious").classList.toggle("hidden", !isSuperhost);
+  $("#viewPrevious").classList.toggle("hidden", running || !isSuperhost);
   $("#previewGuestPage").disabled = !tenant.share?.publicUrl;
-  $("#menuLogout").classList.toggle("hidden", !authenticated);
+  $("#menuLogout").classList.toggle("hidden", running || !authenticated);
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -713,87 +765,6 @@ async function queueSuggestion(item, singerMode) {
       detail: `${data.song} was added to VirtualDJ for ${data.singer}.`
     })
   );
-}
-
-function rotationCard(item) {
-  const card = document.createElement("article");
-  card.className = "hit-card";
-  const info = document.createElement("div");
-  const language = document.createElement("small");
-  language.textContent = item.list === "favorites"
-    ? `★ ${item.language}`
-    : item.language;
-  const song = document.createElement("strong");
-  song.textContent = item.song;
-  const artist = document.createElement("p");
-  artist.textContent = item.artist;
-  const availability = document.createElement("em");
-  availability.textContent = item.localAvailable
-    ? `Local: ${item.fileName}`
-    : "No disponible localmente";
-  info.append(language, song, artist, availability);
-  const actions = document.createElement("div");
-  actions.className = "queue-actions";
-  if (item.localAvailable) {
-    actions.append(
-      button("Agregar para EMCEE", "primary", () => queueSuggestion(item, "emcee")),
-      button("Cantante aleatorio", "ghost", () => queueSuggestion(item, "random"))
-    );
-  } else {
-    const key = `${item.language}:${item.artist}:${item.song}`;
-    if (item.youtube?.[0]) {
-      const selected = item.youtube[0];
-      actions.append(
-        button("Copiar karaoke", "primary", () =>
-          copyLink(selected.url, `Enlace de ${item.song} copiado.`)
-        ),
-        button("Abrir ↗", "youtube", () => openExternal(selected.url))
-      );
-    } else {
-      const search = button(
-        hitSearchLocks.has(key) ? "Buscando…" : "Buscar karaoke",
-        "youtube",
-        () => searchHitYoutube(item, key)
-      );
-      search.disabled = hitSearchLocks.has(key);
-      actions.append(search);
-    }
-  }
-  card.append(info, actions);
-  return card;
-}
-
-function renderRandomRotation() {
-  const panel = $("#randomRotation");
-  const authenticated = state?.account?.authenticated === true;
-  const selected = Boolean(state?.tenant?.activity);
-  panel.classList.toggle("hidden", !authenticated || !selected);
-  const grid = $("#rotationGrid");
-  grid.innerHTML = "";
-  rotationItems.forEach((item) => grid.append(rotationCard(item)));
-  $("#rotationEmpty").classList.toggle("hidden", rotationItems.length > 0);
-  if (!state?.rotation?.counts?.favorites) {
-    $("#randomFavorites").title =
-      "El Superhost todavía no ha agregado favoritos para este hotel.";
-  } else {
-    $("#randomFavorites").removeAttribute("title");
-  }
-}
-
-async function drawRandomRotation(list) {
-  try {
-    const data = await api("/api/rotation/draw", {
-      method: "POST",
-      body: JSON.stringify({ list, count: 6 })
-    });
-    rotationItems = data.items || [];
-    renderRandomRotation();
-    showNotice(rotationItems.length
-      ? "Nueva ronda aleatoria lista; no se repetirá un tema antes de completar la vuelta."
-      : "Esta lista todavía no tiene temas. Agrega favoritos desde Superhost.");
-  } catch (error) {
-    showNotice(error.message, true);
-  }
 }
 
 async function youtube(id, panel) {
@@ -1477,7 +1448,6 @@ async function searchHitYoutube(item, key) {
   } finally {
     hitSearchLocks.delete(key);
     renderHitSuggestions();
-    renderRandomRotation();
   }
 }
 
@@ -1683,6 +1653,10 @@ function syncWhenActive() {
 }
 
 function openPlaybackModeDialog(action = "") {
+  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
+    showNotice("Selecciona el hotel, venue y actividad antes de elegir el modo.", true);
+    return;
+  }
   if (state?.operatingMode?.locked) {
     showNotice("El modo de reproducción está bloqueado hasta finalizar la actividad.", true);
     return;
@@ -1972,6 +1946,10 @@ playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => 
   button.addEventListener("click", () => void selectPlaybackMode(button.dataset.playbackMode));
 });
 $("#switchActivity").addEventListener("click", () => {
+  if (state?.activity?.activityRunning) {
+    showNotice("Finaliza la actividad antes de cambiar hotel, actividad o modo.", true);
+    return;
+  }
   fillSelection();
   selectionDialog.showModal();
 });
@@ -1990,16 +1968,28 @@ async function logout() {
 $("#logoutButton").addEventListener("click", logout);
 $("#menuLogout").addEventListener("click", logout);
 $("#openHostPanel").addEventListener("click", () => {
+  if (state?.activity?.activityRunning) {
+    showNotice("La actividad en curso permanece dentro del modo elegido hasta finalizar.", true);
+    return;
+  }
   playerPanel.close();
   superhostPanel.open();
   updateStatus();
 });
 $("#liveEventButton").addEventListener("click", () => {
+  if (state?.activity?.activityRunning) {
+    showNotice("La actividad en curso permanece dentro del modo elegido hasta finalizar.", true);
+    return;
+  }
   playerPanel.close();
   superhostPanel.close();
   updateStatus();
 });
 $("#playerBetaButton").addEventListener("click", () => {
+  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
+    showNotice("Selecciona una actividad antes de abrir el Player.", true);
+    return;
+  }
   superhostPanel.close();
   playerPanel.open();
   updateStatus();
@@ -2201,7 +2191,6 @@ function applyState(nextState) {
     renderVdjQueue();
     renderRequests();
     renderHitSuggestions();
-    renderRandomRotation();
     updateAuthUi();
     superhostPanel.sync(state);
     playerPanel.sync(state);
@@ -2214,6 +2203,10 @@ function applyState(nextState) {
       autoRestoredPlayerActivityId = activePlayerActivityId;
       superhostPanel.close();
       playerPanel.open();
+    } else if (state.activity?.activityRunning === true && state.operatingMode?.selected === "bridge") {
+      superhostPanel.close();
+      playerPanel.close({ force: true });
+      autoRestoredPlayerActivityId = "";
     } else if (!activePlayerActivityId) {
       autoRestoredPlayerActivityId = "";
     }
@@ -2230,7 +2223,6 @@ $("#uiLanguageSelect").addEventListener("change", async (event) => {
     renderVdjQueue();
     renderRequests();
     renderHitSuggestions();
-    renderRandomRotation();
     bridgeI18n.refresh();
   });
   try {
@@ -2242,11 +2234,6 @@ $("#uiLanguageSelect").addEventListener("change", async (event) => {
     showNotice(error.message, true);
   }
 });
-
-$("#randomSpanish").addEventListener("click", () => drawRandomRotation("spanish"));
-$("#randomEnglish").addEventListener("click", () => drawRandomRotation("english"));
-$("#randomFavorites").addEventListener("click", () => drawRandomRotation("favorites"));
-$("#randomBoth").addEventListener("click", () => drawRandomRotation("both"));
 
 function connectRealtime() {
   const source = new EventSource("/api/events");

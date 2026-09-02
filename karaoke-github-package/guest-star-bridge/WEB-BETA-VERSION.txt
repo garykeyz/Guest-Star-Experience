@@ -1,3 +1,3 @@
 Guest Star Web Beta 0.9.0
-Stable Guest Star core: 4.4.0
+Stable Guest Star core: 4.4.1
 Backend: Cloudflare D1 only

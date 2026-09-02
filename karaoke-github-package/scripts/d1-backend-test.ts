@@ -594,6 +594,14 @@ assert.equal(burstRows.length, 200,
   "a simultaneous burst must not lose or merge requests from different devices");
 assert.equal(new Set(burstRows.map((request) => request.queuePosition)).size, 200,
   "every simultaneous guest must receive one stable queue position");
+const bridgeAfterBurst = await handleD1HostAction(db, {
+  action: "activityState", ...switchedBridgeAuth, hotelId, venueId, activityId
+});
+const bridgeBurstRows = Array.isArray(bridgeAfterBurst?.requests)
+  ? bridgeAfterBurst.requests.filter((request) => String(request.name || "").startsWith("Burst Guest "))
+  : [];
+assert.equal(bridgeBurstRows.length, 200,
+  "the same two hundred public requests must be immediately visible to Player and Bridge activityState");
 const sameDeviceResults = [];
 for (let index = 0; index < 9; index += 1) {
   sameDeviceResults.push(await handleD1PublicPost(db, {

@@ -62,12 +62,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   let currentId = '';
   let order = [];
   const openYoutubeIds = new Set();
+  const expandedRequestIds = new Set();
   let opened = false;
   let libraryLoaded = false;
   let libraryTracks = [];
   let libraryOffset = 0;
   let libraryHasMore = false;
   let libraryBrowseAll = false;
+  let planBItems = [];
+  let planBLoading = false;
   let pendingTrack = null;
   let stageMode = 'lobby';
   let scenePhase = 'lobby';
@@ -98,6 +101,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   let runtimeRestoreActivityId = '';
   let pendingResumeTime = null;
   let lastRuntimeCheckpoint = 0;
+  let lastStemSyncAt = 0;
   const audioSettingsKey = 'guest-star:player-audio-processing';
   let audioSettings = (() => {
     try {
@@ -106,12 +110,31 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
         low: Math.max(-12, Math.min(12, Number(saved.low) || 0)),
         mid: Math.max(-12, Math.min(12, Number(saved.mid) || 0)),
         high: Math.max(-12, Math.min(12, Number(saved.high) || 0)),
-        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0))
+        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0)),
+        stemMode: saved.stemMode === 'original' ? 'original' : 'separated'
       };
-    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0 }; }
+    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0, stemMode: 'separated' }; }
   })();
 
   const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+  function paintRange(input) {
+    if (!input) return;
+    const minimum = Number(input.min) || 0;
+    const maximum = Number(input.max) || 0;
+    const value = Math.max(minimum, Math.min(maximum || minimum, Number(input.value) || 0));
+    const progress = maximum > minimum ? ((value - minimum) / (maximum - minimum)) * 100 : 0;
+    input.style.setProperty('--range-progress', `${progress}%`);
+  }
+
+  function renderKaraokeVolume() {
+    const volume = $('#playerVolume');
+    if (!volume) return;
+    volume.value = String(mediaTargetVolume);
+    paintRange(volume);
+    const output = $('#playerVolumeValue');
+    if (output) output.textContent = `${Math.round(mediaTargetVolume * 100)}%`;
+  }
 
   function persistAudioSettings() {
     localStorage.setItem(audioSettingsKey, JSON.stringify(audioSettings));
@@ -130,9 +153,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     setAudioParam(mediaAudioGraph.mid.gain, audioSettings.mid);
     setAudioParam(mediaAudioGraph.high.gain, audioSettings.high);
     const stemsReady = current()?.stem?.ready === true;
-    setAudioParam(mediaAudioGraph.normalGain.gain, stemsReady ? 0 : 1, 0.025);
-    setAudioParam(mediaAudioGraph.instrumentalGain.gain, stemsReady ? 1 : 0, 0.025);
-    setAudioParam(mediaAudioGraph.vocalsGain.gain, stemsReady ? audioSettings.vocalLevel : 0, 0.025);
+    const separated = stemsReady && audioSettings.stemMode === 'separated';
+    setAudioParam(mediaAudioGraph.normalGain.gain, separated ? 0 : 1, 0.025);
+    setAudioParam(mediaAudioGraph.instrumentalGain.gain, separated ? 1 : 0, 0.025);
+    setAudioParam(mediaAudioGraph.vocalsGain.gain, separated ? audioSettings.vocalLevel : 0, 0.025);
   }
 
   function renderAudioSettings() {
@@ -148,8 +172,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (vocal) vocal.value = String(audioSettings.vocalLevel);
     const vocalOutput = $('#playerVocalLevelValue');
     if (vocalOutput) vocalOutput.textContent = `${Math.round(audioSettings.vocalLevel * 100)}%`;
+    paintRange(vocal);
     const vocalControl = $('#playerVocalControl');
-    if (vocalControl) vocalControl.classList.toggle('hidden', current()?.stem?.ready !== true);
+    const stemsReady = current()?.stem?.ready === true;
+    if (vocalControl) vocalControl.classList.remove('hidden');
+    if (vocal) vocal.disabled = !stemsReady || audioSettings.stemMode !== 'separated';
+    $('#playerStemOriginal')?.classList.toggle('active', audioSettings.stemMode === 'original');
+    $('#playerStemSeparated')?.classList.toggle('active', audioSettings.stemMode === 'separated');
+    if ($('#playerStemSeparated')) $('#playerStemSeparated').disabled = !stemsReady;
   }
 
   function setScene(modeName, phase = modeName) {
@@ -204,6 +234,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   const requestsById = () => new Map((state?.requests || []).map((item) => [String(item.id), item]));
   const mode = () => String(state?.operatingMode?.selected || '');
   const activityRunning = () => Boolean(state?.activity?.activityRunning && state?.activity?.activityStartedAt);
+  const activityConfigured = () => Boolean(activityId() && state?.tenant?.activity);
+  const playerPreparationReady = () => activityConfigured() && mode() === 'player';
   const playerReady = () => mode() === 'player' && activityRunning();
   const backgroundTracks = () => Array.isArray(state?.backgroundMusic?.tracks) ? state.backgroundMusic.tracks : [];
 
@@ -389,6 +421,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     const summary = playerSummary();
     const selectedMode = mode();
     const locked = Boolean(state?.operatingMode?.locked);
+    const configured = activityConfigured();
+    const preparationReady = playerPreparationReady();
     const ready = playerReady();
     const accepting = state?.activity?.accepting !== false;
     const status = state?.tenant?.activity?.status || (activityRunning() ? 'in_progress' : 'ready');
@@ -396,8 +430,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     const can = (permission) => permissions.all === true || permissions[permission] === true;
 
     $('#playerModeBadge').textContent = selectedMode === 'player' ? 'PLAYER INTERNO' : selectedMode === 'bridge' ? 'BRIDGE · VIRTUALDJ' : 'MODO SIN ELEGIR';
-    $('#playerModeLock').textContent = locked ? 'Bloqueado durante esta actividad' : 'Se puede cambiar antes de iniciar';
+    $('#playerModeLock').textContent = !configured ? 'Selecciona una actividad para continuar' : locked ? 'Bloqueado durante esta actividad' : 'Se puede cambiar antes de iniciar';
     $('.player-mode-lock').classList.toggle('locked', locked);
+    $('#playerWorkspace').classList.toggle('player-activity-unconfigured', !configured);
     $('#playerLibraryMetric').textContent = `${Number(state?.library?.count) || 0} pistas`;
     $('#playerLibraryDetail').textContent = state?.library?.error || (state?.library?.realtime ? 'Monitoreo local en vivo' : 'Biblioteca local preparada');
     $('#playerLibraryAutoState').textContent = state?.library?.scanning
@@ -407,10 +442,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
         : 'Detección automática activa';
     $('#playerRequestsMetric').textContent = `${summary.active.length} ${summary.active.length === 1 ? 'solicitud' : 'solicitudes'}`;
     $('#playerRequestsDetail').textContent = state?.sheet?.error || (state?.sheet?.syncing ? 'Actualizando solicitudes…' : 'Cola del Player sincronizada');
-    $('#playerEngineMetric').textContent = stageMode === 'karaoke' && media.src && !media.paused ? 'Reproduciendo' : ready ? 'Listo' : 'En espera';
+    $('#playerEngineMetric').textContent = stageMode === 'karaoke' && media.src && !media.paused ? 'Reproduciendo' : preparationReady ? 'Preparado' : 'En espera';
     $('#playerEngineDetail').textContent = selectedMode === 'bridge' ? 'Esta actividad está configurada para VirtualDJ' : 'Video karaoke limpio en Star Screen';
-    $('#playerActivityMetric').textContent = activityRunning() ? `En curso · solicitudes ${accepting ? 'abiertas' : 'cerradas'}` : 'Lista para iniciar';
-    $('#playerActivityDetail').textContent = activityRunning() ? `Transcurrido ${formatDuration(summary.elapsedSeconds)}` : selectedMode ? 'Modo preparado para iniciar' : 'Elige Player o Bridge';
+    $('#playerActivityMetric').textContent = activityRunning() ? `En curso · solicitudes ${accepting ? 'abiertas' : 'cerradas'}` : configured ? 'Lista para iniciar' : 'Sin configurar';
+    $('#playerActivityDetail').textContent = activityRunning() ? `Transcurrido ${formatDuration(summary.elapsedSeconds)}` : !configured ? 'Selecciona hotel, venue y actividad' : selectedMode ? 'Modo preparado para iniciar' : 'Elige Player o Bridge';
     $('#playerElapsedTime').textContent = formatDuration(summary.elapsedSeconds);
     $('#playerElapsedDetail').textContent = activityRunning() ? `${formatDuration(Math.max(0, summary.targetSeconds - summary.elapsedSeconds))} restantes según horario` : 'El reloj inicia con la actividad';
     $('#playerConfirmedTime').textContent = formatDuration(summary.confirmedSeconds);
@@ -427,7 +462,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerEventEndDetail').textContent = summary.eventEndsAt ? `Organiza la rotación para terminar a las ${clockTime(summary.eventEndsAt)}.` : 'Configura la actividad y selecciona el modo de reproducción.';
     $('#playerTenantPath').textContent = state?.tenant?.hotel ? `${info.hotelName} • ${info.venueName}` : 'SELECCIONA UNA ACTIVIDAD';
     $('#playerSelectedActivityName').textContent = info.activityName;
-    $('#playerActivityHeadline').textContent = activityRunning() ? `Actividad en curso · inició ${clockTime(state.activity.activityStartedAt)}` : selectedMode ? `Lista para iniciar en modo ${selectedMode === 'player' ? 'Player interno' : 'Bridge con VirtualDJ'}` : 'Configura la actividad y elige el reproductor antes de iniciar.';
+    $('#playerActivityHeadline').textContent = activityRunning() ? `Actividad en curso · inició ${clockTime(state.activity.activityStartedAt)}` : !configured ? 'Selecciona una actividad antes de habilitar los controles.' : selectedMode ? `Lista para iniciar en modo ${selectedMode === 'player' ? 'Player interno' : 'Bridge con VirtualDJ'}` : 'Elige el reproductor antes de iniciar.';
     $('#playerRequestsToggle').checked = accepting;
     $('#playerRequestsToggle').disabled = !state?.tenant?.activity || !can('canOpenCloseRequests');
     $('#playerRequestsToggleLabel').textContent = accepting ? 'Abiertas' : 'Cerradas';
@@ -435,16 +470,36 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     primary.dataset.action = status === 'in_progress' ? 'finish' : status === 'finished' ? 'start-new' : 'start';
     primary.textContent = status === 'in_progress' ? 'Finalizar actividad' : status === 'finished' ? 'Iniciar nueva actividad' : 'Iniciar actividad';
     primary.disabled = !state?.tenant?.activity || (status === 'in_progress' ? !can('canFinishActivity') : status === 'finished' ? !can('canStartNewActivity') : !can('canStartActivity'));
-    $('#playerShare').disabled = !info.publicUrl;
+    $('#playerShare').disabled = !configured || !info.publicUrl;
+    $('#playerSettings').disabled = !configured;
+    $('#playerScan').disabled = !configured;
+    $('#playerSync').disabled = !configured;
+    $('#playerOpenStarScreen').disabled = !preparationReady;
+    $('#playerClose').classList.toggle('hidden', activityRunning() && selectedMode === 'player');
+    document.querySelectorAll('[data-player-drawer]').forEach((button) => { button.disabled = !configured; });
     $('#playerPlay').disabled = !ready || (!current() && !queue().length);
     $('#playerRestart').disabled = !ready || !current() || !media.src || transitionBusy;
     $('#playerReturn').disabled = !ready || !current() || transitionBusy;
     ['#playerSkip', '#playerComplete', '#playerRemove'].forEach((selector) => { $(selector).disabled = !ready || (!current() && !queue().length) || transitionBusy; });
     $('#playerPlay').disabled = $('#playerPlay').disabled || transitionBusy;
     const hasBackground = backgroundTracks().length > 0;
-    $('#playerBackgroundToggle').disabled = !ready || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
-    $('#playerBackgroundNext').disabled = !ready || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
-    $('#playerBackgroundPlaySelected').disabled = !ready || !backgroundSelectedId || stageMode === 'karaoke' || Boolean(backgroundTransition);
+    $('#playerBackgroundToggle').disabled = !preparationReady || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
+    $('#playerBackgroundNext').disabled = !preparationReady || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
+    $('#playerBackgroundPlaySelected').disabled = !preparationReady || !backgroundSelectedId || stageMode === 'karaoke' || Boolean(backgroundTransition);
+    const stemTarget = current() || queue()[0] || null;
+    const stemQuick = $('#playerStemQuickAction');
+    const stemStatus = $('#playerStemQuickStatus');
+    const stemReady = stemTarget?.stem?.ready === true;
+    const stemBusy = stemTarget?.stem && !stemReady && stemTarget.stem.status !== 'failed';
+    if (!state?.stemEngine?.available) stemStatus.textContent = 'Motor IA no disponible';
+    else if (!stemTarget) stemStatus.textContent = 'Selecciona una pista';
+    else if (!stemTarget.localAvailable) stemStatus.textContent = 'Falta el archivo local';
+    else if (stemReady) stemStatus.textContent = 'Instrumental y voz listos';
+    else if (stemBusy) stemStatus.textContent = `${Math.round(Number(stemTarget.stem.progress) || 0)}% · ${stemTarget.stem.phase || 'Preparando'}`;
+    else if (stemTarget.stem?.status === 'failed') stemStatus.textContent = 'Falló · se puede reintentar';
+    else stemStatus.textContent = `${guest(stemTarget)} · lista para preparar`;
+    stemQuick.textContent = stemReady ? '✓ IA lista' : stemBusy ? 'Preparando…' : stemTarget?.stem?.status === 'failed' ? '↻ Reintentar' : '✦ Preparar IA';
+    stemQuick.disabled = !preparationReady || !state?.stemEngine?.available || !stemTarget?.localAvailable || stemReady || stemBusy;
   }
 
   function youtubeDropdown(item) {
@@ -490,7 +545,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerQueueCount').textContent = String(items.length);
     let cumulativeSeconds = 0;
     const preparationHtml = preparing.length
-      ? `<section class="player-stem-jobs"><strong>PREPARANDO FUERA DE LA FILA</strong>${preparing.map((item) => `<article><span><b>${escapeHtml(guest(item))}</b><small>${escapeHtml(item.song)} · ${escapeHtml(item.stem.phase || 'Esperando')}</small></span><em>${item.stem.status === 'failed' ? 'ERROR' : `${Math.round(Number(item.stem.progress) || 0)}%`}</em>${item.stem.status === 'failed' ? `<button type="button" data-player-stem-prepare="${escapeHtml(item.id)}">Reintentar</button>` : ''}</article>`).join('')}</section>`
+      ? `<section class="player-stem-jobs"><strong>STEMS IA EN PREPARACIÓN</strong>${preparing.map((item) => {
+        const progress = Math.max(0, Math.min(100, Math.round(Number(item.stem.progress) || 0)));
+        const failed = item.stem.status === 'failed';
+        return `<article><span class="player-stem-progress ${failed ? 'failed' : ''}" style="--stem-progress:${progress * 3.6}deg"><b>${failed ? '!' : `${progress}%`}</b></span><span class="player-stem-job-copy"><b>${escapeHtml(guest(item))}</b><small>${escapeHtml(item.song)} · ${escapeHtml(item.stem.phase || 'Esperando')}</small></span>${failed ? `<button type="button" data-player-stem-prepare="${escapeHtml(item.id)}">Reintentar</button>` : ''}</article>`;
+      }).join('')}</section>`
       : '';
     const queueHtml = items.length
       ? items.map((item, index) => {
@@ -499,7 +558,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
         cumulativeSeconds += duration;
         const comment = String(item.comment || '').trim();
         const localOwn = item.sourceType === 'player_local';
-        return `<article class="player-queue-row ${String(item.id) === currentId ? 'active' : ''}" data-player-row="${escapeHtml(item.id)}"><button class="player-queue-select" data-player-request="${escapeHtml(item.id)}"><b>#${index + 1}</b><span><strong>${escapeHtml(guest(item))}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''}</small><em>${localOwn ? 'Agregada manualmente al Player' : `Llegada #${index + 1}`} · turno estimado ${escapeHtml(clockTime(estimated))}</em><em>${escapeHtml(item.language || 'Idioma no indicado')} · ${escapeHtml(formatDuration(duration))}</em>${comment ? `<q>${escapeHtml(comment)}</q>` : ''}</span><i class="player-local-state ${item.localAvailable ? '' : 'missing'}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</i></button><div class="player-queue-actions" aria-label="Acciones para ${escapeHtml(guest(item))}"><button data-player-move="-1" data-player-id="${escapeHtml(item.id)}" ${index === 0 ? 'disabled' : ''} title="Subir un turno">↑</button><button data-player-move="1" data-player-id="${escapeHtml(item.id)}" ${index === items.length - 1 ? 'disabled' : ''} title="Bajar un turno">↓</button><button data-player-row-outcome="completed" data-player-id="${escapeHtml(item.id)}" title="Marcar como ya cantó">✓</button><button data-player-row-outcome="skipped" data-player-id="${escapeHtml(item.id)}" title="Saltar cantante">↷</button><button class="danger" data-player-row-outcome="removed" data-player-id="${escapeHtml(item.id)}" title="Quitar de la fila">×</button></div>${stemAction(item)}${youtubeDropdown(item)}</article>`;
+        const expanded = expandedRequestIds.has(String(item.id));
+        return `<article class="player-queue-row ${String(item.id) === currentId ? 'active' : ''} ${expanded ? 'expanded' : ''}" data-player-row="${escapeHtml(item.id)}"><div class="player-queue-compact"><button class="player-queue-select" data-player-request="${escapeHtml(item.id)}"><b>#${index + 1}</b><span><strong>${escapeHtml(guest(item))}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''}</small></span><i class="player-local-state ${item.localAvailable ? '' : 'missing'}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</i></button><button class="player-queue-expand" type="button" data-player-expand="${escapeHtml(item.id)}" aria-expanded="${expanded}" title="${expanded ? 'Ocultar opciones' : 'Mostrar opciones'}">⌄</button></div><div class="player-queue-details ${expanded ? '' : 'hidden'}"><div class="player-queue-meta"><em>${localOwn ? 'Agregada manualmente al Player' : `Llegada #${index + 1}`} · turno estimado ${escapeHtml(clockTime(estimated))}</em><em>${escapeHtml(item.language || 'Idioma no indicado')} · ${escapeHtml(formatDuration(duration))}</em>${comment ? `<q>${escapeHtml(comment)}</q>` : ''}</div><div class="player-queue-actions" aria-label="Acciones para ${escapeHtml(guest(item))}"><button data-player-move="-1" data-player-id="${escapeHtml(item.id)}" ${index === 0 ? 'disabled' : ''} title="Subir un turno">↑</button><button data-player-move="1" data-player-id="${escapeHtml(item.id)}" ${index === items.length - 1 ? 'disabled' : ''} title="Bajar un turno">↓</button><button data-player-row-outcome="completed" data-player-id="${escapeHtml(item.id)}" title="Marcar como ya cantó">✓</button><button data-player-row-outcome="skipped" data-player-id="${escapeHtml(item.id)}" title="Saltar cantante">↷</button><button class="danger" data-player-row-outcome="removed" data-player-id="${escapeHtml(item.id)}" title="Quitar de la fila">×</button></div>${stemAction(item)}${youtubeDropdown(item)}</div></article>`;
       }).join('')
       : '<p class="player-empty">No hay solicitudes activas en esta actividad.</p>';
     $('#playerQueue').innerHTML = `${preparationHtml}${queueHtml}`;
@@ -508,6 +568,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   function renderCompleted() {
     const items = (state?.requests || []).filter(terminalRequest);
     $('#playerCompletedCount').textContent = String(items.length);
+    $('#playerHistoryBadge').textContent = String(items.length);
     $('#playerCompleted').innerHTML = items.length
       ? items.map((item) => {
         const removed = item.outcome === 'removed' || item.status === 'Retirada del Player';
@@ -517,6 +578,65 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
       : '<p class="player-empty">Las canciones cantadas u omitidas aparecerán aquí.</p>';
   }
 
+  function activePlanBItems() {
+    if (planBItems.length) return planBItems;
+    return Array.isArray(state?.hitSuggestions) ? state.hitSuggestions : [];
+  }
+
+  function renderPlanB() {
+    const items = activePlanBItems();
+    $('#playerPlanBBadge').textContent = String(items.length);
+    if (planBLoading) {
+      $('#playerPlanB').innerHTML = '<p class="player-empty">Preparando una rotación Plan B…</p>';
+      return;
+    }
+    $('#playerPlanB').innerHTML = items.length
+      ? items.map((item, index) => {
+        const youtube = Array.isArray(item.youtube) ? item.youtube[0] : null;
+        const localAction = item.localAvailable && item.trackId
+          ? `<button class="button primary" type="button" data-player-plan-b-assign="${index}">Asignar cantante</button>`
+          : youtube
+            ? `<button class="button ghost" type="button" data-player-plan-b-open="${escapeHtml(youtube.url)}">Abrir Karaoke ↗</button>`
+            : `<button class="button ghost" type="button" data-player-plan-b-youtube="${index}">${item.youtubeSearching ? 'Buscando…' : 'Buscar Karaoke'}</button>`;
+        return `<article class="player-plan-b-row"><span>${escapeHtml(item.language || item.list || 'Plan B')}</span><div><strong>${escapeHtml(item.song)}</strong><small>${escapeHtml(item.artist || 'Artista no indicado')}</small></div><em class="${item.localAvailable ? 'available' : ''}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</em>${localAction}</article>`;
+      }).join('')
+      : '<p class="player-empty">Pulsa Balanceada, Español, English o Favoritos para preparar el Plan B.</p>';
+  }
+
+  async function drawPlanB(list) {
+    if (planBLoading) return;
+    planBLoading = true;
+    renderPlanB();
+    try {
+      const data = await api('/api/rotation/draw', {
+        method: 'POST',
+        body: JSON.stringify({ list, count: 8 })
+      });
+      planBItems = data.items || [];
+      showNotice(planBItems.length
+        ? 'Plan B actualizado. Las pistas locales se pueden asignar directamente a un cantante.'
+        : 'Esa lista todavía no tiene pistas disponibles.');
+    } catch (error) { showNotice(error.message, true); }
+    finally { planBLoading = false; renderPlanB(); }
+  }
+
+  async function searchPlanBYoutube(index) {
+    const item = activePlanBItems()[Number(index)];
+    if (!item || item.youtubeSearching) return;
+    item.youtubeSearching = true;
+    renderPlanB();
+    try {
+      const data = await api('/api/suggestions/youtube', {
+        method: 'POST',
+        body: JSON.stringify({ song: item.song, artist: item.artist, language: item.language, list: item.list, force: true })
+      });
+      item.youtube = data.items || [];
+      item.youtubeSearched = true;
+      showNotice(item.youtube.length ? 'Versión Karaoke encontrada para el Plan B.' : 'No se encontró una versión Karaoke confiable.');
+    } catch (error) { showNotice(error.message, true); }
+    finally { item.youtubeSearching = false; renderPlanB(); }
+  }
+
   function renderNow() {
     const item = current();
     $('#playerNowSong').textContent = item?.song || 'Selecciona una canción';
@@ -524,6 +644,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     $('#playerPlayLabel').textContent = stageMode === 'karaoke' && !media.paused ? '⏸ Pausar' : '▶ Reproducir';
     $('#playerCurrentTime').textContent = formatDuration(media.currentTime, true);
     $('#playerDuration').textContent = formatDuration(Number.isFinite(media.duration) ? media.duration : 0, true);
+    paintRange($('#playerSeek'));
+    renderKaraokeVolume();
     $('#playerMediaStatus').textContent = transitionBusy
       ? scenePhase === 'to-karaoke' ? 'Fade a karaoke…' : 'Fade a Star Lineup…'
       : !item ? 'Motor preparado' : media.error ? 'Formato no compatible' : media.readyState >= 3 ? (stageMode === 'karaoke' ? 'Video en Star Screen' : 'Video listo · Star Lineup visible') : 'Cargando archivo local…';
@@ -552,6 +674,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (!$('#playerBackgroundVolume').matches(':active') && !backgroundTransition && Math.abs(configuredVolume - backgroundTargetVolume) > 0.001) backgroundTargetVolume = configuredVolume;
     $('#playerBackgroundVolume').value = String(backgroundTargetVolume);
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
+    paintRange($('#playerBackgroundVolume'));
     $('#playerBackgroundCount').textContent = `${Number(background.count) || 0} pistas`;
     $('#playerBackgroundSong').textContent = track?.song || 'Sin música configurada';
     $('#playerBackgroundArtist').textContent = track?.artist || (background.error || 'Selecciona una carpeta o un archivo de audio.');
@@ -571,7 +694,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
 
   function render() {
     if (!state) return;
-    renderBranding(); renderQueue(); renderCompleted(); renderNow(); renderBackground(); renderAudioSettings(); renderOperations(); publish();
+    renderBranding(); renderQueue(); renderCompleted(); renderPlanB(); renderNow(); renderBackground(); renderAudioSettings(); renderOperations(); publish();
   }
 
   async function loadRequest(id, autoplay = false) {
@@ -619,10 +742,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     ensureAudioEngine();
     setKaraokeVolume(0);
     try {
+      await audioContext?.resume();
+      const stemElements = current()?.stem?.ready ? [instrumentalAudio, vocalsAudio] : [];
+      await Promise.all([
+        waitUntilPlayable(media, backgroundGeneration, 8000),
+        ...stemElements.map((element) => waitUntilPlayable(element, backgroundGeneration, 8000))
+      ]);
       syncStemTimes(true);
       await Promise.all([
         media.play(),
-        ...(current()?.stem?.ready ? [instrumentalAudio.play(), vocalsAudio.play()] : [])
+        ...stemElements.map((element) => element.play())
       ]);
       if (token !== transitionToken) return;
       if (!resuming) {
@@ -682,9 +811,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
       media.currentTime = 0;
       syncStemTimes(true);
       if (wasPlaying) {
+        const stemElements = current()?.stem?.ready ? [instrumentalAudio, vocalsAudio] : [];
+        await Promise.all([
+          waitUntilPlayable(media, backgroundGeneration, 8000),
+          ...stemElements.map((element) => waitUntilPlayable(element, backgroundGeneration, 8000))
+        ]);
+        syncStemTimes(true);
         await Promise.all([
           media.play(),
-          ...(current()?.stem?.ready ? [instrumentalAudio.play(), vocalsAudio.play()] : [])
+          ...stemElements.map((element) => element.play())
         ]);
         await fadeKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume, 360, () => token === transitionToken);
       }
@@ -700,7 +835,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   }
 
   async function playNextBackground({ resetFailures = false, preferredId = '' } = {}) {
-    if (!playerReady() || stageMode === 'karaoke') return;
+    if (!playerPreparationReady() || stageMode === 'karaoke') return;
     if (!backgroundTracks().length) { renderBackground(); return; }
     if (backgroundTransition) return backgroundTransition;
     if (resetFailures) { backgroundFailedIds.clear(); backgroundShuffle = []; }
@@ -773,7 +908,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   }
 
   async function ensureBackgroundPlaying() {
-    if (!playerReady() || stageMode === 'karaoke' || !backgroundTracks().length) return;
+    if (!playerPreparationReady() || stageMode === 'karaoke' || !backgroundTracks().length) return;
     const pending = backgroundPending();
     if (!backgroundAudio.src || (!backgroundCurrent() && !pending)) return playNextBackground();
     if (backgroundAudio.paused) {
@@ -847,13 +982,17 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   }
 
   function openSingerAssignment(track) {
-    if (!playerReady()) { showNotice('Inicia la actividad en modo Player antes de asignar un cantante.', true); return; }
+    if (!playerPreparationReady()) { showNotice('Selecciona una actividad y el modo Player antes de asignar un cantante.', true); return; }
     pendingTrack = track;
     $('#playerAssignSong').textContent = track.song || track.name || 'Pista local';
     $('#playerAssignArtist').textContent = track.artist || `${track.extension || ''} · archivo local`;
     $('#playerAssignSinger').value = '';
     const stemsOption = $('#playerAssignStemsOption');
-    stemsOption.classList.toggle('hidden', state?.stemEngine?.available !== true);
+    stemsOption.classList.remove('hidden');
+    $('#playerAssignStems').disabled = state?.stemEngine?.available !== true;
+    $('small', stemsOption).textContent = state?.stemEngine?.available === true
+      ? 'Opcional: separa instrumental y voz antes de añadirla a Star Lineup.'
+      : 'El motor Stems IA no está instalado; la pista se agregará con su audio original.';
     $('#playerAssignStems').checked = false;
     if (assignDialog.open) assignDialog.close();
     assignDialog.showModal();
@@ -880,8 +1019,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
       if (data.item.stem?.status && data.item.stem.status !== 'ready') {
         showNotice(`${singer} está en preparación IA y aparecerá en la fila solo cuando esté listo.`);
       } else {
-        await loadRequest(data.item.id, false);
-        showNotice(`${singer} fue agregado a la fila. Star Lineup seguirá visible hasta que pulses Reproducir.`);
+        if (playerReady()) await loadRequest(data.item.id, false);
+        showNotice(playerReady()
+          ? `${singer} fue agregado a la fila. Star Lineup seguirá visible hasta que pulses Reproducir.`
+          : `${singer} fue agregado a la fila y estará listo cuando inicies la actividad.`);
       }
     } catch (error) { showNotice(error.message, true); }
   }
@@ -976,18 +1117,37 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     }
   }
 
+  function pauseStemTracks() {
+    instrumentalAudio.pause();
+    vocalsAudio.pause();
+  }
+
+  async function resumeStemTracks() {
+    if (current()?.stem?.ready !== true || media.paused || stageMode !== 'karaoke' || transitionBusy) return;
+    try {
+      await Promise.all([
+        waitUntilPlayable(instrumentalAudio, backgroundGeneration, 8000),
+        waitUntilPlayable(vocalsAudio, backgroundGeneration, 8000)
+      ]);
+      if (media.paused || stageMode !== 'karaoke' || transitionBusy) return;
+      syncStemTimes(true);
+      await Promise.all([instrumentalAudio.play(), vocalsAudio.play()]);
+    } catch {
+      pauseStemTracks();
+    }
+  }
+
   function syncStemTimes(force = false) {
     if (current()?.stem?.ready !== true) return;
+    const now = performance.now();
+    if (!force && now - lastStemSyncAt < 750) return;
+    lastStemSyncAt = now;
     for (const element of [instrumentalAudio, vocalsAudio]) {
       try {
         const drift = (media.currentTime || 0) - (element.currentTime || 0);
-        if (force || Math.abs(drift) > 0.25) {
+        element.playbackRate = 1;
+        if (force || Math.abs(drift) > 0.45) {
           element.currentTime = Math.max(0, media.currentTime || 0);
-          element.playbackRate = 1;
-        } else if (Math.abs(drift) > 0.035) {
-          element.playbackRate = Math.max(0.98, Math.min(1.02, 1 + drift * 0.1));
-        } else {
-          element.playbackRate = 1;
         }
       } catch { /* Metadata will align both tracks as soon as it is available. */ }
     }
@@ -1091,7 +1251,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   }
 
   async function syncPlayer() {
-    try { $('#playerSync').classList.add('is-loading'); sync(await api('/api/player/sync', { method: 'POST', body: '{}' })); showNotice('Solicitudes y biblioteca del Player actualizadas.'); }
+    try { $('#playerSync').classList.add('is-loading'); sync(await api('/api/player/requests/pull', { method: 'POST', body: '{}' })); showNotice('Solicitudes públicas del Player actualizadas.'); }
     catch (error) { showNotice(error.message, true); }
     finally { $('#playerSync').classList.remove('is-loading'); }
   }
@@ -1120,9 +1280,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     render(); void ensureBackgroundPlaying();
   }
 
-  function close() {
+  function close({ force = false } = {}) {
+    if (!force && playerReady()) {
+      showNotice('La actividad está en curso en Player. Finalízala antes de salir de este modo.', true);
+      return false;
+    }
     closeDrawers();
     opened = false; document.body.classList.remove('player-mode'); $('#playerWorkspace').classList.add('hidden'); publish();
+    return true;
   }
 
   function closeDrawers() {
@@ -1141,23 +1306,24 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
 
   function sync(next) {
     const previousActivity = activityId();
-    const wasReady = playerReady();
+    const wasPreparationReady = playerPreparationReady();
     const previousLibraryScanAt = lastLibraryScanAt;
     state = next;
     lastLibraryScanAt = String(state?.library?.lastScanAt || '');
     if (previousActivity !== activityId()) {
       transitionToken += 1; backgroundGeneration += 1; transitionBusy = false; backgroundTransition = null;
       currentId = ''; setScene('lobby'); clearPlayerMedia(); clearBackgroundMedia();
-      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; loadOrder();
+      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; planBItems = []; loadOrder();
     }
     if (Array.isArray(state?.playerRuntime?.queueOrder)) {
       order = [...new Set(state.playerRuntime.queueOrder.map(String).filter(Boolean))];
       localStorage.setItem(storageKey(), JSON.stringify(order));
     }
-    if (state?.operatingMode?.locked && mode() === 'bridge' && opened) close();
+    if (state?.operatingMode?.locked && mode() === 'bridge' && opened) close({ force: true });
     if (!playerReady()) {
-      setScene('lobby'); media.pause(); instrumentalAudio.pause(); vocalsAudio.pause(); backgroundAudio.pause();
+      setScene('lobby'); media.pause(); instrumentalAudio.pause(); vocalsAudio.pause();
     }
+    if (!playerPreparationReady()) backgroundAudio.pause();
     render();
     const runtimePlayback = state?.playerRuntime?.playback;
     if (playerReady() && activityId() && runtimeRestoreActivityId !== activityId()) {
@@ -1174,10 +1340,18 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
       }
     }
     if (opened && libraryLoaded && lastLibraryScanAt && lastLibraryScanAt !== previousLibraryScanAt) window.setTimeout(() => void searchLibrary({ silent: true, browseAll: libraryBrowseAll }), 0);
-    if ((!wasReady && playerReady()) || (playerReady() && stageMode === 'lobby' && !backgroundAudio.src)) window.setTimeout(() => void ensureBackgroundPlaying(), 0);
+    if ((!wasPreparationReady && playerPreparationReady()) || (playerPreparationReady() && stageMode === 'lobby' && !backgroundAudio.src)) window.setTimeout(() => void ensureBackgroundPlaying(), 0);
   }
 
   $('#playerQueue').addEventListener('click', (event) => {
+    const expand = event.target.closest('[data-player-expand]');
+    if (expand) {
+      const id = String(expand.dataset.playerExpand || '');
+      if (expandedRequestIds.has(id)) expandedRequestIds.delete(id);
+      else expandedRequestIds.add(id);
+      renderQueue();
+      return;
+    }
     const stemPrepare = event.target.closest('[data-player-stem-prepare]');
     if (stemPrepare) { void preparePlayerStems(stemPrepare.dataset.playerStemPrepare); return; }
     const youtubeSearch = event.target.closest('[data-player-youtube-search]');
@@ -1199,6 +1373,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   document.querySelectorAll('[data-player-drawer-close]').forEach((button) => {
     button.addEventListener('click', closeDrawers);
   });
+  document.querySelectorAll('[data-player-plan-b-list]').forEach((button) => {
+    button.addEventListener('click', () => void drawPlanB(button.dataset.playerPlanBList));
+  });
+  $('#playerPlanB').addEventListener('click', (event) => {
+    const assign = event.target.closest('[data-player-plan-b-assign]');
+    if (assign) {
+      const item = activePlanBItems()[Number(assign.dataset.playerPlanBAssign)];
+      if (item?.trackId) openSingerAssignment({ id: item.trackId, song: item.song, artist: item.artist, extension: 'LOCAL' });
+      return;
+    }
+    const youtube = event.target.closest('[data-player-plan-b-youtube]');
+    if (youtube) { void searchPlanBYoutube(youtube.dataset.playerPlanBYoutube); return; }
+    const open = event.target.closest('[data-player-plan-b-open]');
+    if (open) void openPlayerYoutube(open.dataset.playerPlanBOpen);
+  });
   $('#playerQueue').addEventListener('toggle', (event) => {
     const details = event.target.closest?.('[data-player-youtube-details]');
     if (!details) return;
@@ -1215,8 +1404,25 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
   $('#playerSkip').addEventListener('click', () => void advance('skipped'));
   $('#playerComplete').addEventListener('click', () => void advance('completed'));
   $('#playerRemove').addEventListener('click', () => void advance('removed'));
-  $('#playerClose').addEventListener('click', close);
-  $('#playerOpenStarScreen').addEventListener('click', async () => { try { await api('/api/external/open', { method: 'POST', body: JSON.stringify({ url: `${location.origin}/star-screen.html` }) }); } catch (error) { showNotice(error.message, true); } });
+  $('#playerClose').addEventListener('click', () => close());
+  $('#playerStemQuickAction').addEventListener('click', () => {
+    const item = current() || queue()[0];
+    if (item) void preparePlayerStems(item.id);
+  });
+  $('#playerStemOriginal').addEventListener('click', () => {
+    audioSettings.stemMode = 'original'; persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+  });
+  $('#playerStemSeparated').addEventListener('click', () => {
+    if (current()?.stem?.ready !== true) return;
+    audioSettings.stemMode = 'separated'; persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+  });
+  $('#playerOpenStarScreen').addEventListener('click', async () => {
+    if (!playerPreparationReady()) return showNotice('Selecciona una actividad y el modo Player antes de abrir Star Screen.', true);
+    try {
+      const result = await api('/api/player/star-screen/open', { method: 'POST', body: '{}' });
+      showNotice(result.reused ? 'Star Screen ya está activa en la pantalla secundaria.' : 'Star Screen abierta en la pantalla secundaria. Si solo hay una pantalla, se muestra como preview 16:9.');
+    } catch (error) { showNotice(error.message, true); }
+  });
   $('#playerLibraryRefresh').addEventListener('click', () => void searchLibrary({ browseAll: !$('#playerLibrarySearch').value.trim() }));
   $('#playerLibrarySearch').addEventListener('keydown', (event) => { if (event.key === 'Enter') void searchLibrary({ browseAll: !event.currentTarget.value.trim() }); });
   $('#playerLibraryList').addEventListener('click', (event) => {
@@ -1247,13 +1453,53 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     if (mediaTargetVolume > 0) karaokeMuted = false;
     if (!transitionBusy) setKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume);
     $('#playerMute').textContent = karaokeMuted || mediaTargetVolume === 0 ? '🔇 Silenciado' : '🔊 Audio';
+    renderKaraokeVolume();
     publish();
   });
   for (const band of ['low', 'mid', 'high']) {
     const title = band[0].toUpperCase() + band.slice(1);
-    $(`#playerEq${title}`).addEventListener('input', (event) => {
-      audioSettings[band] = Math.max(-12, Math.min(12, Number(event.target.value) || 0));
+    const input = $(`#playerEq${title}`);
+    const shell = input.closest('.player-knob-shell');
+    const updateBand = (value) => {
+      input.value = String(Math.max(-12, Math.min(12, Math.round(Number(value) || 0))));
+      ensureAudioEngine();
+      void audioContext?.resume();
+      audioSettings[band] = Number(input.value);
       persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+    };
+    input.addEventListener('input', (event) => {
+      updateBand(event.target.value);
+    });
+    let drag = null;
+    shell.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      input.focus({ preventScroll: true });
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, value: Number(input.value) || 0 };
+      shell.setPointerCapture(event.pointerId);
+      shell.classList.add('dragging');
+    });
+    shell.addEventListener('pointermove', (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      updateBand(drag.value + ((drag.y - event.clientY) + (event.clientX - drag.x)) / 4);
+    });
+    const finishDrag = (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      drag = null;
+      shell.classList.remove('dragging');
+      if (shell.hasPointerCapture(event.pointerId)) shell.releasePointerCapture(event.pointerId);
+    };
+    shell.addEventListener('pointerup', finishDrag);
+    shell.addEventListener('pointercancel', finishDrag);
+    shell.addEventListener('click', (event) => event.preventDefault());
+    shell.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      updateBand((Number(input.value) || 0) + (event.deltaY < 0 ? 1 : -1));
+    }, { passive: false });
+    shell.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      updateBand(0);
     });
   }
   $('#playerEqReset').addEventListener('click', () => {
@@ -1285,6 +1531,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     backgroundTargetVolume = Math.max(0, Math.min(1, Number(event.target.value)));
     if (!backgroundTransition && !backgroundAudio.paused) backgroundAudio.volume = backgroundTargetVolume;
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
+    paintRange(event.currentTarget);
     publish();
   });
   $('#playerBackgroundVolume').addEventListener('change', async () => {
@@ -1292,7 +1539,12 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     catch (error) { showNotice(error.message, true); }
   });
   media.addEventListener('play', () => { ensureAudioEngine(); void audioContext?.resume(); renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100); });
-  media.addEventListener('pause', () => { renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100); });
+  media.addEventListener('pause', () => { pauseStemTracks(); renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100); });
+  media.addEventListener('waiting', pauseStemTracks);
+  media.addEventListener('stalled', pauseStemTracks);
+  media.addEventListener('seeking', pauseStemTracks);
+  media.addEventListener('playing', () => void resumeStemTracks());
+  media.addEventListener('seeked', () => { syncStemTimes(true); void resumeStemTracks(); });
   media.addEventListener('loadedmetadata', () => {
     if (pendingResumeTime !== null) {
       media.currentTime = Math.min(Math.max(0, pendingResumeTime), Math.max(0, Number(media.duration) || pendingResumeTime));
@@ -1313,7 +1565,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, operations = {}
     const detail = { 1: 'reproducción cancelada', 2: 'archivo no disponible', 3: 'formato o códec no compatible', 4: 'formato no compatible' }[media.error?.code] || 'error desconocido';
     transitionToken += 1; transitionBusy = false; setScene('lobby'); $('#playerMediaStatus').textContent = `Error: ${detail}`; showNotice(`El video local no pudo reproducirse: ${detail}.`, true); publish(); void ensureBackgroundPlaying();
   });
-  $('#playerSeek').addEventListener('input', (event) => { media.currentTime = Number(event.target.value); syncStemTimes(true); publish(); scheduleRuntimeSave(150); });
+  $('#playerSeek').addEventListener('input', (event) => { media.currentTime = Number(event.target.value); paintRange(event.currentTarget); publish(); scheduleRuntimeSave(150); });
   instrumentalAudio.addEventListener('loadedmetadata', () => syncStemTimes(true));
   vocalsAudio.addEventListener('loadedmetadata', () => syncStemTimes(true));
   backgroundAudio.addEventListener('play', () => { renderBackground(); publish(); });

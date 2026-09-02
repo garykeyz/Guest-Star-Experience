@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { homedir, setPriority } from "node:os";
+import { availableParallelism, homedir, setPriority } from "node:os";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
@@ -76,6 +76,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
+const STAR_SCREEN_WINDOW_SCRIPT = resolve(ROOT, "src", "star-screen-window.jxa");
 const STEM_DATA_ROOT = process.platform === "darwin"
   ? resolve(homedir(), "Library", "Application Support", "Guest Star")
   : resolve(ROOT, "data");
@@ -86,10 +87,11 @@ const STEM_ENGINE_ROOT = existsSync(resolve(INSTALLED_STEM_ENGINE_ROOT, "package
   : BUNDLED_STEM_ENGINE_ROOT;
 const STEM_ENGINE_CLI = resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
-const BRIDGE_VERSION = "4.4.0";
+const BRIDGE_VERSION = "4.4.1";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
+const STEM_IDLE_THREADS = Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -150,10 +152,13 @@ let activeStemChild = null;
 let activeStemJobId = "";
 let stemWorkerRunning = false;
 let stemWorkerPaused = false;
+let starScreenChild = null;
 let requests = [];
 let scanning = false;
 let syncing = false;
 let syncAgain = false;
+let syncMaintenanceRunning = false;
+let syncMaintenanceAgain = false;
 let lastScanAt = null;
 let lastSyncAt = null;
 let libraryError = "";
@@ -278,6 +283,7 @@ function rotationItemView(item, list) {
     ...item,
     list,
     localAvailable: Boolean(match?.exact),
+    trackId: match?.exact ? Buffer.from(match.filePath).toString("base64url") : "",
     filePath: match?.exact ? match.filePath : "",
     fileName: match?.exact ? match.fileName : "",
     youtube: hitYoutubeCache.get(key) || [],
@@ -1622,6 +1628,7 @@ function stateView() {
           const key = hitSuggestionKey(item);
           return {
             ...item,
+            trackId: item.filePath ? Buffer.from(item.filePath).toString("base64url") : "",
             youtube: hitYoutubeCache.get(key) || [],
             youtubeSearched: hitYoutubeCache.has(key)
           };
@@ -1905,6 +1912,7 @@ async function syncNow() {
   }
   syncing = true;
   sheetError = "";
+  let refreshed = false;
   broadcastState();
   try {
     const data = await fetchBridgeQueue(config);
@@ -1962,9 +1970,27 @@ async function syncNow() {
         reportedDuplicateIds.add(duplicate.id);
       }
     }
+    refreshed = true;
   } catch (error) {
     sheetError = errorMessage(error);
+  } finally {
+    syncing = false;
+    broadcastState();
+    if (refreshed) void runSyncMaintenance();
+    if (syncAgain) {
+      syncAgain = false;
+      void syncNow();
+    }
   }
+}
+
+async function runSyncMaintenance() {
+  if (!guestStarConfigured()) return;
+  if (syncMaintenanceRunning) {
+    syncMaintenanceAgain = true;
+    return;
+  }
+  syncMaintenanceRunning = true;
   try {
     if (operatingMode === "bridge") await reconcileVirtualDjQueue();
     await reportLocalStates();
@@ -1976,11 +2002,11 @@ async function syncNow() {
   } catch (error) {
     if (!sheetError) sheetError = errorMessage(error);
   } finally {
-    syncing = false;
+    syncMaintenanceRunning = false;
     broadcastState();
-    if (syncAgain) {
-      syncAgain = false;
-      void syncNow();
+    if (syncMaintenanceAgain) {
+      syncMaintenanceAgain = false;
+      void runSyncMaintenance();
     }
   }
 }
@@ -2103,10 +2129,10 @@ async function runStemCommand(command, args, job, phase, onOutput = null) {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      OMP_NUM_THREADS: "1",
-      MKL_NUM_THREADS: "1",
-      OPENBLAS_NUM_THREADS: "1",
-      VECLIB_MAXIMUM_THREADS: "1",
+      OMP_NUM_THREADS: String(STEM_IDLE_THREADS),
+      MKL_NUM_THREADS: String(STEM_IDLE_THREADS),
+      OPENBLAS_NUM_THREADS: String(STEM_IDLE_THREADS),
+      VECLIB_MAXIMUM_THREADS: String(STEM_IDLE_THREADS),
       UV_THREADPOOL_SIZE: "1"
     }
   });
@@ -2141,7 +2167,7 @@ async function prepareStemJob(job) {
   const inputInfo = await stat(job.filePath);
   const cacheRoot = await stemCacheRootForFile(job.filePath);
   const cacheKey = createHash("sha256")
-    .update(`${job.filePath}|${inputInfo.size}|${inputInfo.mtimeMs}`)
+    .update(`stems-v2|${job.filePath}|${inputInfo.size}|${inputInfo.mtimeMs}`)
     .digest("hex")
     .slice(0, 32);
   const outputDir = resolve(cacheRoot, cacheKey);
@@ -2175,7 +2201,7 @@ async function prepareStemJob(job) {
     ], job, "Extrayendo audio");
     job.progress = 10;
     await runStemCommand(process.execPath, [
-      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.10"
+      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.05"
     ], job, "Separando voz e instrumental", (output) => {
       const matches = [...output.matchAll(/(\d+)\/(\d+)/g)];
       const latest = matches.at(-1);
@@ -2189,17 +2215,17 @@ async function prepareStemJob(job) {
     const vocalsPart = resolve(outputDir, "vocals.part.m4a");
     job.progress = 86;
     await runStemCommand(stemFfmpegPath, [
-      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-y",
       "-i", resolve(parts, "drums.wav"),
       "-i", resolve(parts, "bass.wav"),
       "-i", resolve(parts, "other.wav"),
-      "-filter_complex", "[0:a][1:a][2:a]amix=inputs=3:normalize=0,alimiter=limit=0.95[a]",
-      "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", instrumentalPart
+      "-filter_complex", "[0:a]asetpts=PTS-STARTPTS[a0];[1:a]asetpts=PTS-STARTPTS[a1];[2:a]asetpts=PTS-STARTPTS[a2];[a0][a1][a2]amix=inputs=3:normalize=0,alimiter=limit=0.95,aresample=44100:first_pts=0[a]",
+      "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", instrumentalPart
     ], job, "Generando instrumental");
     job.progress = 92;
     await runStemCommand(stemFfmpegPath, [
-      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-      "-i", resolve(parts, "vocals.wav"), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", vocalsPart
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-y",
+      "-i", resolve(parts, "vocals.wav"), "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0", "-c:a", "aac", "-b:a", "128k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", vocalsPart
     ], job, "Preparando control de voz");
     const [instrumentalDuration, vocalsDuration] = await Promise.all([
       probeDuration(instrumentalPart),
@@ -2386,8 +2412,8 @@ async function serveBackgroundMusic(request, response, token) {
 }
 
 async function createPlayerLocalRequest(body = {}) {
-  if (operatingMode !== "player" || !activityState.activityRunning) {
-    throw new Error("Start this activity in Player mode before adding a local singer.");
+  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+    throw new Error("Select an activity and Player mode before adding a local singer.");
   }
   const singer = String(body.singer || "").trim().slice(0, 100);
   if (!singer) throw new Error("Enter the singer's name.");
@@ -3153,11 +3179,19 @@ async function findHitSuggestionYoutube(body = {}) {
     activityState.activityId,
     6
   );
+  const requested = {
+    song: String(body.song || "").trim(),
+    artist: String(body.artist || "").trim(),
+    language: String(body.language || "Español")
+  };
+  const favorites = config.lastHotelId ? favoritesForHotel(config.lastHotelId) : [];
   const suggestion = suggestions.find(
     (item) =>
       normalizeText(item.song) === normalizeText(body.song) &&
       normalizeText(item.artist) === normalizeText(body.artist)
-  );
+  ) || (isKnownRotationSong(requested, favorites)
+    ? rotationItemView(requested, String(body.list || "favorites"))
+    : null);
   if (!suggestion) throw new Error("The suggestion is no longer available.");
   const key = hitSuggestionKey(suggestion);
   if (body.force === true) hitYoutubeCache.delete(key);
@@ -3406,6 +3440,33 @@ async function chooseBackgroundAudioFile() {
     throw new Error("Choose an MP3, M4A, WAV, OGG, AAC or FLAC audio file.");
   }
   return filePath;
+}
+
+async function openStarScreenWindow() {
+  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+    throw new Error("Select an activity and Player mode before opening Star Screen.");
+  }
+  const url = `http://127.0.0.1:${runtimePort}/star-screen.html?display=1`;
+  if (process.platform !== "darwin") {
+    return { ok: true, url: await openMacUrl(url), mode: "browser" };
+  }
+  await access(STAR_SCREEN_WINDOW_SCRIPT);
+  if (starScreenChild && starScreenChild.exitCode === null && !starScreenChild.killed) {
+    return { ok: true, url, mode: "native-secondary", reused: true };
+  }
+  const child = spawn("/usr/bin/osascript", ["-l", "JavaScript", STAR_SCREEN_WINDOW_SCRIPT, url], {
+    stdio: "ignore"
+  });
+  await new Promise((resolveSpawn, rejectSpawn) => {
+    child.once("spawn", resolveSpawn);
+    child.once("error", rejectSpawn);
+  });
+  starScreenChild = child;
+  child.once("exit", () => {
+    if (starScreenChild === child) starScreenChild = null;
+  });
+  child.unref();
+  return { ok: true, url, mode: "native-secondary", reused: false };
 }
 
 async function serveStatic(pathname, response) {
@@ -3868,7 +3929,13 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && pathname === "/api/requests/sync") {
     await syncNow();
-    await reconcileVirtualDjQueue(true);
+    if (operatingMode === "bridge") await reconcileVirtualDjQueue(true);
+    json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/requests/pull") {
+    requireSignedInBridge();
+    await syncNow();
     json(response, 200, stateView());
     return;
   }
@@ -3882,6 +3949,9 @@ async function api(request, response, url) {
     requireSignedInBridge();
     const body = await readJson(request);
     const nextMode = String(body.mode || "").toLowerCase();
+    if (!config.lastHotelId || !config.lastVenueId || !config.lastActivityId || !tenantState.activity) {
+      throw new Error("Select a hotel, venue and activity before choosing the playback mode.");
+    }
     if (!["player", "bridge"].includes(nextMode)) {
       throw new Error("Choose Player or Bridge before starting the activity.");
     }
@@ -3950,6 +4020,11 @@ async function api(request, response, url) {
     const body = await readJson(request);
     const openedUrl = await openMacUrl(body.url);
     json(response, 200, { ok: true, url: openedUrl });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/star-screen/open") {
+    requireSignedInBridge();
+    json(response, 200, await openStarScreenWindow());
     return;
   }
   const queueMatch = pathname.match(/^\/api\/requests\/([^/]+)\/queue$/);
@@ -4310,6 +4385,9 @@ setInterval(() => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    if (starScreenChild && starScreenChild.exitCode === null) {
+      try { starScreenChild.kill("SIGTERM"); } catch { /* The display window may already be closed. */ }
+    }
     closeLibraryWatchers();
     for (const response of eventClients) response.end();
     eventClients.clear();

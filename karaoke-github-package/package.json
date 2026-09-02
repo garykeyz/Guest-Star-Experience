@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "test:http": "node scripts/production-http-test.mjs",
     "test:d1": "esbuild scripts/d1-backend-test.ts --bundle --platform=node --format=esm --packages=external --alias:@opennextjs/cloudflare=./scripts/cloudflare-test-stub.ts --outfile=/tmp/guest-star-d1-test.mjs && node /tmp/guest-star-d1-test.mjs",

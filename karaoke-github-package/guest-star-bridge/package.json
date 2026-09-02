@@ -1,6 +1,6 @@
 {
   "name": "guest-star",
-  "version": "4.4.0",
+  "version": "4.4.1",
   "private": true,
   "type": "module",
   "description": "Aplicación local Guest Star con Player interno y Bridge opcional para VirtualDJ.",
