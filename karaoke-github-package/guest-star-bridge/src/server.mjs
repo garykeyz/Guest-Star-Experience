@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, watch } from "node:fs";
-import { access, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { availableParallelism, homedir, setPriority } from "node:os";
+import { arch, availableParallelism, freemem, homedir, loadavg, platform, release, setPriority, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
 import {
   appsScriptAction,
@@ -54,6 +54,24 @@ import {
 } from "./queue-reconcile.mjs";
 import { reconcileQueuePresence } from "./queue-presence.mjs";
 import { loadQueueState, saveQueueState } from "./queue-state.mjs";
+import { DiagnosticStore, sanitizeDiagnosticValue, technicalReportText } from "./diagnostics.mjs";
+import {
+  STEM_MODEL_VERSIONS,
+  StemResourceController,
+  demucsExecutionBudget,
+  estimateTurnSeconds,
+  normalizeStemEngine,
+  prioritizeStemJobs,
+  spleeterExecutionBudget,
+  stemSourceForIntent,
+  stemJobKey
+} from "./stem-auto.mjs";
+import {
+  completeStemManifest,
+  fingerprintStemTrack,
+  inspectStemCache,
+  stemCachePaths
+} from "./stem-cache.mjs";
 import { orderRequestViews } from "./request-order.mjs";
 import { isOnlineGuestRequest } from "./request-source.mjs";
 import {
@@ -76,7 +94,6 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PUBLIC_DIR = resolve(ROOT, "public");
-const STAR_SCREEN_WINDOW_SCRIPT = resolve(ROOT, "src", "star-screen-window.jxa");
 const STEM_DATA_ROOT = process.platform === "darwin"
   ? resolve(homedir(), "Library", "Application Support", "Guest Star")
   : resolve(ROOT, "data");
@@ -85,13 +102,13 @@ const BUNDLED_STEM_ENGINE_ROOT = resolve(ROOT, "stem-engine");
 const STEM_ENGINE_ROOT = existsSync(resolve(INSTALLED_STEM_ENGINE_ROOT, "package.json"))
   ? INSTALLED_STEM_ENGINE_ROOT
   : BUNDLED_STEM_ENGINE_ROOT;
-const STEM_ENGINE_CLI = resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
+const DEMUCS_ENGINE_CLI = process.env.GUEST_STAR_DEMUCS_CLI ||
+  resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
 const BRIDGE_VERSION = "4.4.1";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
-const STEM_IDLE_THREADS = Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
 const JSON_LIMIT = 256 * 1024;
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -113,6 +130,26 @@ const MIME = {
 const BACKGROUND_AUDIO_EXTENSIONS = new Set([".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac"]);
 
 let config = await loadConfig();
+const bundleBuild = await readFile(resolve(ROOT, ".bundle-build"), "utf8")
+  .then((value) => String(value).trim().slice(0, 64))
+  .catch(() => process.env.GUEST_STAR_BUILD || "development");
+const diagnostics = await new DiagnosticStore({
+  storagePath: resolve(ROOT, "data", "diagnostics.json"),
+  version: BRIDGE_VERSION,
+  build: bundleBuild
+}).load();
+const DIAGNOSTIC_DELIVERY_COOLDOWN_MS = 30000;
+let diagnosticDeliveryInFlight = false;
+let lastDiagnosticDeliveryAttemptAt = 0;
+diagnostics.setHealth("Application", "OK");
+diagnostics.setHealth("Local Server", "OK");
+diagnostics.record({
+  module: "Application / Runtime",
+  severity: "INFO",
+  event: "APPLICATION_START",
+  summary: "Guest Star local runtime started",
+  context: { version: BRIDGE_VERSION, build: bundleBuild, architecture: arch() }
+}, { createIncident: false });
 const runtimePort = Number.isInteger(requestedPort) && requestedPort >= 1024 && requestedPort <= 65535
   ? requestedPort
   : config.bridgePort;
@@ -142,17 +179,44 @@ const playerStemJobs = new Map(
   storedQueueState.playerStemJobs.map((entry) => [entry.id, entry])
 );
 let playerOrder = [...storedQueueState.playerOrder];
+let playerQueueVisibility = new Map(
+  Object.entries(storedQueueState.playerQueueVisibility || {})
+);
 let playerPlayback = { ...storedQueueState.playerPlayback };
 let remotePlayerRuntime = null;
 let playerRuntimeDirty = false;
 let stemEngineAvailable = false;
 let stemFfmpegPath = "";
 let stemFfprobePath = "";
+let stemCapabilities = {
+  spleeter: { available: false, cli: "", vocalsModel: "", accompanimentModel: "" },
+  demucs: { available: false, cli: DEMUCS_ENGINE_CLI }
+};
 let activeStemChild = null;
 let activeStemJobId = "";
+let activeStemEngine = "";
+let activeStemInterrupt = "";
 let stemWorkerRunning = false;
 let stemWorkerPaused = false;
-let starScreenChild = null;
+let activeStemPlaybackLock = null;
+const stemPlaybackLocks = new Map();
+let playerHealthState = {
+  updatedAt: "",
+  karaokeActive: false,
+  videoActive: false,
+  audioContextState: "unknown",
+  mediaState: "idle",
+  audioRecovering: false,
+  audioOutputLost: false,
+  backgroundActive: false,
+  starScreenConnected: false,
+  starScreenExpected: false
+};
+const stemResourceController = new StemResourceController();
+let stemResourceState = "IDLE";
+let systemMemoryFreePercent = null;
+let systemMemoryPressure = false;
+let systemMemoryPressureRefresh = null;
 let requests = [];
 let scanning = false;
 let syncing = false;
@@ -178,7 +242,8 @@ let activityState = {
   updatedAt: "",
   lastAction: "",
   lastSource: "",
-  playbackMode: ""
+  playbackMode: "",
+  showStarScreenQueueCount: true
 };
 let queueActivityId = storedQueueState.activityId;
 const queuedEntries = new Map(
@@ -377,6 +442,145 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function diagnosticSystemView() {
+  const cores = availableParallelism();
+  return {
+    os: `${platform()} ${release()}`,
+    architecture: arch(),
+    logicalCores: cores,
+    uptimeSeconds: Math.round(uptime()),
+    processUptimeSeconds: Math.round(process.uptime()),
+    memoryAvailablePercent: systemMemoryFreePercent,
+    memoryPressure: systemMemoryPressure,
+    loadRatio: cores > 0 ? Number((loadavg()[0] / cores).toFixed(3)) : null
+  };
+}
+
+function diagnosticReference(value) {
+  const normalized = String(value || "");
+  return normalized
+    ? createHash("sha256").update(normalized).digest("hex").slice(0, 16)
+    : "";
+}
+
+function serverDiagnosticSnapshot(clientSnapshot = {}) {
+  const requestViews = [
+    ...requests.map(requestView),
+    ...[...playerLocalRequests.values()].map(playerLocalRequestView)
+  ];
+  const currentId = String(playerPlayback.currentRequestId || "");
+  const current = requestViews.find((item) => String(item.id) === currentId);
+  return sanitizeDiagnosticValue({
+    timestamp: new Date().toISOString(),
+    version: BRIDGE_VERSION,
+    build: bundleBuild,
+    system: diagnosticSystemView(),
+    currentState: {
+      installationRef: diagnosticReference(config.deviceId),
+      hotelRef: diagnosticReference(config.lastHotelId),
+      activityRef: diagnosticReference(config.lastActivityId || activityState.activityId),
+      activityRunning: activityState.activityRunning,
+      mode: operatingMode,
+      currentTrackRef: diagnosticReference(currentId),
+      currentTime: playerPlayback.currentTimeSeconds,
+      duration: Number(current?.durationSeconds) || 0,
+      playing: playerPlayback.wasPlaying,
+      queueLength: requestViews.filter((item) => !item.outcome).length,
+      backgroundActive: playerHealthState.backgroundActive
+    },
+    audio: {
+      ...playerHealthState,
+      contextState: String(clientSnapshot?.audio?.contextState || "").slice(0, 40),
+      graphConnected: clientSnapshot?.audio?.graphConnected === true,
+      requestedOutput: clientSnapshot?.audio?.requestedOutput === "selected-device" ? "selected-device" : "default",
+      activeOutput: clientSnapshot?.audio?.activeOutput === "selected-device" ? "selected-device" : "default",
+      outputLost: clientSnapshot?.audio?.outputLost === true,
+      mediaReadyState: Math.max(0, Math.min(4, Number(clientSnapshot?.audio?.mediaReadyState) || 0)),
+      mediaNetworkState: Math.max(0, Math.min(3, Number(clientSnapshot?.audio?.mediaNetworkState) || 0)),
+      currentTime: Math.max(0, Number(clientSnapshot?.audio?.currentTime) || 0),
+      duration: Math.max(0, Number(clientSnapshot?.audio?.duration) || 0),
+      backgroundReadyState: Math.max(0, Math.min(4, Number(clientSnapshot?.audio?.backgroundReadyState) || 0))
+    },
+    stems: {
+      defaultMode: config.defaultStemEngine,
+      source: ["spleeter", "demucs", "original"].includes(clientSnapshot?.stems?.source)
+        ? clientSnapshot.stems.source
+        : "",
+      resourceState: stemResourceState,
+      activeRequestRef: diagnosticReference(playerStemJobs.get(activeStemJobId)?.requestId),
+      activeEngine: playerStemJobs.get(activeStemJobId)?.engine || "",
+      budget: demucsExecutionBudget(availableParallelism(), stemResourceState)
+    },
+    activeJobs: [...playerStemJobs.values()].filter((job) =>
+      ["queued", "processing"].includes(job.status)
+    ).map((job) => ({
+      jobId: job.jobId || job.id,
+      requestRef: diagnosticReference(job.requestId || job.id),
+      engine: job.engine || "demucs",
+      status: job.status,
+      progress: job.progress,
+      phase: job.phase,
+      elapsedMs: job.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0
+    })),
+    health: diagnostics.health
+  });
+}
+
+function recordBackendDiagnostic(error, details = {}) {
+  return diagnostics.record({
+    module: details.module || "Application / Runtime",
+    severity: details.severity || "ERROR",
+    event: details.event || "BACKEND_ERROR",
+    name: error?.name || "Error",
+    message: errorMessage(error),
+    summary: details.summary || errorMessage(error),
+    stack: error instanceof Error ? error.stack || "" : "",
+    jobId: details.jobId || "",
+    engine: details.engine || "",
+    elapsedMs: details.elapsedMs || 0,
+    context: details.context || {}
+  });
+}
+
+async function deliverDiagnosticReport(report, { force = false } = {}) {
+  if (!report) throw new Error("Diagnostic report is unavailable.");
+  const now = Date.now();
+  if (diagnosticDeliveryInFlight ||
+      (!force && now - lastDiagnosticDeliveryAttemptAt < DIAGNOSTIC_DELIVERY_COOLDOWN_MS)) {
+    return false;
+  }
+  diagnosticDeliveryInFlight = true;
+  lastDiagnosticDeliveryAttemptAt = now;
+  try {
+    if (!hasV4Session(config)) {
+      diagnostics.updateReport(report.reportId, {
+        deliveryStatus: "queued",
+        deliveryError: "Guest Star is offline or not signed in."
+      });
+      return false;
+    }
+    const safeReport = sanitizeDiagnosticValue({
+      ...report,
+      recentEvents: (report.recentEvents || []).slice(-50),
+      snapshot: report.snapshot || serverDiagnosticSnapshot()
+    });
+    const result = await v4AppsScriptAction(config, "submitDiagnosticReport", {
+      report: safeReport
+    });
+    if (result?.ok === false) throw new Error(result.code || "Superhost did not accept the report.");
+    diagnostics.updateReport(report.reportId, { deliveryStatus: "sent", deliveryError: "" });
+    return true;
+  } catch (error) {
+    diagnostics.updateReport(report.reportId, {
+      deliveryStatus: "queued",
+      deliveryError: errorMessage(error)
+    });
+    return false;
+  } finally {
+    diagnosticDeliveryInFlight = false;
+  }
+}
+
 function recordReconciliation(details = {}) {
   const entry = {
     at: new Date().toISOString(),
@@ -448,15 +652,75 @@ async function resolveVirtualDjLocalFile(entry, libraryIndex) {
 }
 
 function playerStemJobView(id) {
-  const job = playerStemJobs.get(String(id));
-  if (!job) return null;
+  const requestId = String(id || "");
+  const jobs = [...playerStemJobs.values()].filter((entry) =>
+    String(entry.requestId || entry.id) === requestId
+  );
+  if (!jobs.length) return null;
+  const latestIntentJob = [...jobs].sort((left, right) =>
+    Date.parse(right.intentUpdatedAt || right.requestedAt || "") -
+    Date.parse(left.intentUpdatedAt || left.requestedAt || "")
+  )[0];
+  const intent = normalizeStemEngine(latestIntentJob?.intent, latestIntentJob?.engine || "auto");
+  const byEngine = Object.fromEntries(jobs.map((entry) => [entry.engine, entry]));
+  const cache = {
+    spleeter: byEngine.spleeter?.status === "ready" &&
+      Boolean(byEngine.spleeter.instrumentalPath && byEngine.spleeter.vocalsPath),
+    demucs: byEngine.demucs?.status === "ready" &&
+      Boolean(byEngine.demucs.instrumentalPath && byEngine.demucs.vocalsPath)
+  };
+  const source = stemSourceForIntent({ intent, cache });
+  const selectedJob = source === "original" ? null : byEngine[source];
+  const requiredJob = intent === "auto" ? byEngine.spleeter : byEngine[intent];
+  const improvementJob = intent === "auto" ? byEngine.demucs : null;
+  const ready = source !== "original";
+  const failed = !ready && requiredJob?.status === "failed";
+  const working = requiredJob && ["queued", "processing"].includes(requiredJob.status);
+  const improving = ready && improvementJob && ["queued", "processing"].includes(improvementJob.status);
+  const representative = improving ? improvementJob : requiredJob || selectedJob || latestIntentJob;
+  let phase = String(representative?.phase || "");
+  if (intent === "auto") {
+    if (source === "demucs") phase = "AUTO · Demucs listo";
+    else if (source === "spleeter" && improving) {
+      phase = stemResourceState === "PRESSURE"
+        ? "AUTO · Mejora pausada para proteger audio"
+        : "AUTO · Mejorando calidad…";
+    } else if (source === "spleeter") phase = "AUTO · Spleeter listo";
+    else if (!failed) phase = "AUTO · Preparando rápido…";
+  }
+  const lockedSource = activeStemPlaybackLock?.requestId === requestId
+    ? activeStemPlaybackLock.source
+    : "";
   return {
-    status: job.status,
-    progress: Math.max(0, Math.min(100, Number(job.progress) || 0)),
-    phase: String(job.phase || ""),
-    error: String(job.error || ""),
-    ready: job.status === "ready" && Boolean(job.instrumentalPath && job.vocalsPath),
-    updatedAt: String(job.updatedAt || "")
+    intent,
+    source,
+    lockedSource,
+    engine: lockedSource || source,
+    status: ready ? "ready" : failed ? "failed" : working ? requiredJob.status : "queued",
+    progress: ready && !improving
+      ? 100
+      : Math.max(0, Math.min(100, Number(representative?.progress) || 0)),
+    phase,
+    error: String(requiredJob?.error || improvementJob?.error || ""),
+    improvementError: ready ? String(improvementJob?.error || "") : "",
+    ready,
+    improving: Boolean(improving),
+    resourceState: stemResourceState,
+    estimatedTurnSeconds: Number.isFinite(Number(representative?.estimatedTurnSeconds))
+      ? Number(representative.estimatedTurnSeconds)
+      : null,
+    etaSeconds: Math.max(0, Number(representative?.etaSeconds) || 0),
+    engines: Object.fromEntries(Object.entries(byEngine).map(([engine, job]) => [engine, {
+      status: job.status,
+      progress: Math.max(0, Math.min(100, Number(job.progress) || 0)),
+      phase: String(job.phase || ""),
+      cacheHit: job.cacheHit === true,
+      modelVersion: String(job.modelVersion || ""),
+      actualThreads: Number.isInteger(job.actualThreads) ? job.actualThreads : null,
+      resourceState: String(job.resourceState || stemResourceState),
+      error: String(job.error || "")
+    }])),
+    updatedAt: String(representative?.updatedAt || "")
   };
 }
 
@@ -688,7 +952,10 @@ function normalizedActivity(data = {}) {
         ? String(source.lastSource).toLowerCase()
         : sameActivity
           ? String(activityState.playbackMode || "")
-          : ""
+          : "",
+    showStarScreenQueueCount: source.showStarScreenQueueCount === undefined
+      ? activityState.showStarScreenQueueCount !== false
+      : source.showStarScreenQueueCount !== false
   };
 }
 
@@ -729,6 +996,9 @@ function clearTransientCaches() {
 
 function applyActivityState(data) {
   const next = normalizedActivity(data);
+  if (data?.activity?.showStarScreenQueueCount !== undefined) {
+    next.showStarScreenQueueCount = data.activity.showStarScreenQueueCount !== false;
+  }
   activityState = next;
   if (activityState.activityRunning) {
     // The remote activity owns the locked mode. Older activities without an
@@ -740,6 +1010,18 @@ function applyActivityState(data) {
       remotePlayerRuntime = data.playerRuntime;
       if (Array.isArray(data.playerRuntime.queueOrder)) {
         playerOrder = [...new Set(data.playerRuntime.queueOrder.map(String).filter(Boolean))];
+      }
+      if (
+        data.playerRuntime.queueVisibility &&
+        typeof data.playerRuntime.queueVisibility === "object" &&
+        !Array.isArray(data.playerRuntime.queueVisibility)
+      ) {
+        playerQueueVisibility = new Map(
+          Object.entries(data.playerRuntime.queueVisibility)
+            .slice(0, 1000)
+            .map(([id, visible]) => [String(id).trim().slice(0, 160), visible !== false])
+            .filter(([id]) => id)
+        );
       }
       const remotePlayback = data.playerRuntime.playback;
       if (remotePlayback && typeof remotePlayback === "object") {
@@ -906,7 +1188,8 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
     playerLocalRequests.values(),
     playerOrder,
     playerPlayback,
-    playerStemJobs.values()
+    playerStemJobs.values(),
+    Object.fromEntries(playerQueueVisibility)
   );
 }
 
@@ -918,8 +1201,18 @@ function cleanPlayerRuntimeUpdate(body = {}) {
     ? body.playback
     : null;
   const currentTimeSeconds = Number(sourcePlayback?.currentTimeSeconds);
+  const queueVisibility = body.queueVisibility &&
+    typeof body.queueVisibility === "object" &&
+    !Array.isArray(body.queueVisibility)
+    ? Object.fromEntries(
+        Object.entries(body.queueVisibility).slice(0, 1000)
+          .map(([id, visible]) => [String(id || "").trim().slice(0, 160), visible !== false])
+          .filter(([id]) => id)
+      )
+    : null;
   return {
     queueOrder: requestedOrder,
+    queueVisibility,
     playback: sourcePlayback ? {
       currentRequestId: String(sourcePlayback.currentRequestId || "").trim().slice(0, 160),
       currentTimeSeconds: Number.isFinite(currentTimeSeconds)
@@ -937,7 +1230,6 @@ async function pushPlayerRuntimeRemote() {
     !playerRuntimeDirty ||
     !hasV4Session(config) ||
     !config.lastActivityId ||
-    !activityState.activityRunning ||
     operatingMode !== "player"
   ) return false;
   const data = await v4AppsScriptAction(config, "playerRuntimeUpdate", {
@@ -946,6 +1238,7 @@ async function pushPlayerRuntimeRemote() {
     activityId: config.lastActivityId,
     source: "player",
     queueOrder: playerOrder,
+    queueVisibility: Object.fromEntries(playerQueueVisibility),
     playback: playerPlayback
   });
   if (data?.ok === false) throw new Error(data.code || "Guest Star could not save Player state.");
@@ -955,16 +1248,25 @@ async function pushPlayerRuntimeRemote() {
 }
 
 async function updatePlayerRuntime(body = {}) {
-  if (operatingMode !== "player" || !activityState.activityRunning) {
-    throw new Error("Player state can only change during an activity running in Player mode.");
+  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+    throw new Error("Player state can only change after selecting an activity in Player mode.");
   }
   const clean = cleanPlayerRuntimeUpdate(body);
   if (clean.queueOrder) playerOrder = clean.queueOrder;
+  if (clean.queueVisibility) playerQueueVisibility = new Map(Object.entries(clean.queueVisibility));
   if (clean.playback) {
+    const previousPlayback = playerPlayback;
     playerPlayback = clean.playback;
-    // Any Karaoke scene owns the live audio path, even while paused. Keep all
-    // AI work stopped until Star Screen has fully returned to the lobby.
-    pauseStemWorker(clean.playback.scene === "karaoke");
+    if (
+      previousPlayback.currentRequestId !== clean.playback.currentRequestId ||
+      clean.playback.scene !== "karaoke"
+    ) {
+      activeStemPlaybackLock = null;
+    }
+    if (clean.playback.scene === "karaoke" && clean.playback.currentRequestId) {
+      lockStemSourceForPlayback(clean.playback.currentRequestId, "runtime");
+    }
+    updateStemResourceState();
   }
   playerRuntimeDirty = true;
   await persistQueuedEntries();
@@ -993,6 +1295,9 @@ async function resetLocalActivity(activityId) {
   playerLocalRequests.clear();
   playerStemJobs.clear();
   playerOrder = [];
+  playerQueueVisibility.clear();
+  activeStemPlaybackLock = null;
+  stemPlaybackLocks.clear();
   playerPlayback = {
     currentRequestId: "",
     currentTimeSeconds: 0,
@@ -1637,6 +1942,7 @@ function stateView() {
   return {
     ok: true,
     version: BRIDGE_VERSION,
+    build: bundleBuild,
     config: publicConfig(config),
     account: {
       authenticated: identityState.authenticated && hasV4Session(config),
@@ -1660,14 +1966,44 @@ function stateView() {
         ? remotePlayerRuntime
         : {}),
       queueOrder: [...playerOrder],
+      queueVisibility: Object.fromEntries(playerQueueVisibility),
       playback: { ...playerPlayback }
     },
     stemEngine: {
       available: stemEngineAvailable,
+      defaultEngine: normalizeStemEngine(config.defaultStemEngine, "auto"),
+      engines: {
+        spleeter: {
+          available: stemCapabilities.spleeter.available,
+          modelVersion: STEM_MODEL_VERSIONS.spleeter,
+          actualThreads: spleeterExecutionBudget(availableParallelism(), stemResourceState).numThreads
+        },
+        demucs: {
+          available: stemCapabilities.demucs.available,
+          modelVersion: STEM_MODEL_VERSIONS.demucs,
+          maxHeavyJobs: 1,
+          internalThreads: null
+        }
+      },
+      resourceState: stemResourceState,
+      resourceBudget: {
+        spleeter: spleeterExecutionBudget(availableParallelism(), stemResourceState),
+        demucs: demucsExecutionBudget(availableParallelism(), stemResourceState)
+      },
       processing: Boolean(activeStemJobId),
       pausedForLivePlayback: stemWorkerPaused,
-      activeRequestId: activeStemJobId,
-      jobs: [...playerStemJobs.keys()].map((id) => ({ id, ...playerStemJobView(id) }))
+      activeRequestId: playerStemJobs.get(activeStemJobId)?.requestId || "",
+      activeJobId: activeStemJobId,
+      activeEngine: activeStemEngine,
+      jobs: [...new Set([...playerStemJobs.values()].map((job) => job.requestId))]
+        .map((id) => ({ id, ...playerStemJobView(id) }))
+    },
+    diagnostics: {
+      sessionDiagnosticId: diagnostics.sessionDiagnosticId,
+      health: diagnostics.health,
+      recentErrors: diagnostics.events.filter((event) =>
+        ["WARNING", "ERROR", "CRITICAL", "RECOVERED"].includes(event.severity)
+      ).slice(-8).reverse()
     },
     activitySummary,
     library: {
@@ -2092,31 +2428,213 @@ async function stemCacheRootForFile(filePath) {
   throw new Error("Guest Star could not create its Stems cache inside the configured karaoke folder.");
 }
 
+function firstExistingPath(candidates = []) {
+  return candidates.map((value) => String(value || "").trim()).find((value) =>
+    value && existsSync(value)
+  ) || "";
+}
+
 async function refreshStemEngineCapability() {
-  try {
-    await access(STEM_ENGINE_CLI);
-    stemFfmpegPath = String(stemEngineRequire("ffmpeg-static") || "");
-    stemFfprobePath = String(stemEngineRequire("ffprobe-static")?.path || "");
-    await Promise.all([access(stemFfmpegPath), access(stemFfprobePath)]);
-    stemEngineAvailable = true;
-  } catch {
-    stemEngineAvailable = false;
-    stemFfmpegPath = "";
-    stemFfprobePath = "";
-  }
+  try { stemFfmpegPath = String(process.env.GUEST_STAR_FFMPEG || stemEngineRequire("ffmpeg-static") || ""); }
+  catch { stemFfmpegPath = String(process.env.GUEST_STAR_FFMPEG || ""); }
+  try { stemFfprobePath = String(process.env.GUEST_STAR_FFPROBE || stemEngineRequire("@ffprobe-installer/ffprobe")?.path || ""); }
+  catch { stemFfprobePath = String(process.env.GUEST_STAR_FFPROBE || ""); }
+  const toolsAvailable = Boolean(
+    stemFfmpegPath && stemFfprobePath &&
+    existsSync(stemFfmpegPath) && existsSync(stemFfprobePath)
+  );
+  const spleeterCli = firstExistingPath([
+    process.env.GUEST_STAR_SPLEETER_CLI,
+    resolve(STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation"),
+    resolve(STEM_ENGINE_ROOT, "sherpa-onnx-offline-source-separation"),
+    resolve(BUNDLED_STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation")
+  ]);
+  const modelDirectories = [
+    process.env.GUEST_STAR_SPLEETER_MODEL_DIR,
+    resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16"),
+    resolve(STEM_ENGINE_ROOT, "models", "spleeter-2stems"),
+    resolve(BUNDLED_STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16")
+  ].filter(Boolean);
+  const vocalsModel = firstExistingPath([
+    process.env.GUEST_STAR_SPLEETER_VOCALS_MODEL,
+    ...modelDirectories.map((directory) => resolve(directory, "vocals.fp16.onnx"))
+  ]);
+  const accompanimentModel = firstExistingPath([
+    process.env.GUEST_STAR_SPLEETER_ACCOMPANIMENT_MODEL,
+    ...modelDirectories.map((directory) => resolve(directory, "accompaniment.fp16.onnx"))
+  ]);
+  stemCapabilities = {
+    spleeter: {
+      available: toolsAvailable && Boolean(spleeterCli && vocalsModel && accompanimentModel),
+      cli: spleeterCli,
+      vocalsModel,
+      accompanimentModel
+    },
+    demucs: {
+      available: toolsAvailable && existsSync(DEMUCS_ENGINE_CLI),
+      cli: DEMUCS_ENGINE_CLI
+    }
+  };
+  stemEngineAvailable = stemCapabilities.spleeter.available || stemCapabilities.demucs.available;
+  diagnostics.setHealth("Spleeter", stemCapabilities.spleeter.available ? "IDLE" : "OFFLINE");
+  diagnostics.setHealth("Demucs", stemCapabilities.demucs.available ? stemResourceState : "OFFLINE");
+  diagnostics.setHealth("Stem Cache", toolsAvailable ? "OK" : "WARNING");
   return stemEngineAvailable;
 }
 
-function pauseStemWorker(paused) {
-  stemWorkerPaused = paused === true;
-  if (activeStemChild?.pid) {
+function recordStemBreadcrumb(event, details = {}, { severity = "INFO", createIncident = false } = {}) {
+  const engine = String(details.engine || "");
+  return diagnostics.record({
+    module: details.module || (engine === "spleeter" ? "Spleeter" : engine === "demucs" ? "Demucs" : "Stems IA"),
+    severity,
+    event,
+    summary: details.summary || event,
+    jobId: details.jobId || "",
+    engine,
+    elapsedMs: details.elapsedMs || 0,
+    context: details.context || {}
+  }, { createIncident });
+}
+
+function currentStemResourceSignals() {
+  const healthAge = Date.now() - Date.parse(playerHealthState.updatedAt || "");
+  const fresh = Number.isFinite(healthAge) && healthAge >= 0 && healthAge < 15000;
+  const cores = availableParallelism();
+  const karaokeFromRuntime = playerPlayback.scene === "karaoke" && playerPlayback.wasPlaying;
+  return {
+    karaokeActive: fresh ? playerHealthState.karaokeActive || karaokeFromRuntime : karaokeFromRuntime,
+    backgroundActive: fresh && playerHealthState.backgroundActive,
+    videoActive: fresh ? playerHealthState.videoActive : karaokeFromRuntime,
+    audioContextState: fresh ? playerHealthState.audioContextState : "unknown",
+    mediaState: fresh ? playerHealthState.mediaState : "idle",
+    audioRecovering: fresh && playerHealthState.audioRecovering,
+    audioOutputLost: fresh && playerHealthState.audioOutputLost,
+    starScreenProblem: fresh && playerHealthState.starScreenExpected && !playerHealthState.starScreenConnected,
+    cpuLoadRatio: cores > 0 ? loadavg()[0] / cores : 0,
+    memoryPressure: systemMemoryPressure,
+    memoryFreePercent: systemMemoryFreePercent
+  };
+}
+
+async function refreshSystemMemoryPressure() {
+  if (systemMemoryPressureRefresh) return systemMemoryPressureRefresh;
+  systemMemoryPressureRefresh = (async () => {
+    if (platform() === "darwin") {
+      try {
+        const { stdout } = await execFileAsync("/usr/bin/memory_pressure", ["-Q"], {
+          timeout: 3000,
+          maxBuffer: 256 * 1024
+        });
+        const match = String(stdout || "").match(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/i);
+        if (match) {
+          systemMemoryFreePercent = Math.max(0, Math.min(100, Number(match[1])));
+          systemMemoryPressure = systemMemoryFreePercent < 10;
+          return;
+        }
+      } catch {
+        // Fall through to the portable estimate when the native probe is unavailable.
+      }
+    }
+    const memoryTotal = totalmem();
+    const ratio = memoryTotal > 0 ? freemem() / memoryTotal : 1;
+    systemMemoryFreePercent = Math.round(ratio * 1000) / 10;
+    systemMemoryPressure = ratio < 0.08;
+  })().finally(() => {
+    systemMemoryPressureRefresh = null;
+  });
+  return systemMemoryPressureRefresh;
+}
+
+function applyActiveStemResourceBudget(previousState = stemResourceState) {
+  stemWorkerPaused = stemResourceState === "PRESSURE";
+  const job = playerStemJobs.get(activeStemJobId);
+  if (!activeStemChild?.pid || !job) return;
+  const budget = job.engine === "spleeter"
+    ? spleeterExecutionBudget(availableParallelism(), stemResourceState)
+    : demucsExecutionBudget(availableParallelism(), stemResourceState);
+  job.resourceState = stemResourceState;
+  try {
+    setPriority(activeStemChild.pid, budget.osPriority);
+    job.osPriorityApplied = budget.osPriority;
+  } catch {
+    job.osPriorityApplied = null;
+  }
+  if (stemWorkerPaused && !activeStemChild.guestStarStopped) {
     try {
-      activeStemChild.kill(stemWorkerPaused ? "SIGSTOP" : "SIGCONT");
+      activeStemChild.kill("SIGSTOP");
+      activeStemChild.guestStarStopped = true;
     } catch {
-      // The worker may have completed between state updates.
+      // The process may have completed between the health update and the signal.
+    }
+  } else if (!stemWorkerPaused && activeStemChild.guestStarStopped) {
+    try {
+      activeStemChild.kill("SIGCONT");
+      activeStemChild.guestStarStopped = false;
+      if (job.engine === "demucs") {
+        recordStemBreadcrumb("DEMUCS_RESUMED", {
+          engine: "demucs",
+          jobId: job.jobId,
+          context: { previousState, resourceState: stemResourceState }
+        });
+      }
+    } catch {
+      // The process may have completed while it was stopped.
     }
   }
-  if (!stemWorkerPaused) void processStemQueue();
+}
+
+function updateStemResourceState() {
+  const result = stemResourceController.update(currentStemResourceSignals());
+  stemResourceState = result.state;
+  if (!result.changed) return result;
+  applyActiveStemResourceBudget(result.previous);
+  const event = `DEMUCS_MODE_${stemResourceState}`;
+  recordStemBreadcrumb(event, {
+    engine: "demucs",
+    context: {
+      previousState: result.previous,
+      resourceState: stemResourceState,
+      signals: currentStemResourceSignals(),
+      budget: demucsExecutionBudget(availableParallelism(), stemResourceState)
+    }
+  });
+  diagnostics.setHealth("Demucs", stemCapabilities.demucs.available ? stemResourceState : "OFFLINE");
+  if (stemResourceState === "PRESSURE") {
+    recordStemBreadcrumb("DEMUCS_RESOURCE_REDUCED", {
+      engine: "demucs",
+      context: { previousState: result.previous, resourceState: stemResourceState }
+    });
+    recordStemBreadcrumb("DEMUCS_PAUSED_OR_DEFERRED", {
+      engine: "demucs",
+      context: { activeJobId: activeStemJobId, pauseMechanism: "SIGSTOP" }
+    });
+  } else {
+    void processStemQueue();
+  }
+  void persistQueuedEntries().catch(() => {});
+  broadcastState();
+  return result;
+}
+
+class StemCommandInterruptedError extends Error {
+  constructor(reason) {
+    super(`Stem command interrupted: ${reason}`);
+    this.name = "StemCommandInterruptedError";
+    this.reason = reason;
+  }
+}
+
+function interruptActiveDemucs(reason) {
+  const job = playerStemJobs.get(activeStemJobId);
+  if (!activeStemChild?.pid || job?.engine !== "demucs") return false;
+  activeStemInterrupt = String(reason || "preempted");
+  try {
+    if (activeStemChild.guestStarStopped) activeStemChild.kill("SIGCONT");
+    activeStemChild.kill("SIGTERM");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runStemCommand(command, args, job, phase, onOutput = null) {
@@ -2127,32 +2645,36 @@ async function runStemCommand(command, args, job, phase, onOutput = null) {
   broadcastState();
   const child = spawn(command, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      OMP_NUM_THREADS: String(STEM_IDLE_THREADS),
-      MKL_NUM_THREADS: String(STEM_IDLE_THREADS),
-      OPENBLAS_NUM_THREADS: String(STEM_IDLE_THREADS),
-      VECLIB_MAXIMUM_THREADS: String(STEM_IDLE_THREADS),
-      UV_THREADPOOL_SIZE: "1"
-    }
+    env: process.env
   });
   activeStemChild = child;
-  try { setPriority(child.pid, 19); } catch { /* Best effort on supported systems. */ }
-  if (stemWorkerPaused) {
-    try { child.kill("SIGSTOP"); } catch { /* The child may still be starting. */ }
-  }
+  activeStemEngine = job.engine;
+  activeStemInterrupt = "";
+  applyActiveStemResourceBudget();
   let errorText = "";
   const consume = (chunk) => {
     const output = String(chunk || "");
     errorText = `${errorText}${output}`.slice(-12000);
+    job.lastOutputAt = new Date().toISOString();
     if (onOutput) onOutput(output);
   };
   child.stdout?.on("data", consume);
   child.stderr?.on("data", consume);
-  const [code, signal] = await once(child, "close");
+  const [code, signal] = await new Promise((resolveClose, rejectClose) => {
+    child.once("error", rejectClose);
+    child.once("close", (...values) => resolveClose(values));
+  });
   if (activeStemChild === child) activeStemChild = null;
+  const interrupted = activeStemInterrupt;
+  activeStemInterrupt = "";
+  if (interrupted) throw new StemCommandInterruptedError(interrupted);
   if (Number(code) !== 0) {
-    throw new Error(`Stem engine stopped${signal ? ` (${signal})` : ""}: ${errorText.trim().slice(-800) || `code ${code}`}`);
+    const failure = new Error(`Stem engine stopped${signal ? ` (${signal})` : ""}: ${errorText.trim().slice(-800) || `code ${code}`}`);
+    failure.exitCode = code;
+    failure.signal = signal;
+    failure.stderr = errorText.trim().slice(-2000);
+    failure.command = basename(command);
+    throw failure;
   }
 }
 
@@ -2163,157 +2685,514 @@ async function probeDuration(filePath) {
   return Math.max(0, Number(String(stdout).trim()) || 0);
 }
 
+function requestStemJobs(requestId) {
+  return [...playerStemJobs.values()].filter((job) => job.requestId === String(requestId));
+}
+
+function requestStemIntent(requestId) {
+  return requestStemJobs(requestId).sort((left, right) =>
+    Date.parse(right.intentUpdatedAt || right.requestedAt || "") -
+    Date.parse(left.intentUpdatedAt || left.requestedAt || "")
+  )[0]?.intent || normalizeStemEngine(config.defaultStemEngine, "auto");
+}
+
+function setRequestStemIntent(requestId, intent, timestamp = new Date().toISOString()) {
+  for (const job of requestStemJobs(requestId)) {
+    job.intent = intent;
+    job.intentUpdatedAt = timestamp;
+    if (intent === "demucs" && job.engine === "demucs" && job.status === "deferred") {
+      job.status = "queued";
+      job.phase = "Alta calidad · esperando recursos seguros";
+    }
+    if (intent === "auto" && job.engine === "demucs" && job.status === "deferred") {
+      job.status = "queued";
+      job.phase = "AUTO · Mejora en cola";
+    }
+  }
+}
+
+function deferAutoDemucs(requestId) {
+  for (const job of requestStemJobs(requestId)) {
+    if (job.engine !== "demucs" || job.intent !== "auto" || job.status === "ready") continue;
+    if (job.id === activeStemJobId && job.status === "processing") {
+      interruptActiveDemucs("deferred_by_manual_fast_mode");
+    } else {
+      job.status = "deferred";
+      job.phase = "Mejora Demucs diferida por modo Rápido";
+      job.updatedAt = new Date().toISOString();
+    }
+  }
+}
+
+function playerQueueRowsForStemEta() {
+  const byId = new Map([
+    ...requests.map((item) => [String(item.id), item]),
+    ...[...playerLocalRequests.values()].map((item) => [String(item.id), item])
+  ]);
+  const ids = [
+    ...playerOrder,
+    ...[...byId.keys()].filter((id) => !playerOrder.includes(id))
+  ];
+  return ids.map((id) => ({
+    id,
+    durationSeconds: Math.max(1, Number(byId.get(id)?.durationSeconds) || 240),
+    transitionSeconds: activityState.transitionSeconds
+  }));
+}
+
+function estimatedTurnForRequest(requestId) {
+  const rows = playerQueueRowsForStemEta();
+  const current = rows.find((item) => item.id === String(playerPlayback.currentRequestId));
+  return estimateTurnSeconds({
+    requestId,
+    queue: rows,
+    currentRequestId: playerPlayback.currentRequestId,
+    currentTimeSeconds: playerPlayback.currentTimeSeconds,
+    currentDurationSeconds: current?.durationSeconds,
+    transitionSeconds: activityState.transitionSeconds,
+    defaultDurationSeconds: 240
+  });
+}
+
+async function trackStemContext(filePath) {
+  const [cacheRoot, identity] = await Promise.all([
+    stemCacheRootForFile(filePath),
+    fingerprintStemTrack(filePath)
+  ]);
+  return { cacheRoot, ...identity };
+}
+
+async function lookupStemCache(context, engine, requestId = "") {
+  const modelVersion = STEM_MODEL_VERSIONS[engine];
+  recordStemBreadcrumb("STEMS_CACHE_LOOKUP", {
+    module: "Stem Cache",
+    engine,
+    context: {
+      requestId: requestId ? createHash("sha256").update(requestId).digest("hex").slice(0, 16) : "",
+      fingerprint: context.fingerprint.slice(0, 20),
+      modelVersion
+    }
+  });
+  const result = await inspectStemCache({
+    cacheRoot: context.cacheRoot,
+    fingerprint: context.fingerprint,
+    engine,
+    modelVersion,
+    probeDuration: stemFfprobePath ? probeDuration : null
+  });
+  const prefix = engine === "spleeter" ? "SPLEETER" : "DEMUCS";
+  recordStemBreadcrumb(`${prefix}_CACHE_${result.valid ? "HIT" : "MISS"}`, {
+    module: result.valid ? engine === "spleeter" ? "Spleeter" : "Demucs" : "Stem Cache",
+    engine,
+    context: {
+      fingerprint: context.fingerprint.slice(0, 20),
+      modelVersion,
+      reason: result.reason
+    }
+  });
+  return result;
+}
+
+function upsertStemJob({ requestId, filePath, engine, intent, context, cache = null }) {
+  const id = stemJobKey(requestId, engine);
+  const existing = playerStemJobs.get(id);
+  const stamp = new Date().toISOString();
+  const cached = cache?.valid === true;
+  const job = {
+    ...existing,
+    id,
+    requestId,
+    jobId: existing?.jobId || `GSJ-${randomUUID()}`,
+    filePath,
+    engine,
+    intent,
+    intentUpdatedAt: stamp,
+    required: engine === "spleeter" || intent === "demucs",
+    opportunistic: engine === "demucs" && intent === "auto",
+    status: cached ? "ready" : "queued",
+    progress: cached ? 100 : 0,
+    phase: cached
+      ? `${engine === "spleeter" ? "Spleeter" : "Demucs"} listo desde caché`
+      : engine === "spleeter"
+        ? intent === "auto" ? "AUTO · Preparando rápido…" : "Rápido · en cola"
+        : intent === "auto" ? "AUTO · Mejora en cola" : "Alta calidad · en cola",
+    fingerprint: context.fingerprint,
+    cacheKey: cache?.cacheKey || stemCachePaths(
+      context.cacheRoot,
+      context.fingerprint,
+      engine,
+      STEM_MODEL_VERSIONS[engine]
+    ).cacheKey,
+    modelVersion: STEM_MODEL_VERSIONS[engine],
+    manifestPath: cached ? cache.manifestPath : "",
+    instrumentalPath: cached ? cache.instrumentalPath : "",
+    vocalsPath: cached ? cache.vocalsPath : "",
+    error: "",
+    cacheHit: cached,
+    estimatedTurnSeconds: estimatedTurnForRequest(requestId),
+    etaSeconds: 0,
+    resourceState: stemResourceState,
+    actualThreads: engine === "spleeter"
+      ? spleeterExecutionBudget(availableParallelism(), stemResourceState).numThreads
+      : null,
+    osPriorityApplied: null,
+    requestedAt: existing?.requestedAt || stamp,
+    startedAt: cached ? existing?.startedAt || "" : "",
+    completedAt: cached ? cache.manifest?.createdAt || stamp : "",
+    lastOutputAt: "",
+    updatedAt: stamp
+  };
+  playerStemJobs.set(id, job);
+  return job;
+}
+
+async function queueAutoDemucsUpgrade(requestId, filePath, context) {
+  const cache = await lookupStemCache(context, "demucs", requestId);
+  const job = upsertStemJob({ requestId, filePath, engine: "demucs", intent: "auto", context, cache });
+  if (!cache.valid && !stemCapabilities.demucs.available) {
+    job.status = "deferred";
+    job.phase = "AUTO · Demucs no está instalado";
+  } else if (!cache.valid) {
+    recordStemBreadcrumb("DEMUCS_QUEUE", {
+      engine: "demucs",
+      jobId: job.jobId,
+      context: { estimatedTurnSeconds: job.estimatedTurnSeconds, resourceState: stemResourceState }
+    });
+  }
+  return job;
+}
+
 async function prepareStemJob(job) {
-  const inputInfo = await stat(job.filePath);
-  const cacheRoot = await stemCacheRootForFile(job.filePath);
-  const cacheKey = createHash("sha256")
-    .update(`stems-v2|${job.filePath}|${inputInfo.size}|${inputInfo.mtimeMs}`)
-    .digest("hex")
-    .slice(0, 32);
-  const outputDir = resolve(cacheRoot, cacheKey);
-  await mkdir(outputDir, { recursive: true });
-  const safeOutputDir = await realpath(outputDir);
-  if (!safeOutputDir.startsWith(`${cacheRoot}${sep}`)) {
+  const context = await trackStemContext(job.filePath);
+  if (job.fingerprint && job.fingerprint !== context.fingerprint) {
+    job.fingerprint = context.fingerprint;
+  }
+  const cached = await lookupStemCache(context, job.engine, job.requestId);
+  if (cached.valid) return { ...cached, cacheHit: true };
+  const modelVersion = STEM_MODEL_VERSIONS[job.engine];
+  const finalPaths = stemCachePaths(context.cacheRoot, context.fingerprint, job.engine, modelVersion);
+  const finalParent = dirname(finalPaths.directory);
+  await mkdir(finalParent, { recursive: true });
+  if (!finalPaths.directory.startsWith(`${context.cacheRoot}${sep}`)) {
     throw new Error("The Stems cache entry is outside Guest Star storage.");
   }
-  const instrumentalPath = resolve(safeOutputDir, "instrumental.m4a");
-  const vocalsPath = resolve(safeOutputDir, "vocals.m4a");
-  try {
-    await Promise.all([access(instrumentalPath), access(vocalsPath)]);
-    const [instrumentalDuration, vocalsDuration] = await Promise.all([
-      probeDuration(instrumentalPath),
-      probeDuration(vocalsPath)
-    ]);
-    if (instrumentalDuration > 10 && Math.abs(instrumentalDuration - vocalsDuration) < 1.5) {
-      return { instrumentalPath, vocalsPath };
-    }
-  } catch {
-    // A missing or incomplete cache is regenerated atomically below.
-  }
-  const workDir = await mkdtemp(resolve(cacheRoot, ".work-"));
+  const workDir = await mkdtemp(resolve(context.cacheRoot, ".work-"));
   try {
     const wavPath = resolve(workDir, "input.wav");
     const separatedDir = resolve(workDir, "separated");
+    const entryDir = resolve(workDir, "entry");
+    await Promise.all([mkdir(separatedDir, { recursive: true }), mkdir(entryDir, { recursive: true })]);
+    const sourceDuration = await probeDuration(job.filePath);
+    const spleeterBudget = spleeterExecutionBudget(availableParallelism(), stemResourceState);
+    const ffmpegThreads = job.engine === "spleeter"
+      ? spleeterBudget.numThreads
+      : stemResourceState === "LIVE" ? 1 : Math.max(1, Math.min(2, Math.floor(availableParallelism() / 4)));
     job.progress = 3;
     await runStemCommand(stemFfmpegPath, [
-      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-y",
       "-i", job.filePath, "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", wavPath
     ], job, "Extrayendo audio");
     job.progress = 10;
-    await runStemCommand(process.execPath, [
-      STEM_ENGINE_CLI, wavPath, "--output", separatedDir, "--overlap", "0.05"
-    ], job, "Separando voz e instrumental", (output) => {
-      const matches = [...output.matchAll(/(\d+)\/(\d+)/g)];
-      const latest = matches.at(-1);
-      if (!latest) return;
-      job.progress = Math.max(10, Math.min(82, 10 + Math.round((Number(latest[1]) / Math.max(1, Number(latest[2]))) * 72)));
-      job.updatedAt = new Date().toISOString();
-      broadcastState();
-    });
-    const parts = resolve(separatedDir, "input");
-    const instrumentalPart = resolve(outputDir, "instrumental.part.m4a");
-    const vocalsPart = resolve(outputDir, "vocals.part.m4a");
+    let instrumentalWav;
+    let vocalsWav;
+    if (job.engine === "spleeter") {
+      vocalsWav = resolve(separatedDir, "vocals.wav");
+      instrumentalWav = resolve(separatedDir, "accompaniment.wav");
+      job.actualThreads = spleeterBudget.numThreads;
+      await runStemCommand(stemCapabilities.spleeter.cli, [
+        `--spleeter-vocals=${stemCapabilities.spleeter.vocalsModel}`,
+        `--spleeter-accompaniment=${stemCapabilities.spleeter.accompanimentModel}`,
+        `--num-threads=${spleeterBudget.numThreads}`,
+        `--input-wav=${wavPath}`,
+        `--output-vocals-wav=${vocalsWav}`,
+        `--output-accompaniment-wav=${instrumentalWav}`
+      ], job, "Spleeter · separación rápida", (output) => {
+        const percent = Number(output.match(/(\d{1,3})%/)?.[1]);
+        if (Number.isFinite(percent)) job.progress = Math.max(10, Math.min(80, 10 + Math.round(percent * 0.7)));
+      });
+    } else {
+      job.actualThreads = null;
+      await runStemCommand(process.execPath, [
+        stemCapabilities.demucs.cli, wavPath, "--output", separatedDir, "--overlap", "0.05"
+      ], job, "Demucs · mejorando calidad", (output) => {
+        const matches = [...output.matchAll(/(\d+)\/(\d+)/g)];
+        const latest = matches.at(-1);
+        if (!latest) return;
+        job.progress = Math.max(10, Math.min(82, 10 + Math.round((Number(latest[1]) / Math.max(1, Number(latest[2]))) * 72)));
+        const elapsed = job.startedAt ? Math.max(1, (Date.now() - Date.parse(job.startedAt)) / 1000) : 0;
+        job.etaSeconds = job.progress > 10 ? Math.round(elapsed * (100 - job.progress) / job.progress) : 0;
+        job.updatedAt = new Date().toISOString();
+        broadcastState();
+      });
+      const parts = resolve(separatedDir, "input");
+      instrumentalWav = resolve(workDir, "instrumental.wav");
+      vocalsWav = resolve(parts, "vocals.wav");
+      await runStemCommand(stemFfmpegPath, [
+        "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-y",
+        "-i", resolve(parts, "drums.wav"),
+        "-i", resolve(parts, "bass.wav"),
+        "-i", resolve(parts, "other.wav"),
+        "-filter_complex", "[0:a]asetpts=PTS-STARTPTS[a0];[1:a]asetpts=PTS-STARTPTS[a1];[2:a]asetpts=PTS-STARTPTS[a2];[a0][a1][a2]amix=inputs=3:normalize=0,alimiter=limit=0.95,aresample=44100:first_pts=0[a]",
+        "-map", "[a]", "-c:a", "pcm_s16le", instrumentalWav
+      ], job, "Demucs · mezclando instrumental");
+    }
+    const instrumentalPath = resolve(entryDir, "instrumental.m4a");
+    const vocalsPath = resolve(entryDir, "vocals.m4a");
     job.progress = 86;
     await runStemCommand(stemFfmpegPath, [
-      "-nostdin", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-y",
-      "-i", resolve(parts, "drums.wav"),
-      "-i", resolve(parts, "bass.wav"),
-      "-i", resolve(parts, "other.wav"),
-      "-filter_complex", "[0:a]asetpts=PTS-STARTPTS[a0];[1:a]asetpts=PTS-STARTPTS[a1];[2:a]asetpts=PTS-STARTPTS[a2];[a0][a1][a2]amix=inputs=3:normalize=0,alimiter=limit=0.95,aresample=44100:first_pts=0[a]",
-      "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", instrumentalPart
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-fflags", "+genpts", "-y",
+      "-i", instrumentalWav, "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0,alimiter=limit=0.95",
+      "-c:a", "aac", "-b:a", "256k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", instrumentalPath
     ], job, "Generando instrumental");
-    job.progress = 92;
+    job.progress = 93;
     await runStemCommand(stemFfmpegPath, [
-      "-nostdin", "-hide_banner", "-loglevel", "error", "-fflags", "+genpts", "-y",
-      "-i", resolve(parts, "vocals.wav"), "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0", "-c:a", "aac", "-b:a", "128k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", vocalsPart
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-fflags", "+genpts", "-y",
+      "-i", vocalsWav, "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0",
+      "-c:a", "aac", "-b:a", "128k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", vocalsPath
     ], job, "Preparando control de voz");
-    const [instrumentalDuration, vocalsDuration] = await Promise.all([
-      probeDuration(instrumentalPart),
-      probeDuration(vocalsPart)
+    const [instrumentalDuration, vocalsDuration, instrumentalInfo, vocalsInfo] = await Promise.all([
+      probeDuration(instrumentalPath),
+      probeDuration(vocalsPath),
+      stat(instrumentalPath),
+      stat(vocalsPath)
     ]);
-    if (instrumentalDuration <= 10 || Math.abs(instrumentalDuration - vocalsDuration) >= 1.5) {
-      throw new Error("The generated stems did not pass synchronization validation.");
+    if (
+      instrumentalInfo.size < 1024 || vocalsInfo.size < 1024 ||
+      instrumentalDuration <= 1 || vocalsDuration <= 1 ||
+      Math.abs(instrumentalDuration - vocalsDuration) >= 1.5 ||
+      (sourceDuration > 1 && Math.abs(sourceDuration - instrumentalDuration) >= 2)
+    ) {
+      throw new Error("The generated stems did not pass size and synchronization validation.");
     }
-    await Promise.all([
-      rename(instrumentalPart, instrumentalPath),
-      rename(vocalsPart, vocalsPath)
-    ]);
-    return { instrumentalPath, vocalsPath };
+    const manifest = completeStemManifest({
+      fingerprint: context.fingerprint,
+      engine: job.engine,
+      modelVersion,
+      source: { size: context.size, durationSeconds: sourceDuration },
+      instrumental: { size: instrumentalInfo.size, durationSeconds: instrumentalDuration },
+      vocals: { size: vocalsInfo.size, durationSeconds: vocalsDuration }
+    });
+    await writeFile(resolve(entryDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    await rm(finalPaths.directory, { recursive: true, force: true });
+    await rename(entryDir, finalPaths.directory);
+    return { ...finalPaths, manifest, cacheHit: false };
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
 }
 
+function readyStemJobsForRequest(requestId) {
+  return requestStemJobs(requestId).filter((job) =>
+    job.status === "ready" && job.instrumentalPath && job.vocalsPath
+  );
+}
+
+function addReadyRequestToPlayerOrder(requestId) {
+  const id = String(requestId || "");
+  if (!id || playerOrder.includes(id)) return;
+  playerOrder.push(id);
+  playerRuntimeDirty = true;
+}
+
+function lockStemSourceForPlayback(requestId, reason = "runtime", preferredSource = "") {
+  const id = String(requestId || "");
+  if (!id) return null;
+  const ready = new Map(readyStemJobsForRequest(id).map((job) => [job.engine, job]));
+  const preferred = ["spleeter", "demucs"].includes(preferredSource) && ready.has(preferredSource)
+    ? preferredSource
+    : "";
+  const desired = preferred || (ready.has("demucs") ? "demucs" : ready.has("spleeter") ? "spleeter" : "original");
+  if (activeStemPlaybackLock?.requestId === id) {
+    if (desired !== "original" && desired !== activeStemPlaybackLock.source) {
+      recordStemBreadcrumb("STEM_HOT_SWAP_BLOCKED", {
+        engine: desired,
+        context: { requestId: id, lockedSource: activeStemPlaybackLock.source, availableSource: desired, reason }
+      });
+    }
+    return activeStemPlaybackLock;
+  }
+  const lock = { requestId: id, source: desired, reason, lockedAt: new Date().toISOString() };
+  activeStemPlaybackLock = lock;
+  stemPlaybackLocks.set(id, lock);
+  recordStemBreadcrumb("STEM_SOURCE_LOCKED_FOR_PLAYBACK", {
+    engine: desired === "original" ? "" : desired,
+    context: { requestId: id, source: desired, reason }
+  });
+  return lock;
+}
+
+function refreshQueuedStemEtas() {
+  for (const job of playerStemJobs.values()) {
+    if (!["queued", "processing", "deferred"].includes(job.status)) continue;
+    job.estimatedTurnSeconds = estimatedTurnForRequest(job.requestId);
+  }
+}
+
 async function processStemQueue() {
-  if (stemWorkerRunning || !stemEngineAvailable || stemWorkerPaused) return;
+  if (stemWorkerRunning || !stemEngineAvailable) return;
+  updateStemResourceState();
+  if (stemWorkerPaused || stemResourceState === "PRESSURE") return;
   stemWorkerRunning = true;
   try {
-    while (!stemWorkerPaused) {
-      const job = [...playerStemJobs.values()].find((entry) => entry.status === "queued");
+    while (!stemWorkerPaused && stemResourceState !== "PRESSURE") {
+      refreshQueuedStemEtas();
+      const job = prioritizeStemJobs([...playerStemJobs.values()])[0];
       if (!job) break;
+      if (!stemCapabilities[job.engine]?.available) {
+        job.status = job.opportunistic ? "deferred" : "failed";
+        job.phase = job.opportunistic ? "Mejora diferida · motor no disponible" : "Motor no disponible";
+        job.error = `The ${job.engine} engine is not installed on this Mac.`;
+        job.updatedAt = new Date().toISOString();
+        await persistQueuedEntries();
+        continue;
+      }
       activeStemJobId = job.id;
+      activeStemEngine = job.engine;
       job.status = "processing";
+      job.startedAt = new Date().toISOString();
       job.error = "";
-      job.updatedAt = new Date().toISOString();
+      job.resourceState = stemResourceState;
+      job.updatedAt = job.startedAt;
+      const prefix = job.engine === "spleeter" ? "SPLEETER" : "DEMUCS";
+      recordStemBreadcrumb(`${prefix}_START`, {
+        engine: job.engine,
+        jobId: job.jobId,
+        context: { intent: job.intent, estimatedTurnSeconds: job.estimatedTurnSeconds, resourceState: stemResourceState }
+      });
       await persistQueuedEntries();
       broadcastState();
       try {
         const output = await prepareStemJob(job);
         job.status = "ready";
         job.progress = 100;
-        job.phase = "Lista y sincronizada";
+        job.phase = job.engine === "spleeter"
+          ? job.intent === "auto" ? "AUTO · Spleeter listo" : "Rápido · Spleeter listo"
+          : job.intent === "auto" ? "AUTO · Demucs listo" : "Alta calidad · Demucs listo";
+        job.manifestPath = output.manifestPath;
         job.instrumentalPath = output.instrumentalPath;
         job.vocalsPath = output.vocalsPath;
-        job.updatedAt = new Date().toISOString();
-        playerOrder = [...playerOrder.filter((id) => id !== job.id), job.id];
-        playerRuntimeDirty = true;
+        job.cacheKey = output.cacheKey || job.cacheKey;
+        job.cacheHit = output.cacheHit === true;
+        job.completedAt = new Date().toISOString();
+        job.updatedAt = job.completedAt;
+        addReadyRequestToPlayerOrder(job.requestId);
+        recordStemBreadcrumb(`${prefix}_COMPLETE`, {
+          engine: job.engine,
+          jobId: job.jobId,
+          elapsedMs: Math.max(0, Date.now() - Date.parse(job.startedAt)),
+          context: { cacheHit: job.cacheHit, modelVersion: job.modelVersion }
+        });
+        if (
+          activeStemPlaybackLock?.requestId === job.requestId &&
+          activeStemPlaybackLock.source !== job.engine &&
+          job.engine === "demucs"
+        ) {
+          recordStemBreadcrumb("STEM_HOT_SWAP_BLOCKED", {
+            engine: "demucs",
+            jobId: job.jobId,
+            context: { requestId: job.requestId, lockedSource: activeStemPlaybackLock.source }
+          });
+        }
       } catch (error) {
-        job.status = "failed";
-        job.phase = "No se pudo preparar";
-        job.error = errorMessage(error);
+        if (error instanceof StemCommandInterruptedError) {
+          job.status = "queued";
+          job.phase = job.engine === "demucs"
+            ? "AUTO · Mejora reanudará después del trabajo prioritario"
+            : "Preparación reanudará cuando el sistema esté estable";
+          job.error = "";
+        } else {
+          job.status = "failed";
+          job.phase = job.opportunistic
+            ? "Spleeter sigue listo · mejora HQ no completada"
+            : "No se pudo preparar";
+          job.error = errorMessage(error);
+          recordStemBreadcrumb(`${prefix}_ERROR`, {
+            engine: job.engine,
+            jobId: job.jobId,
+            elapsedMs: job.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
+            summary: job.error,
+            context: { command: error?.command || "", exitCode: error?.exitCode ?? null, signal: error?.signal || "" }
+          }, { severity: job.opportunistic ? "WARNING" : "ERROR", createIncident: !job.opportunistic });
+        }
         job.updatedAt = new Date().toISOString();
       } finally {
         activeStemJobId = "";
+        activeStemEngine = "";
         await persistQueuedEntries();
         broadcastState();
         if (playerRuntimeDirty) void pushPlayerRuntimeRemote().catch(() => {});
       }
+      updateStemResourceState();
     }
   } finally {
     stemWorkerRunning = false;
   }
 }
 
-async function enqueueStemRequest(id) {
-  if (!stemEngineAvailable) {
-    throw new Error("The real AI Stems engine is not installed on this Mac.");
-  }
-  const filePath = await playerFileForRequest(id);
-  const existing = playerStemJobs.get(id);
-  if (existing?.status === "ready") return { ok: true, stem: playerStemJobView(id), cached: true };
-  const stamp = new Date().toISOString();
-  playerStemJobs.set(id, {
-    id,
-    filePath,
-    status: "queued",
-    progress: 0,
-    phase: "Esperando un momento seguro",
-    instrumentalPath: "",
-    vocalsPath: "",
-    error: "",
-    requestedAt: existing?.requestedAt || stamp,
-    updatedAt: stamp
+async function enqueueStemRequest(id, requestedEngine = config.defaultStemEngine) {
+  const requestId = String(id || "");
+  const intent = normalizeStemEngine(requestedEngine, normalizeStemEngine(config.defaultStemEngine, "auto"));
+  const filePath = await playerFileForRequest(requestId);
+  const context = await trackStemContext(filePath);
+  recordStemBreadcrumb(intent === "auto" ? "STEMS_AUTO_SELECTED" : "STEMS_ENGINE_SELECTED", {
+    engine: intent === "auto" ? "" : intent,
+    context: { requestId, intent, fingerprint: context.fingerprint.slice(0, 20) }
   });
-  playerOrder = playerOrder.filter((entryId) => entryId !== id);
+
+  let cacheHit = false;
+  if (intent === "auto") {
+    const demucsCache = await lookupStemCache(context, "demucs", requestId);
+    if (demucsCache.valid) {
+      upsertStemJob({ requestId, filePath, engine: "demucs", intent, context, cache: demucsCache });
+      cacheHit = true;
+    } else {
+      const spleeterCache = await lookupStemCache(context, "spleeter", requestId);
+      if (!spleeterCache.valid && !stemCapabilities.spleeter.available) {
+        throw new Error("AUTO requires the Spleeter fast engine or a valid cached stem on this Mac.");
+      }
+      upsertStemJob({ requestId, filePath, engine: "spleeter", intent, context, cache: spleeterCache });
+      cacheHit = spleeterCache.valid;
+      await queueAutoDemucsUpgrade(requestId, filePath, context);
+    }
+  } else {
+    const cache = await lookupStemCache(context, intent, requestId);
+    if (!cache.valid && !stemCapabilities[intent]?.available) {
+      throw new Error(`The ${intent} Stems engine is not installed on this Mac.`);
+    }
+    upsertStemJob({ requestId, filePath, engine: intent, intent, context, cache });
+    cacheHit = cache.valid;
+    if (intent === "spleeter") deferAutoDemucs(requestId);
+  }
+  setRequestStemIntent(requestId, intent);
+  const view = playerStemJobView(requestId);
+  if (view?.ready) addReadyRequestToPlayerOrder(requestId);
+  else playerOrder = playerOrder.filter((entryId) => entryId !== requestId);
+  playerRuntimeDirty = true;
   await persistQueuedEntries();
   broadcastState();
+
+  const requiredFastJob = playerStemJobs.get(stemJobKey(requestId, "spleeter"));
+  if (
+    activeStemEngine === "demucs" &&
+    requiredFastJob?.status === "queued" &&
+    requiredFastJob.required !== false
+  ) {
+    interruptActiveDemucs("preempted_by_required_spleeter");
+  }
   void processStemQueue();
-  return { ok: true, stem: playerStemJobView(id), cached: false };
+  return { ok: true, stem: playerStemJobView(requestId), cached: cacheHit, intent };
 }
 
-async function servePlayerStem(request, response, id, kind) {
-  const job = playerStemJobs.get(id);
-  if (!job || job.status !== "ready") throw new Error("The requested stems are not ready.");
+async function servePlayerStem(request, response, id, kind, requestedEngine = "") {
+  const requestId = String(id || "");
+  const preferred = ["spleeter", "demucs"].includes(requestedEngine) ? requestedEngine : "";
+  const lock = lockStemSourceForPlayback(requestId, "media-request", preferred);
+  if (!lock || lock.source === "original") throw new Error("The requested stems are not ready.");
+  const job = playerStemJobs.get(stemJobKey(requestId, lock.source));
+  if (!job || job.status !== "ready") throw new Error("The locked stems are not ready.");
   const candidate = kind === "vocals" ? job.vocalsPath : job.instrumentalPath;
   const target = await realpath(candidate);
   const root = await realpath(await stemCacheRootForFile(job.filePath));
@@ -2438,7 +3317,7 @@ async function createPlayerLocalRequest(body = {}) {
   playerLocalRequests.set(item.id, item);
   if (!prepareStems) playerOrder = [...playerOrder.filter((id) => id !== item.id), item.id];
   await persistQueuedEntries();
-  if (prepareStems) await enqueueStemRequest(item.id);
+  if (prepareStems) await enqueueStemRequest(item.id, body.stemEngine);
   broadcastState();
   return { ok: true, item: playerLocalRequestView(item) };
 }
@@ -3447,26 +4326,8 @@ async function openStarScreenWindow() {
     throw new Error("Select an activity and Player mode before opening Star Screen.");
   }
   const url = `http://127.0.0.1:${runtimePort}/star-screen.html?display=1`;
-  if (process.platform !== "darwin") {
-    return { ok: true, url: await openMacUrl(url), mode: "browser" };
-  }
-  await access(STAR_SCREEN_WINDOW_SCRIPT);
-  if (starScreenChild && starScreenChild.exitCode === null && !starScreenChild.killed) {
-    return { ok: true, url, mode: "native-secondary", reused: true };
-  }
-  const child = spawn("/usr/bin/osascript", ["-l", "JavaScript", STAR_SCREEN_WINDOW_SCRIPT, url], {
-    stdio: "ignore"
-  });
-  await new Promise((resolveSpawn, rejectSpawn) => {
-    child.once("spawn", resolveSpawn);
-    child.once("error", rejectSpawn);
-  });
-  starScreenChild = child;
-  child.once("exit", () => {
-    if (starScreenChild === child) starScreenChild = null;
-  });
-  child.unref();
-  return { ok: true, url, mode: "native-secondary", reused: false };
+  const opened = await openMacUrl(url);
+  return { ok: true, url: opened, mode: "browser-fallback", reused: false };
 }
 
 async function serveStatic(pathname, response) {
@@ -3571,14 +4432,19 @@ async function api(request, response, url) {
       request,
       response,
       decodeURIComponent(playerStemMediaMatch[1]),
-      playerStemMediaMatch[2]
+      playerStemMediaMatch[2],
+      String(url.searchParams.get("engine") || "").toLowerCase()
     );
     return;
   }
   const playerStemRequestMatch = pathname.match(/^\/api\/player\/requests\/([^/]+)\/stems$/);
   if (request.method === "POST" && playerStemRequestMatch) {
     requireSignedInBridge();
-    json(response, 200, await enqueueStemRequest(decodeURIComponent(playerStemRequestMatch[1])));
+    const body = await readJson(request);
+    json(response, 200, await enqueueStemRequest(
+      decodeURIComponent(playerStemRequestMatch[1]),
+      body.engine
+    ));
     return;
   }
   const playerMediaMatch = pathname.match(/^\/api\/player\/media\/([^/]+)$/);
@@ -3607,6 +4473,109 @@ async function api(request, response, url) {
   }
   if (request.method === "GET" && pathname === "/api/state") {
     json(response, 200, stateView());
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/diagnostics/state") {
+    json(response, 200, diagnostics.view());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/diagnostics/events") {
+    const body = await readJson(request);
+    const batch = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
+    const recorded = batch.map((event) => diagnostics.record(event));
+    if (body.autoSend === true && config.diagnostics?.autoSendTechnicalErrors === true) {
+      const reportIds = new Set(recorded
+        .filter((event) => ["ERROR", "CRITICAL"].includes(event.severity))
+        .map((event) => diagnostics.reports.find((report) => report.fingerprint === event.fingerprint)?.reportId)
+        .filter(Boolean));
+      for (const id of reportIds) {
+        const report = diagnostics.reports.find((entry) => entry.reportId === id);
+        if (report && report.deliveryStatus !== "sent") void deliverDiagnosticReport(report);
+      }
+    }
+    json(response, 200, { ok: true, recorded: recorded.length });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/diagnostics/mark") {
+    const body = await readJson(request);
+    const snapshot = serverDiagnosticSnapshot(body.snapshot || {});
+    const capture = diagnostics.markFailure(snapshot);
+    diagnostics.record({
+      module: "Application / Runtime",
+      severity: "INFO",
+      event: "DIAGNOSTIC_MARKED_NOW",
+      summary: "Tester captured the current diagnostic state",
+      context: { captureId: capture.captureId }
+    }, { createIncident: false });
+    json(response, 200, { ok: true, capture });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/diagnostics/report") {
+    const body = await readJson(request);
+    const snapshot = serverDiagnosticSnapshot(body.snapshot || {});
+    const report = diagnostics.createReport({
+      ...body,
+      snapshot,
+      health: diagnostics.health,
+      deliveryStatus: body.action === "send" ? "queued" : "local"
+    });
+    if (body.action === "send") await deliverDiagnosticReport(report, { force: true });
+    json(response, 200, {
+      ok: true,
+      report,
+      text: technicalReportText(report)
+    });
+    return;
+  }
+  const diagnosticStatusMatch = pathname.match(/^\/api\/diagnostics\/reports\/([^/]+)$/);
+  if (request.method === "PATCH" && diagnosticStatusMatch) {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    const report = diagnostics.updateReport(decodeURIComponent(diagnosticStatusMatch[1]), body);
+    if (!report) throw new Error("That diagnostic report no longer exists.");
+    json(response, 200, { ok: true, report });
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/diagnostics/export") {
+    const body = JSON.stringify(sanitizeDiagnosticValue({
+      exportedAt: new Date().toISOString(),
+      version: BRIDGE_VERSION,
+      build: bundleBuild,
+      system: diagnosticSystemView(),
+      ...diagnostics.view()
+    }), null, 2);
+    const filename = `Guest-Star-Diagnostic-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}.json`;
+    response.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(body),
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "X-Guest-Star-Filename": filename,
+      "Cache-Control": "no-store"
+    });
+    response.end(body);
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/health") {
+    const body = await readJson(request);
+    const audioContextState = ["running", "suspended", "interrupted", "closed", "missing", "unknown"]
+      .includes(body.audioContextState) ? body.audioContextState : "unknown";
+    const mediaState = ["idle", "waiting", "playing", "paused", "ended", "error"]
+      .includes(body.mediaState) ? body.mediaState : body.transitionBusy ? "waiting" : body.playing ? "playing" : "idle";
+    playerHealthState = {
+      updatedAt: new Date().toISOString(),
+      karaokeActive: body.karaokeActive === true || body.playing === true,
+      videoActive: body.videoActive === true || body.playing === true,
+      audioContextState,
+      mediaState,
+      audioRecovering: body.audioRecovering === true,
+      audioOutputLost: body.audioOutputLost === true,
+      backgroundActive: body.backgroundPlaying === true,
+      starScreenConnected: body.starScreenConnected === true,
+      starScreenExpected: body.starScreenExpected === true
+    };
+    const resource = updateStemResourceState();
+    if (resource.state !== "PRESSURE") void processStemQueue();
+    json(response, 200, { ok: true, resourceState: stemResourceState });
     return;
   }
   if (request.method === "POST" && pathname === "/api/rotation/draw") {
@@ -3911,8 +4880,10 @@ async function api(request, response, url) {
       showCountdown: body.showCountdown,
       autoStartEnabled: body.autoStartEnabled,
       showPublicStatus: body.showPublicStatus,
+      showStarScreenQueueCount: body.showStarScreenQueueCount,
       allowedLanguages: body.allowedLanguages
     });
+    activityState.showStarScreenQueueCount = body.showStarScreenQueueCount !== false;
     applyActivityState(data);
     requests = bridgeRequests(data);
     json(response, 200, stateView());
@@ -4210,8 +5181,30 @@ const server = createServer(async (request, response) => {
     if (url.pathname.startsWith("/api/")) await api(request, response, url);
     else await serveStatic(url.pathname, response);
   } catch (error) {
+    const pathname = (() => {
+      try { return new URL(request.url || "/", "http://127.0.0.1").pathname; }
+      catch { return ""; }
+    })();
+    if (!pathname.startsWith("/api/diagnostics/")) {
+      recordBackendDiagnostic(error, {
+        module: pathname.includes("stems") ? "Stems IA" : "Network/API",
+        event: "HTTP_ENDPOINT_ERROR",
+        context: { method: request.method, pathname }
+      });
+    }
     json(response, 400, { ok: false, error: errorMessage(error) });
   }
+});
+
+process.on("unhandledRejection", (reason) => {
+  recordBackendDiagnostic(reason, { event: "UNHANDLED_REJECTION" });
+});
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  recordBackendDiagnostic(error, {
+    severity: "CRITICAL",
+    event: "UNCAUGHT_EXCEPTION",
+    context: { origin }
+  });
 });
 
 async function restoreBridgeIdentity() {
@@ -4334,7 +5327,8 @@ async function bridgeCloudLoop() {
 }
 
 await refreshStemEngineCapability();
-pauseStemWorker(playerPlayback.scene === "karaoke");
+await refreshSystemMemoryPressure();
+updateStemResourceState();
 
 server.listen(runtimePort, "127.0.0.1", () => {
   const edition = WEB_BETA ? "Guest Star Web Beta" : "Guest Star";
@@ -4350,6 +5344,7 @@ try {
 startLibraryWatchers();
 await scanNow();
 await syncNow();
+void processStemQueue();
 
 async function requestLoop() {
   await syncNow();
@@ -4367,6 +5362,12 @@ setInterval(() => {
   void bridgeCloudLoop();
 }, 2000).unref();
 setInterval(() => {
+  void refreshSystemMemoryPressure().then(() => {
+    const result = updateStemResourceState();
+    if (result.state !== "PRESSURE") void processStemQueue();
+  });
+}, 2000).unref();
+setInterval(() => {
   if (!playerRuntimeDirty) return;
   void pushPlayerRuntimeRemote().catch((error) => {
     sheetError = errorMessage(error);
@@ -4382,11 +5383,21 @@ setInterval(() => {
     }
   }
 }, 20000).unref();
+setInterval(() => {
+  const queued = diagnostics.reports.find((report) =>
+    report.deliveryStatus === "queued" &&
+    (report.automatic !== true || config.diagnostics?.autoSendTechnicalErrors === true)
+  );
+  if (queued) void deliverDiagnosticReport(queued);
+}, 30000).unref();
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    if (starScreenChild && starScreenChild.exitCode === null) {
-      try { starScreenChild.kill("SIGTERM"); } catch { /* The display window may already be closed. */ }
+    if (activeStemChild?.pid) {
+      try {
+        if (activeStemChild.guestStarStopped) activeStemChild.kill("SIGCONT");
+        activeStemChild.kill("SIGTERM");
+      } catch { /* The stem process may already have completed. */ }
     }
     closeLibraryWatchers();
     for (const response of eventClients) response.end();

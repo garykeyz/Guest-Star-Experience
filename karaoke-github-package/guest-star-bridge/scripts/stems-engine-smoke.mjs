@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -12,8 +12,12 @@ assert.notEqual(engineRoot, resolve(""), "Pass the installed Guest Star stem-eng
 
 const engineRequire = createRequire(resolve(engineRoot, "package.json"));
 const ffmpeg = String(engineRequire("ffmpeg-static") || "");
-const ffprobe = String(engineRequire("ffprobe-static")?.path || "");
+const ffprobe = String(engineRequire("@ffprobe-installer/ffprobe")?.path || "");
 const demucsCli = resolve(engineRoot, "node_modules", "demucs", "dist", "cli.js");
+const spleeterCli = resolve(engineRoot, "bin", "sherpa-onnx-offline-source-separation");
+const spleeterModelRoot = resolve(engineRoot, "models", "sherpa-onnx-spleeter-2stems-fp16");
+const spleeterVocalsModel = resolve(spleeterModelRoot, "vocals.fp16.onnx");
+const spleeterAccompanimentModel = resolve(spleeterModelRoot, "accompaniment.fp16.onnx");
 const workDir = await mkdtemp(join(tmpdir(), "guest-star-stems-smoke-"));
 const environment = {
   ...process.env,
@@ -42,11 +46,34 @@ async function duration(filePath) {
   return Number(String(stdout).trim()) || 0;
 }
 
+async function validatePair(label, instrumental, vocals) {
+  const [instrumentalDuration, vocalsDuration, instrumentalInfo, vocalsInfo] = await Promise.all([
+    duration(instrumental),
+    duration(vocals),
+    stat(instrumental),
+    stat(vocals)
+  ]);
+  assert.ok(instrumentalDuration > 10, `${label}: the instrumental output is too short.`);
+  assert.ok(vocalsDuration > 10, `${label}: the vocals output is too short.`);
+  assert.ok(Math.abs(instrumentalDuration - vocalsDuration) < 0.25,
+    `${label}: the generated tracks are not synchronized.`);
+  assert.ok(instrumentalInfo.size > 1024 && vocalsInfo.size > 1024,
+    `${label}: the generated stem files are empty.`);
+  return {
+    instrumentalDuration,
+    vocalsDuration,
+    instrumentalBytes: instrumentalInfo.size,
+    vocalsBytes: vocalsInfo.size
+  };
+}
+
 try {
   const input = join(workDir, "input.wav");
   const separated = join(workDir, "separated");
   const instrumental = join(workDir, "instrumental.m4a");
   const vocals = join(workDir, "vocals.m4a");
+  const spleeterInstrumental = join(workDir, "spleeter-instrumental.wav");
+  const spleeterVocals = join(workDir, "spleeter-vocals.wav");
 
   await run(ffmpeg, [
     "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
@@ -56,6 +83,23 @@ try {
     "-map", "[a]", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le",
     input
   ], 30_000);
+
+  await Promise.all([
+    access(spleeterCli),
+    access(spleeterVocalsModel),
+    access(spleeterAccompanimentModel),
+    access(demucsCli)
+  ]);
+
+  await run(spleeterCli, [
+    `--spleeter-vocals=${spleeterVocalsModel}`,
+    `--spleeter-accompaniment=${spleeterAccompanimentModel}`,
+    "--num-threads=1",
+    `--input-wav=${input}`,
+    `--output-vocals-wav=${spleeterVocals}`,
+    `--output-accompaniment-wav=${spleeterInstrumental}`
+  ]);
+  const spleeterResult = await validatePair("Spleeter", spleeterInstrumental, spleeterVocals);
 
   await run(process.execPath, [
     demucsCli, input, "--output", separated, "--overlap", "0.10"
@@ -78,24 +122,11 @@ try {
     vocals
   ], 30_000);
 
-  const [instrumentalDuration, vocalsDuration, instrumentalInfo, vocalsInfo] = await Promise.all([
-    duration(instrumental),
-    duration(vocals),
-    stat(instrumental),
-    stat(vocals)
-  ]);
-  assert.ok(instrumentalDuration > 10, "The instrumental output is too short.");
-  assert.ok(vocalsDuration > 10, "The vocals output is too short.");
-  assert.ok(Math.abs(instrumentalDuration - vocalsDuration) < 0.25,
-    "The generated tracks are not synchronized.");
-  assert.ok(instrumentalInfo.size > 1024 && vocalsInfo.size > 1024,
-    "The generated stem files are empty.");
+  const demucsResult = await validatePair("Demucs", instrumental, vocals);
 
   console.log("Guest Star Stems IA smoke test passed", {
-    instrumentalDuration,
-    vocalsDuration,
-    instrumentalBytes: instrumentalInfo.size,
-    vocalsBytes: vocalsInfo.size
+    spleeter: spleeterResult,
+    demucs: demucsResult
   });
 } finally {
   await rm(workDir, { recursive: true, force: true });

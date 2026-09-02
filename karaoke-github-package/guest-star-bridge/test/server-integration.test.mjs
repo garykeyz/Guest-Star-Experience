@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, realpath, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -389,7 +389,10 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   ).then((response) => response.json());
   assert.equal(replaced.replaced, true);
   assert.equal(replaced.fileName, "Adele - Hello Alternate Karaoke.mp4");
-  assert.equal(vdjQueue.find((entry) => entry.singer === "Ana")?.filepath, replacementSong);
+  assert.equal(
+    vdjQueue.find((entry) => entry.singer === "Ana")?.filepath,
+    await realpath(replacementSong)
+  );
   state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
   assert.equal(
     state.requests.find((item) => item.id === "request-1").manualLink,

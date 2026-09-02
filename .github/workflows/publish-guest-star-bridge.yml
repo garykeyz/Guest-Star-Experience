@@ -46,16 +46,24 @@ jobs:
         working-directory: karaoke-github-package/guest-star-bridge
         run: npm test
 
-      - name: Check Bridge browser and macOS JavaScript syntax
+      - name: Check Bridge browser and supervisor syntax
         working-directory: karaoke-github-package
         run: |
           bash -n guest-star-bridge/macos/GuestStarBridge
+          bash -n guest-star-bridge/INSTALAR-MOTOR-STEMS-IA.command
+          bash -n guest-star-bridge/scripts/install-stem-engine-macos.sh
           node --check guest-star-bridge/public/app.js
+          node --check guest-star-bridge/public/diagnostics.js
+          node --check guest-star-bridge/public/player-beta.js
+          node --check guest-star-bridge/public/star-screen.js
           node --check guest-star-bridge/public/superhost.js
-          node --check guest-star-bridge/macos/GuestStarWindow.js
-          node --check < guest-star-bridge/src/star-screen-window.jxa
           node --check guest-star-bridge/src/server.mjs
           node --check guest-star-bridge/src/apps-script.mjs
+          if rg -n 'osascript|System Events|activate application|GuestStarWindow\.js' \
+            guest-star-bridge/macos/GuestStarBridge; then
+            echo "Foreground ownership must stay in the native Cocoa host"
+            exit 1
+          fi
 
       - name: Check TypeScript
         working-directory: karaoke-github-package
@@ -162,45 +170,32 @@ jobs:
           curl -fsSL \
             https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
+          echo "5ed4db0fcf1eaf84d91ad12462631d73bf4576c1377e192d222e48026a902640  $RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" | LC_ALL=C LANG=C shasum -a 256 -c -
+          echo "5ea50c9d6dea3dfa3abb66b2656f7a4e1c8cef23432b558d45fb538c7b5dedce  $RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" | LC_ALL=C LANG=C shasum -a 256 -c -
+
+      - name: Compile and inspect the native Cocoa host
+        run: |
+          native_host="$RUNNER_TEMP/GuestStarBridge"
+          xcrun clang \
+            -fobjc-arc \
+            -arch arm64 \
+            -arch x86_64 \
+            -mmacosx-version-min=11.0 \
+            karaoke-github-package/guest-star-bridge/macos/GuestStarNativeHost.m \
+            -framework Cocoa \
+            -framework WebKit \
+            -o "$native_host"
+          lipo "$native_host" -verify_arch arm64 x86_64
+          otool -L "$native_host" | grep -q '/Cocoa.framework/'
+          otool -L "$native_host" | grep -q '/WebKit.framework/'
 
       - name: Build and exercise the Universal AI Stems engine
         run: |
           engine_root="$RUNNER_TEMP/guest-star-stem-engine"
-          mkdir -p "$engine_root"
-          (
-            cd "$engine_root"
-            npm init --yes >/dev/null
-            npm pkg set private=true overrides.adm-zip=0.6.0
-          )
-          npm install \
-            --prefix "$engine_root" \
-            --omit=dev \
-            --no-audit \
-            --no-fund \
-            --save-exact \
-            demucs@1.0.0 \
-            onnxruntime-node@1.23.2 \
-            ffmpeg-static@5.3.0 \
-            ffprobe-static@3.1.0
-          case "$(uname -m)" in
-            arm64) current_arch="arm64"; other_arch="x64" ;;
-            x86_64) current_arch="x64"; other_arch="arm64" ;;
-            *) exit 1 ;;
-          esac
-          ffmpeg_dir="$engine_root/node_modules/ffmpeg-static"
-          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$current_arch"
-          npm_config_arch="$other_arch" npm rebuild --prefix "$engine_root" ffmpeg-static
-          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$other_arch"
-          lipo -create \
-            "$ffmpeg_dir/ffmpeg-arm64" \
-            "$ffmpeg_dir/ffmpeg-x64" \
-            -output "$ffmpeg_dir/ffmpeg"
-          chmod +x "$ffmpeg_dir/ffmpeg"
-          lipo "$ffmpeg_dir/ffmpeg" -verify_arch arm64 x86_64
-          npm audit --prefix "$engine_root" --omit=dev --audit-level=high
-          node karaoke-github-package/guest-star-bridge/scripts/stems-engine-smoke.mjs "$engine_root"
+          bash karaoke-github-package/guest-star-bridge/scripts/install-stem-engine-macos.sh "$engine_root"
 
       - name: Build and verify the Universal Mac package
+        id: package_meta
         run: |
           version="$(python3 -c 'import json; print(json.load(open("karaoke-github-package/guest-star-bridge/package.json"))["version"])')"
           output="$RUNNER_TEMP/guest-star-release"
@@ -214,12 +209,23 @@ jobs:
           test -s "$output/Guest-Star-Universal-v${version}.dmg"
           unzip -t "$output/Guest-Star-Universal-v${version}-app.zip"
           hdiutil verify "$output/Guest-Star-Universal-v${version}.dmg"
+          app="$output/macos-installer-staging/distribution/Guest Star.app"
+          plutil -lint "$app/Contents/Info.plist"
+          test "$(plutil -extract CFBundleName raw "$app/Contents/Info.plist")" = "Guest Star"
+          test "$(plutil -extract CFBundleDisplayName raw "$app/Contents/Info.plist")" = "Guest Star"
+          test "$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" = "GuestStarBridge"
+          lipo "$app/Contents/MacOS/GuestStarBridge" -verify_arch arm64 x86_64
+          otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/Cocoa.framework/'
+          otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/WebKit.framework/'
+          test ! -e "$app/Contents/Resources/bridge/macos/GuestStarWindow.js"
+          test ! -e "$app/Contents/Resources/bridge/src/star-screen-window.jxa"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload the verified Mac DMG test package
         uses: actions/upload-artifact@v4
         with:
-          name: Guest-Star-Universal-v4.4.1-DMG-test
-          path: ${{ runner.temp }}/guest-star-release/Guest-Star-Universal-v4.4.1.dmg
+          name: Guest-Star-Universal-v${{ steps.package_meta.outputs.version }}-DMG-test
+          path: ${{ runner.temp }}/guest-star-release/Guest-Star-Universal-v${{ steps.package_meta.outputs.version }}.dmg
           if-no-files-found: error
           retention-days: 7
 
@@ -263,43 +269,13 @@ jobs:
           curl -fsSL \
             https://nodejs.org/dist/v22.22.0/node-v22.22.0-darwin-x64.tar.gz \
             -o "$RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz"
+          echo "5ed4db0fcf1eaf84d91ad12462631d73bf4576c1377e192d222e48026a902640  $RUNNER_TEMP/node-v22.22.0-darwin-arm64.tar.gz" | LC_ALL=C LANG=C shasum -a 256 -c -
+          echo "5ea50c9d6dea3dfa3abb66b2656f7a4e1c8cef23432b558d45fb538c7b5dedce  $RUNNER_TEMP/node-v22.22.0-darwin-x64.tar.gz" | LC_ALL=C LANG=C shasum -a 256 -c -
 
       - name: Build and exercise the Universal AI Stems engine
         run: |
           engine_root="$RUNNER_TEMP/guest-star-stem-engine"
-          mkdir -p "$engine_root"
-          (
-            cd "$engine_root"
-            npm init --yes >/dev/null
-            npm pkg set private=true overrides.adm-zip=0.6.0
-          )
-          npm install \
-            --prefix "$engine_root" \
-            --omit=dev \
-            --no-audit \
-            --no-fund \
-            --save-exact \
-            demucs@1.0.0 \
-            onnxruntime-node@1.23.2 \
-            ffmpeg-static@5.3.0 \
-            ffprobe-static@3.1.0
-          case "$(uname -m)" in
-            arm64) current_arch="arm64"; other_arch="x64" ;;
-            x86_64) current_arch="x64"; other_arch="arm64" ;;
-            *) exit 1 ;;
-          esac
-          ffmpeg_dir="$engine_root/node_modules/ffmpeg-static"
-          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$current_arch"
-          npm_config_arch="$other_arch" npm rebuild --prefix "$engine_root" ffmpeg-static
-          mv "$ffmpeg_dir/ffmpeg" "$ffmpeg_dir/ffmpeg-$other_arch"
-          lipo -create \
-            "$ffmpeg_dir/ffmpeg-arm64" \
-            "$ffmpeg_dir/ffmpeg-x64" \
-            -output "$ffmpeg_dir/ffmpeg"
-          chmod +x "$ffmpeg_dir/ffmpeg"
-          lipo "$ffmpeg_dir/ffmpeg" -verify_arch arm64 x86_64
-          npm audit --prefix "$engine_root" --omit=dev --audit-level=high
-          node karaoke-github-package/guest-star-bridge/scripts/stems-engine-smoke.mjs "$engine_root"
+          bash karaoke-github-package/guest-star-bridge/scripts/install-stem-engine-macos.sh "$engine_root"
 
       - name: Build app and downloadable packages
         env:
@@ -354,7 +330,7 @@ jobs:
 
           (
             cd "$GITHUB_WORKSPACE/release-output"
-            shasum -a 256 \
+            LC_ALL=C LANG=C shasum -a 256 \
               "Guest-Star-Universal-v${VERSION}-app.zip" \
               "Guest-Star-Universal-v${VERSION}.dmg" \
               "guest-star-experience-sync-v${VERSION}.zip" \

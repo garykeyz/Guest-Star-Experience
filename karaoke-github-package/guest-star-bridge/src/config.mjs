@@ -12,7 +12,7 @@ const LEGACY_DIRECT_APPS_SCRIPT_URL =
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 12,
+  configVersion: 14,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -31,6 +31,19 @@ export const DEFAULT_CONFIG = Object.freeze({
   rememberLibraryFolders: true,
   backgroundMusicSources: [],
   backgroundMusicVolume: 0.55,
+  audioOutputDeviceId: "",
+  starScreenDisplayId: "",
+  defaultStemEngine: "auto",
+  interfacePreferences: {
+    showStarScreenPreview: true,
+    showWaveform: true,
+    showEq: true,
+    showAdvancedControls: true
+  },
+  diagnostics: {
+    autoSendTechnicalErrors: false,
+    testerMode: false
+  },
   appsScriptUrl: BRIDGE_PROXY_URL,
   hostPin: "",
   rememberHostPin: true,
@@ -64,6 +77,46 @@ function normalizeFavoritesByHotel(value) {
     result[safeHotelId] = normalizeFavoriteSongs(songs);
   }
   return result;
+}
+
+function normalizeInterfacePreferences(value, current = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const previous = current && typeof current === "object" && !Array.isArray(current)
+    ? current
+    : DEFAULT_CONFIG.interfacePreferences;
+  return {
+    showStarScreenPreview: source.showStarScreenPreview === undefined
+      ? previous.showStarScreenPreview !== false
+      : source.showStarScreenPreview !== false,
+    showWaveform: source.showWaveform === undefined
+      ? previous.showWaveform !== false
+      : source.showWaveform !== false,
+    showEq: source.showEq === undefined
+      ? previous.showEq !== false
+      : source.showEq !== false,
+    showAdvancedControls: source.showAdvancedControls === undefined
+      ? previous.showAdvancedControls !== false
+      : source.showAdvancedControls !== false
+  };
+}
+
+function normalizeDiagnosticPreferences(value, current = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const previous = current && typeof current === "object" && !Array.isArray(current)
+    ? current
+    : DEFAULT_CONFIG.diagnostics;
+  return {
+    autoSendTechnicalErrors: source.autoSendTechnicalErrors === undefined
+      ? previous.autoSendTechnicalErrors === true
+      : source.autoSendTechnicalErrors === true,
+    testerMode: source.testerMode === undefined
+      ? previous.testerMode === true
+      : source.testerMode === true
+  };
 }
 
 export function migrateAppsScriptUrl(value, configVersion) {
@@ -150,6 +203,31 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       Number(current.backgroundMusicVolume ?? 0.55),
       0,
       1
+    ),
+    audioOutputDeviceId:
+      input.audioOutputDeviceId === undefined
+        ? String(current.audioOutputDeviceId || "").trim().slice(0, 500)
+        : String(input.audioOutputDeviceId || "").trim().slice(0, 500),
+    starScreenDisplayId:
+      input.starScreenDisplayId === undefined
+        ? String(current.starScreenDisplayId || "").trim().slice(0, 500)
+        : String(input.starScreenDisplayId || "").trim().slice(0, 500),
+    defaultStemEngine: ["auto", "spleeter", "demucs"].includes(String(
+      input.defaultStemEngine === undefined
+        ? current.defaultStemEngine || "auto"
+        : input.defaultStemEngine
+    ).toLowerCase())
+      ? String(input.defaultStemEngine === undefined
+        ? current.defaultStemEngine || "auto"
+        : input.defaultStemEngine).toLowerCase()
+      : "auto",
+    interfacePreferences: normalizeInterfacePreferences(
+      input.interfacePreferences,
+      current.interfacePreferences
+    ),
+    diagnostics: normalizeDiagnosticPreferences(
+      input.diagnostics,
+      current.diagnostics
     ),
     appsScriptUrl: migrateAppsScriptUrl(
       input.appsScriptUrl === undefined
@@ -238,6 +316,15 @@ export async function loadConfig() {
       }
       if (parsed.backgroundMusicVolume === undefined) {
         parsed.backgroundMusicVolume = 0.55;
+      }
+      if (parsed.audioOutputDeviceId === undefined) parsed.audioOutputDeviceId = "";
+      if (parsed.starScreenDisplayId === undefined) parsed.starScreenDisplayId = "";
+      if (parsed.defaultStemEngine === undefined) parsed.defaultStemEngine = "auto";
+      if (parsed.interfacePreferences === undefined) {
+        parsed.interfacePreferences = { ...DEFAULT_CONFIG.interfacePreferences };
+      }
+      if (parsed.diagnostics === undefined) {
+        parsed.diagnostics = { ...DEFAULT_CONFIG.diagnostics };
       }
       if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;

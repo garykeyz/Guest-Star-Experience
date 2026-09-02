@@ -4,10 +4,13 @@ const $ = (selector) => document.querySelector(selector);
 const channel = new BroadcastChannel('guest-star-player');
 const video = $('#starScreenMedia');
 const preview = new URLSearchParams(location.search).get('preview') === '1';
+const instanceId = globalThis.crypto?.randomUUID?.() || `star-screen-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let lastState = null;
 let lastSequence = -1;
 let lastPublishedAt = 0;
 let videoCleanupTimer = 0;
+let heartbeatSequence = 0;
+let lastHeartbeatAckAt = 0;
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -87,7 +90,7 @@ function syncVideo(next) {
 }
 
 function render(next) {
-  if (!next || next.type === 'request-state') return;
+  if (!next || next.type) return;
   const publishedAt = Math.max(0, Number(next.publishedAt) || 0);
   const sequence = Math.max(0, Number(next.sequence) || 0);
   if (publishedAt && publishedAt < lastPublishedAt) return;
@@ -117,7 +120,9 @@ function render(next) {
 
   const queue = next.queue || [];
   const upcoming = queue;
-  $('#starScreenQueueCount').textContent = String(queue.length);
+  const queueCount = $('#starScreenQueueCount');
+  queueCount.textContent = String(queue.length);
+  queueCount.hidden = next.showQueueCount === false;
   $('#starScreenQueue').innerHTML = queue.length
     ? queue.slice(0, 5).map((item, index) => `<li><b>${String(index + 1).padStart(2, '0')}</b><div><strong>${escapeHtml(guest(item))}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''}</small></div><span>EN FILA</span></li>`).join('')
     : '<li class="empty"><div><strong>¡Sé el primero en cantar!</strong><small>Escanea el QR para solicitar una canción.</small></div></li>';
@@ -134,9 +139,31 @@ if (preview) {
   document.body.classList.add('star-screen-preview');
   $('#starScreenFullscreen').hidden = true;
 }
-channel.addEventListener('message', (event) => render(event.data));
+function sendHeartbeat() {
+  channel.postMessage({
+    type: 'star-screen-heartbeat',
+    instanceId,
+    sequence: ++heartbeatSequence,
+    preview,
+    visible: document.visibilityState !== 'hidden',
+    sentAt: Date.now(),
+    lastAckAt: lastHeartbeatAckAt
+  });
+}
+
+channel.addEventListener('message', (event) => {
+  if (event.data?.type === 'star-screen-ack') {
+    if (String(event.data.instanceId || '') === instanceId) lastHeartbeatAckAt = Date.now();
+    return;
+  }
+  render(event.data);
+});
 try { render(JSON.parse(localStorage.getItem('guest-star:player-state') || 'null')); } catch { /* Waiting for Player. */ }
 channel.postMessage({ type: 'request-state' });
+sendHeartbeat();
+document.addEventListener('visibilitychange', sendHeartbeat);
+window.addEventListener('pagehide', sendHeartbeat);
 video.addEventListener('loadedmetadata', () => { if (lastState) syncVideo(lastState); });
 window.setInterval(() => { if (lastState?.playing && !document.hidden) syncVideo(lastState); }, 200);
+window.setInterval(sendHeartbeat, 2000);
 $('#starScreenFullscreen').addEventListener('click', () => document.documentElement.requestFullscreen?.());

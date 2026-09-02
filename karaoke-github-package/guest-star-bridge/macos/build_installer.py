@@ -202,8 +202,8 @@ def extract_node(node_tarball: Path, runtime_dir: Path) -> Path:
 
 def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    for folder in ("src", "public"):
-        shutil.copytree(bridge_root / folder, destination / folder)
+    shutil.copytree(bridge_root / "src", destination / "src")
+    shutil.copytree(bridge_root / "public", destination / "public")
     for filename in ("package.json", "README.md", "config.example.json"):
         shutil.copy2(bridge_root / filename, destination / filename)
 
@@ -212,10 +212,15 @@ def copy_stem_engine(source: Path, destination: Path) -> None:
     source = source.resolve()
     required = (
         "package.json",
+        "bin/sherpa-onnx-offline-source-separation",
+        "lib/libonnxruntime.dylib",
+        "models/sherpa-onnx-spleeter-2stems-fp16/vocals.fp16.onnx",
+        "models/sherpa-onnx-spleeter-2stems-fp16/accompaniment.fp16.onnx",
         "node_modules/demucs/dist/cli.js",
         "node_modules/ffmpeg-static/ffmpeg",
-        "node_modules/ffprobe-static/bin/darwin/arm64/ffprobe",
-        "node_modules/ffprobe-static/bin/darwin/x64/ffprobe",
+        "node_modules/@ffprobe-installer/ffprobe/index.js",
+        "node_modules/@ffprobe-installer/darwin-arm64/ffprobe",
+        "node_modules/@ffprobe-installer/darwin-x64/ffprobe",
         "node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node",
         "node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node",
     )
@@ -233,14 +238,30 @@ def copy_stem_engine(source: Path, destination: Path) -> None:
         platform_root = runtime_root / platform
         if platform_root.exists():
             shutil.rmtree(platform_root)
-    ffprobe_root = destination / "node_modules" / "ffprobe-static" / "bin"
-    for platform_root in ffprobe_root.iterdir():
-        if platform_root.name != "darwin" and platform_root.is_dir():
-            shutil.rmtree(platform_root)
-
     run([
         "lipo",
         str(destination / "node_modules" / "ffmpeg-static" / "ffmpeg"),
+        "-verify_arch",
+        "arm64",
+        "x86_64",
+    ])
+    spleeter_cli = destination / "bin" / "sherpa-onnx-offline-source-separation"
+    spleeter_cli.chmod(0o755)
+    for ffprobe_path in (
+        destination / "node_modules" / "@ffprobe-installer" / "darwin-arm64" / "ffprobe",
+        destination / "node_modules" / "@ffprobe-installer" / "darwin-x64" / "ffprobe",
+    ):
+        ffprobe_path.chmod(0o755)
+    run([
+        "lipo",
+        str(spleeter_cli),
+        "-verify_arch",
+        "arm64",
+        "x86_64",
+    ])
+    run([
+        "lipo",
+        str(destination / "lib" / "libonnxruntime.dylib"),
         "-verify_arch",
         "arm64",
         "x86_64",
@@ -261,7 +282,7 @@ def write_bundle_build_id(bridge_dir: Path) -> str:
     return build_id
 
 
-def compile_universal_launcher(source: Path, destination: Path) -> None:
+def compile_universal_native_host(source: Path, destination: Path) -> None:
     run(
         [
             "xcrun",
@@ -274,7 +295,12 @@ def compile_universal_launcher(source: Path, destination: Path) -> None:
             "-Os",
             "-Wall",
             "-Wextra",
+            "-fobjc-arc",
             str(source),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
             "-o",
             str(destination),
         ]
@@ -286,7 +312,19 @@ def compile_universal_launcher(source: Path, destination: Path) -> None:
 def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> None:
     run(["lipo", str(node_arm64), "-verify_arch", "arm64"])
     run(["lipo", str(node_x64), "-verify_arch", "x86_64"])
-    for executable in (node_arm64, node_x64):
+    engine = app_bundle / "Contents" / "Resources" / "bridge" / "stem-engine"
+    architecture_checks = (
+        (engine / "bin" / "sherpa-onnx-offline-source-separation", ("arm64", "x86_64")),
+        (engine / "lib" / "libonnxruntime.dylib", ("arm64", "x86_64")),
+        (engine / "node_modules" / "ffmpeg-static" / "ffmpeg", ("arm64", "x86_64")),
+        (engine / "node_modules" / "@ffprobe-installer" / "darwin-arm64" / "ffprobe", ("arm64",)),
+        (engine / "node_modules" / "@ffprobe-installer" / "darwin-x64" / "ffprobe", ("x86_64",)),
+        (engine / "node_modules" / "onnxruntime-node" / "bin" / "napi-v6" / "darwin" / "arm64" / "onnxruntime_binding.node", ("arm64",)),
+        (engine / "node_modules" / "onnxruntime-node" / "bin" / "napi-v6" / "darwin" / "x64" / "onnxruntime_binding.node", ("x86_64",)),
+    )
+    for executable, architectures in architecture_checks:
+        run(["lipo", str(executable), "-verify_arch", *architectures])
+    for executable in (node_arm64, node_x64, *(path for path, _ in architecture_checks)):
         run(
             [
                 "codesign",
@@ -297,6 +335,7 @@ def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> N
                 str(executable),
             ]
         )
+        run(["codesign", "--verify", "--strict", "--verbose=2", str(executable)])
     run(
         [
             "codesign",
@@ -442,16 +481,12 @@ def main() -> None:
     resources.mkdir(parents=True)
     macos_dir.mkdir(parents=True)
 
-    compile_universal_launcher(
-        bridge_root / "macos" / "GuestStarLauncher.c",
+    compile_universal_native_host(
+        bridge_root / "macos" / "GuestStarNativeHost.m",
         macos_dir / "GuestStarBridge",
     )
     shutil.copy2(launcher_source, macos_dir / "GuestStarBridge.sh")
     (macos_dir / "GuestStarBridge.sh").chmod(0o755)
-    shutil.copy2(
-        bridge_root / "macos" / "GuestStarWindow.js",
-        resources / "GuestStarWindow.js",
-    )
     write_info_plist(contents / "Info.plist", version)
     write_icns(resources / "AppIcon.icns", staging)
     node_arm64 = extract_node(

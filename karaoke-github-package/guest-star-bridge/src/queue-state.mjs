@@ -74,6 +74,16 @@ function cleanPlayerOrder(value = []) {
     : [];
 }
 
+function cleanPlayerQueueVisibility(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [rawId, visible] of Object.entries(value).slice(0, 1000)) {
+    const id = String(rawId || "").trim().slice(0, 160);
+    if (id) result[id] = visible !== false;
+  }
+  return result;
+}
+
 function cleanPlayerPlayback(value = {}) {
   const currentTimeSeconds = Number(value.currentTimeSeconds);
   return {
@@ -88,22 +98,56 @@ function cleanPlayerPlayback(value = {}) {
 }
 
 function cleanPlayerStemJob(value = {}) {
-  const id = String(value.id || "").trim();
+  const legacyId = String(value.id || "").trim();
+  const requestId = String(value.requestId || legacyId.split(":")[0] || "").trim();
   const filePath = String(value.filePath || "").trim();
-  if (!id || !filePath) return null;
-  const status = ["queued", "processing", "ready", "failed"].includes(String(value.status || ""))
+  const engine = ["spleeter", "demucs"].includes(String(value.engine || "").toLowerCase())
+    ? String(value.engine).toLowerCase()
+    : "demucs";
+  const id = legacyId.includes(":") ? legacyId : `${requestId}:${engine}`;
+  if (!requestId || !id || !filePath) return null;
+  const status = ["queued", "processing", "ready", "failed", "deferred"].includes(String(value.status || ""))
     ? String(value.status)
     : "queued";
+  const intent = ["auto", "spleeter", "demucs"].includes(String(value.intent || "").toLowerCase())
+    ? String(value.intent).toLowerCase()
+    : engine;
   return {
     id,
+    requestId,
+    jobId: String(value.jobId || id).trim().slice(0, 160),
     filePath,
+    engine,
+    intent,
+    intentUpdatedAt: String(value.intentUpdatedAt || value.requestedAt || "").trim(),
+    required: value.required !== false,
+    opportunistic: value.opportunistic === true,
     status: status === "processing" ? "queued" : status,
     progress: Math.max(0, Math.min(100, Number(value.progress) || 0)),
     phase: String(value.phase || "").trim(),
+    fingerprint: String(value.fingerprint || "").trim().slice(0, 128),
+    cacheKey: String(value.cacheKey || "").trim().slice(0, 128),
+    modelVersion: String(value.modelVersion || "").trim().slice(0, 160),
+    manifestPath: String(value.manifestPath || "").trim(),
     instrumentalPath: String(value.instrumentalPath || "").trim(),
     vocalsPath: String(value.vocalsPath || "").trim(),
     error: String(value.error || "").trim(),
+    cacheHit: value.cacheHit === true,
+    estimatedTurnSeconds: Math.max(0, Number(value.estimatedTurnSeconds) || 0),
+    etaSeconds: Math.max(0, Number(value.etaSeconds) || 0),
+    resourceState: ["IDLE", "LIVE", "PRESSURE"].includes(String(value.resourceState || "").toUpperCase())
+      ? String(value.resourceState).toUpperCase()
+      : "IDLE",
+    actualThreads: Number.isInteger(Number(value.actualThreads))
+      ? Math.max(1, Number(value.actualThreads))
+      : null,
+    osPriorityApplied: Number.isInteger(Number(value.osPriorityApplied))
+      ? Number(value.osPriorityApplied)
+      : null,
     requestedAt: String(value.requestedAt || "").trim(),
+    startedAt: String(value.startedAt || "").trim(),
+    completedAt: String(value.completedAt || "").trim(),
+    lastOutputAt: String(value.lastOutputAt || "").trim(),
     updatedAt: String(value.updatedAt || "").trim()
   };
 }
@@ -136,6 +180,7 @@ export function normalizeQueueState(value = {}) {
     removedIds,
     playerRequests,
     playerOrder: cleanPlayerOrder(value.playerOrder),
+    playerQueueVisibility: cleanPlayerQueueVisibility(value.playerQueueVisibility),
     playerPlayback: cleanPlayerPlayback(value.playerPlayback),
     playerStemJobs: Array.isArray(value.playerStemJobs)
       ? value.playerStemJobs.map(cleanPlayerStemJob).filter(Boolean)
@@ -163,7 +208,8 @@ export async function saveQueueState(
   playerRequests = [],
   playerOrder = [],
   playerPlayback = {},
-  playerStemJobs = []
+  playerStemJobs = [],
+  playerQueueVisibility = {}
 ) {
   const clean = normalizeQueueState({
     activityId,
@@ -175,6 +221,7 @@ export async function saveQueueState(
     operatingMode,
     playerRequests: Array.from(playerRequests || []),
     playerOrder: Array.from(playerOrder || []),
+    playerQueueVisibility,
     playerPlayback,
     playerStemJobs: Array.from(playerStemJobs || [])
   });

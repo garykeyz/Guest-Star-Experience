@@ -3,6 +3,7 @@ import { initSuperhostPanel } from "./superhost.js";
 import { createBridgeI18n } from "./bridge-i18n.js";
 import { preserveBridgeScroll } from "./scroll-preserver.js";
 import { initPlayerBeta } from "./player-beta.js";
+import { initDiagnostics } from "./diagnostics.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const ACTIVITY_LANGUAGES = [
@@ -14,6 +15,7 @@ const ACTIVITY_LANGUAGES = [
 const requestsEl = $("#requests");
 const finishedRequestsEl = $("#finishedRequests");
 const noticeEl = $("#notice");
+const preferencesDialog = $("#preferencesDialog");
 const settingsDialog = $("#settingsDialog");
 const successDialog = $("#successDialog");
 const confirmDialog = $("#confirmDialog");
@@ -38,16 +40,25 @@ const expandedRequestIds = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
 let autoRestoredPlayerActivityId = "";
+let nativeDisplays = [];
+let playerPanel;
+const diagnostics = initDiagnostics({
+  api,
+  getState: () => state,
+  getPlayerSnapshot: () => playerPanel?.diagnosticSnapshot?.() || {},
+  showNotice
+});
 const superhostPanel = initSuperhostPanel({
   api,
   showNotice,
   copyLink,
   openExternal
 });
-const playerPanel = initPlayerBeta({
+playerPanel = initPlayerBeta({
   api,
   showNotice,
   confirmAction,
+  diagnostics,
   operations: {
     controlActivity: (action) => controlActivity(action),
     openShare: () => $("#shareButton").click(),
@@ -1479,7 +1490,106 @@ function renderFolders() {
   });
 }
 
-function fillSettings() {
+function audioOutputSupported(capability) {
+  return capability === true || capability?.supported === true;
+}
+
+async function refreshAudioOutputs() {
+  const select = $("#preferencesAudioOutput");
+  const status = $("#preferencesAudioStatus");
+  if (!select || !status) return;
+  const saved = select.value || state?.config?.audioOutputDeviceId || "";
+  try {
+    const capability = await playerPanel.audioOutputCapability?.();
+    if (!audioOutputSupported(capability)) {
+      select.innerHTML = '<option value="">Salida predeterminada del sistema</option>';
+      select.value = "";
+      select.disabled = true;
+      status.textContent = capability?.reason || "Esta versión de WebKit no permite seleccionar una salida por aplicación. Guest Star usará la salida predeterminada del sistema.";
+      return;
+    }
+    const devices = await playerPanel.listAudioOutputs();
+    const outputs = Array.isArray(devices) ? devices : [];
+    select.innerHTML = '<option value="">Salida predeterminada del sistema</option>';
+    const seen = new Set([""]);
+    outputs.forEach((device, index) => {
+      const id = String(device.deviceId || device.id || "");
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = device.label || `Salida de audio ${index + 1}`;
+      select.append(option);
+    });
+    select.disabled = false;
+    if (saved && seen.has(saved)) {
+      select.value = saved;
+      status.textContent = "La salida seleccionada se aplicará a karaoke, stems y música ambiental.";
+    } else {
+      select.value = "";
+      status.textContent = saved
+        ? "La salida configurada ya no está disponible. Se usará la salida predeterminada."
+        : "La salida predeterminada mantiene karaoke, stems y ambiente en la misma ruta.";
+    }
+  } catch (error) {
+    select.innerHTML = '<option value="">Salida predeterminada del sistema</option>';
+    select.value = "";
+    select.disabled = true;
+    status.textContent = `No se pudieron consultar las salidas: ${error.message}`;
+  }
+}
+
+function renderNativeDisplays(displays = nativeDisplays) {
+  const select = $("#preferencesStarScreenDisplay");
+  const status = $("#preferencesDisplayStatus");
+  if (!select || !status) return;
+  const saved = select.value || state?.config?.starScreenDisplayId || "";
+  select.innerHTML = '<option value="">Pantalla principal</option>';
+  const ids = new Set([""]);
+  displays.forEach((display, index) => {
+    const id = String(display.displayId || display.uuid || "");
+    if (!id || ids.has(id)) return;
+    ids.add(id);
+    const option = document.createElement("option");
+    option.value = id;
+    const width = Math.round(Number(display.frame?.width) || 0);
+    const height = Math.round(Number(display.frame?.height) || 0);
+    const resolution = width && height ? ` · ${width}×${height}` : "";
+    option.textContent = `${display.localizedName || `Pantalla ${index + 1}`}${resolution}${display.primary ? " · Principal" : ""}`;
+    select.append(option);
+  });
+  select.disabled = false;
+  if (saved && ids.has(saved)) {
+    select.value = saved;
+    status.textContent = "Star Screen se abrirá o moverá a esta pantalla.";
+  } else {
+    select.value = "";
+    status.textContent = saved
+      ? "La pantalla configurada ya no está disponible. Se usará la pantalla principal."
+      : "Star Screen usará la pantalla principal hasta que elijas otra.";
+  }
+}
+
+function requestNativeDisplays() {
+  const handler = window.webkit?.messageHandlers?.guestStarNative;
+  if (!handler?.postMessage) {
+    nativeDisplays = [];
+    renderNativeDisplays();
+    $("#preferencesStarScreenDisplay").disabled = true;
+    $("#preferencesDisplayStatus").textContent = "La selección nativa de pantalla está disponible dentro de Guest Star.app.";
+    return;
+  }
+  handler.postMessage({ action: "listDisplays" });
+}
+
+function applyInterfacePreferences(preferences = {}) {
+  document.body.classList.toggle("preference-hide-star-preview", preferences.showStarScreenPreview === false);
+  document.body.classList.toggle("preference-hide-waveform", preferences.showWaveform === false);
+  document.body.classList.toggle("preference-hide-eq", preferences.showEq === false);
+  document.body.classList.toggle("preference-hide-advanced", preferences.showAdvancedControls === false);
+}
+
+function fillPreferences() {
   folders = [...state.config.libraryFolders];
   renderFolders();
   $("#rememberLibraryFolders").checked =
@@ -1499,6 +1609,24 @@ function fillSettings() {
     ? "Password saved · leave blank to keep"
     : "No password";
   $("#autoQueueExact").checked = Boolean(state.config.autoQueueExact);
+  $("#uiLanguageSelect").value = state.config.uiLanguage === "en" ? "en" : "es";
+  $("#defaultStemEngine").value = ["auto", "spleeter", "demucs"].includes(state.config.defaultStemEngine)
+    ? state.config.defaultStemEngine
+    : "auto";
+  const interfacePreferences = state.config.interfacePreferences || {};
+  $("#preferenceShowPreview").checked = interfacePreferences.showStarScreenPreview !== false;
+  $("#preferenceShowWaveform").checked = interfacePreferences.showWaveform !== false;
+  $("#preferenceShowEq").checked = interfacePreferences.showEq !== false;
+  $("#preferenceShowAdvanced").checked = interfacePreferences.showAdvancedControls !== false;
+  const diagnosticPreferences = state.config.diagnostics || {};
+  $("#diagnosticAutoSend").checked = diagnosticPreferences.autoSendTechnicalErrors === true;
+  $("#diagnosticTesterMode").checked = diagnosticPreferences.testerMode === true;
+  void diagnostics.refresh();
+  void refreshAudioOutputs();
+  requestNativeDisplays();
+}
+
+function fillSettings() {
   const activity = state.activity || {};
   $("#activityHours").value = Number(activity.activityHours) || 2;
   $("#transitionSeconds").value =
@@ -1515,6 +1643,7 @@ function fillSettings() {
   $("#showCountdown").checked = definition.showCountdown !== false;
   $("#autoStartEnabled").checked = definition.autoStartEnabled === true;
   $("#showPublicStatus").checked = Boolean(activity.showPublicStatus);
+  $("#showStarScreenQueueCount").checked = activity.showStarScreenQueueCount !== false;
   let allowedLanguages = Array.isArray(definition.allowedLanguages)
     ? definition.allowedLanguages
     : [];
@@ -1547,8 +1676,8 @@ function fillSettings() {
   $("#settingsLastSource").textContent = activity.lastSource || "—";
 }
 
-function settingsPayload() {
-  const payload = {
+function preferencesPayload() {
+  return {
     uiLanguage: bridgeI18n.getLanguage(),
     libraryFolders: folders.map((item) => item.trim()).filter(Boolean),
     rememberLibraryFolders: $("#rememberLibraryFolders").checked,
@@ -1559,18 +1688,23 @@ function settingsPayload() {
       port: Number($("#vdjPort").value) || 80,
       password: $("#vdjPassword").value
     },
-    autoQueueExact: $("#autoQueueExact").checked
+    autoQueueExact: $("#autoQueueExact").checked,
+    audioOutputDeviceId: $("#preferencesAudioOutput").value,
+    starScreenDisplayId: $("#preferencesStarScreenDisplay").value,
+    defaultStemEngine: ["auto", "spleeter", "demucs"].includes($("#defaultStemEngine").value)
+      ? $("#defaultStemEngine").value
+      : "auto",
+    interfacePreferences: {
+      showStarScreenPreview: $("#preferenceShowPreview").checked,
+      showWaveform: $("#preferenceShowWaveform").checked,
+      showEq: $("#preferenceShowEq").checked,
+      showAdvancedControls: $("#preferenceShowAdvanced").checked
+    },
+    diagnostics: {
+      autoSendTechnicalErrors: $("#diagnosticAutoSend").checked,
+      testerMode: $("#diagnosticTesterMode").checked
+    }
   };
-  if (!state.config.signedIn) {
-    payload.sheetConfig = {
-      activityHours: Number($("#activityHours").value) || 2,
-      transitionSeconds: Math.max(
-        0,
-        Number($("#transitionSeconds").value) || 0
-      )
-    };
-  }
-  return payload;
 }
 
 function activitySettingsPayload() {
@@ -1582,7 +1716,8 @@ function activitySettingsPayload() {
     acceptEarlyRequests: $("#acceptEarlyRequests").checked,
     showCountdown: $("#showCountdown").checked,
     autoStartEnabled: $("#autoStartEnabled").checked,
-    showPublicStatus: $("#showPublicStatus").checked
+    showPublicStatus: $("#showPublicStatus").checked,
+    showStarScreenQueueCount: $("#showStarScreenQueueCount").checked
   };
   const activityPermissions = state.tenant?.permissions || {};
   if (state.account?.user?.role === "superhost" || activityPermissions.all === true || activityPermissions.canChangeSchedule === true) {
@@ -2068,6 +2203,25 @@ $("#settingsButton").addEventListener("click", () => {
   fillSettings();
   settingsDialog.showModal();
 });
+function openPreferences() {
+  if (!state?.config) return;
+  fillPreferences();
+  if (!preferencesDialog.open) preferencesDialog.showModal();
+}
+$("#preferencesButton").addEventListener("click", openPreferences);
+$("#closePreferences").addEventListener("click", () => preferencesDialog.close());
+$("#preferencesAudioRefresh").addEventListener("click", () => void refreshAudioOutputs());
+$("#preferencesDisplayRefresh").addEventListener("click", requestNativeDisplays);
+window.addEventListener("gueststar:open-preferences", openPreferences);
+window.addEventListener("gueststar:native-displays", (event) => {
+  nativeDisplays = Array.isArray(event.detail?.displays) ? event.detail.displays : [];
+  renderNativeDisplays();
+});
+window.addEventListener("gueststar:native-star-screen-result", (event) => {
+  const result = event.detail || {};
+  if (result.fallback) showNotice(result.error || "La pantalla configurada no está disponible; se usó la principal.");
+  else if (result.ok) showNotice(result.reused ? "Star Screen volvió al frente." : "Star Screen abierta en la pantalla elegida.");
+});
 $("#closeSettings").addEventListener("click", () => settingsDialog.close());
 $("#closeSuccess").addEventListener("click", () => successDialog.close());
 $("#addFolder").addEventListener("click", () => {
@@ -2097,7 +2251,7 @@ $("#forgetHostPin").addEventListener("click", async () => {
     });
     showNotice("The saved PIN was removed from the app.");
     await refresh();
-    fillSettings();
+    fillPreferences();
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -2115,7 +2269,7 @@ $("#forgetVdjPassword").addEventListener("click", async () => {
     });
     showNotice("The saved VirtualDJ password was removed.");
     await refresh();
-    fillSettings();
+    fillPreferences();
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -2123,7 +2277,6 @@ $("#forgetVdjPassword").addEventListener("click", async () => {
 $("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const payload = settingsPayload();
     const selectedActivitySettings = state.config.signedIn && state.tenant?.activity
       ? activitySettingsPayload()
       : null;
@@ -2131,7 +2284,6 @@ $("#settingsForm").addEventListener("submit", async (event) => {
       showNotice("Select at least one guest language for this activity.", true);
       return;
     }
-    await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
     if (selectedActivitySettings) {
       await api("/api/activity/settings", {
         method: "POST",
@@ -2145,11 +2297,37 @@ $("#settingsForm").addEventListener("submit", async (event) => {
     showNotice(error.message, true);
   }
 });
+$("#preferencesForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const payload = preferencesPayload();
+    const appliedOutput = await playerPanel.applyAudioOutput?.(payload.audioOutputDeviceId);
+    if (appliedOutput?.ok === false) {
+      throw new Error(appliedOutput.error || "La salida de audio seleccionada no pudo aplicarse.");
+    }
+    const result = await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    if (result.config) state.config = result.config;
+    window.webkit?.messageHandlers?.guestStarNative?.postMessage?.({
+      action: "setStarScreenDisplay",
+      displayId: payload.starScreenDisplayId || ""
+    });
+    applyInterfacePreferences(payload.interfacePreferences);
+    diagnostics.sync(state);
+    preferencesDialog.close();
+    showNotice("Preferencias guardadas.");
+    await refresh();
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+});
 $("#testSheet").addEventListener("click", async () => {
   try {
     const data = await api("/api/apps-script/test", {
       method: "POST",
-      body: JSON.stringify(settingsPayload())
+      body: JSON.stringify(preferencesPayload())
     });
     showSuccess(
       "Guest Star Is Connected",
@@ -2163,7 +2341,7 @@ $("#testVdj").addEventListener("click", async () => {
   try {
     const data = await api("/api/virtualdj/test", {
       method: "POST",
-      body: JSON.stringify(settingsPayload())
+      body: JSON.stringify(preferencesPayload())
     });
     setStatus(
       "#vdjStatus",
@@ -2194,6 +2372,8 @@ function applyState(nextState) {
     updateAuthUi();
     superhostPanel.sync(state);
     playerPanel.sync(state);
+    diagnostics.sync(state);
+    applyInterfacePreferences(state.config?.interfacePreferences || {});
     const activePlayerActivityId = state.account?.authenticated === true &&
       state.activity?.activityRunning === true &&
       state.operatingMode?.selected === "player"
@@ -2225,14 +2405,6 @@ $("#uiLanguageSelect").addEventListener("change", async (event) => {
     renderHitSuggestions();
     bridgeI18n.refresh();
   });
-  try {
-    await api("/api/config/language", {
-      method: "POST",
-      body: JSON.stringify({ uiLanguage: language })
-    });
-  } catch (error) {
-    showNotice(error.message, true);
-  }
 });
 
 function connectRealtime() {

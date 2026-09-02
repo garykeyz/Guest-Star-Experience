@@ -7,11 +7,10 @@ import test from "node:test";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = await readFile(resolve(root, "public/app.js"), "utf8");
 const windowSource = await readFile(
-  resolve(root, "macos/GuestStarWindow.js"),
+  resolve(root, "macos/GuestStarNativeHost.m"),
   "utf8"
 );
 const serverSource = await readFile(resolve(root, "src/server.mjs"), "utf8");
-const starScreenWindowSource = await readFile(resolve(root, "src/star-screen-window.jxa"), "utf8");
 const formSource = await readFile(
   resolve(root, "../components/KaraokeExperience.tsx"),
   "utf8"
@@ -79,13 +78,12 @@ test("los enlaces externos no crean pestañas dentro del WebView", () => {
   assert.match(serverSource, /pathname === "\/api\/external\/open"/);
 });
 
-test("la ventana interna no instala el delegado que causaba el cierre", () => {
-  assert.doesNotMatch(windowSource, /WKUIDelegate/);
-  assert.doesNotMatch(windowSource, /createWebViewWithConfiguration/);
-  assert.match(
-    windowSource,
-    /javaScriptCanOpenWindowsAutomatically = false/
-  );
+test("la ventana interna pertenece al host Cocoa y bloquea ventanas web emergentes", () => {
+  assert.match(windowSource, /#import <Cocoa\/Cocoa\.h>/);
+  assert.match(windowSource, /#import <WebKit\/WebKit\.h>/);
+  assert.match(windowSource, /WKWebViewConfiguration/);
+  assert.match(windowSource, /javaScriptCanOpenWindowsAutomatically = NO/);
+  assert.doesNotMatch(windowSource, /osascript|JavaScript for Automation/);
 });
 
 test("la sincronización en vivo no borra el usuario mientras se escribe", () => {
@@ -399,7 +397,7 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
     "playerComplete", "playerRemove", "playerSeek", "playerVolume", "playerMute",
     "playerRequestsToggle", "playerPrimaryActivity", "playerScan",
     "playerSync", "playerShare", "playerSettings", "playerCompleted",
-    "playerStemQuickAction", "playerStemOriginal", "playerStemSeparated",
+    "playerStemQuickAction", "playerStemEngine",
     "playerBackgroundToggle", "playerBackgroundVolume"
   ]) assert.match(bridgeHtml, new RegExp(`id="${id}"`));
   assert.match(playerSource, /media\.addEventListener\('ended'/);
@@ -467,15 +465,21 @@ test("Player recibe solicitudes públicas sin reconciliar VirtualDJ", () => {
   assert.match(serverSource, /void runSyncMaintenance\(\)/);
 });
 
-test("Star Screen abre una ventana nativa en la pantalla secundaria", () => {
+test("Star Screen abre, enfoca y mueve una única ventana del host nativo", () => {
   assert.match(playerSource, /\/api\/player\/star-screen\/open/);
   assert.doesNotMatch(playerSource, /playerOpenStarScreen[^\n]+\/api\/external\/open/);
   assert.match(serverSource, /openStarScreenWindow/);
   assert.match(serverSource, /pathname === "\/api\/player\/star-screen\/open"/);
-  assert.match(starScreenWindowSource, /function secondaryScreen/);
-  assert.match(starScreenWindowSource, /NSWindowStyleMaskBorderless/);
-  assert.match(starScreenWindowSource, /window\.setFrameDisplay\(output\.frame, true\)/);
-  assert.match(starScreenWindowSource, /NSMakeRect\(0, 0, 1280, 720\)/);
+  assert.match(playerSource, /window\.webkit\?\.messageHandlers\?\.guestStarNative/);
+  assert.match(playerSource, /action: 'openStarScreen'/);
+  assert.match(windowSource, /if \(self\.starWindow != nil\) return/);
+  assert.match(windowSource, /NSWindowStyleMaskBorderless/);
+  assert.match(windowSource, /NSMakeRect\(0, 0, 1280, 720\)/);
+  assert.match(windowSource, /CGDisplayCreateUUIDFromDisplayID/);
+  assert.match(windowSource, /makeKeyAndOrderFront:nil/);
+  assert.match(windowSource, /orderFrontRegardless/);
+  assert.match(windowSource, /requestedScreen \?: \[self primaryScreen\]/);
+  assert.match(windowSource, /NSApplicationDidChangeScreenParametersNotification/);
 });
 
 test("Star Screen muestra video limpio y reserva Sonando ahora para la música ambiental", () => {
@@ -566,7 +570,8 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(serverSource, /instrumental\.m4a/);
   assert.match(serverSource, /vocals\.m4a/);
   assert.match(serverSource, /"-c:a", "aac", "-b:a", "256k"/);
-  assert.match(stemsInstaller, /stems-engine-smoke\.mjs/);
+  assert.match(stemsInstaller, /install-stem-engine-macos\.sh/);
+  assert.match(stemsSmokeTest, /sherpa-onnx-offline-source-separation/);
   assert.match(stemsSmokeTest, /instrumentalDuration - vocalsDuration/);
   assert.match(stemsSmokeTest, /instrumentalBytes/);
   assert.match(playerSource, /setTargetAtTime/);
@@ -577,13 +582,14 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(playerSource, /now - lastStemSyncAt < 750/);
   assert.match(playerSource, /Math\.abs\(drift\) > 0\.45/);
   assert.doesNotMatch(playerSource, /element\.playbackRate = Math\.max/);
-  assert.match(playerSource, /media\.addEventListener\('waiting', pauseStemTracks\)/);
+  assert.match(playerSource, /for \(const type of \['waiting', 'stalled'\]\)/);
+  assert.match(playerSource, /media\.addEventListener\(type, \(\) => \{[\s\S]*?pauseStemTracks\(\)/);
   assert.match(playerSource, /media\.addEventListener\('seeked'/);
-  assert.match(serverSource, /stems-v2/);
+  assert.match(serverSource, /stemCachePaths/);
   assert.match(serverSource, /aresample=44100:first_pts=0/);
-  assert.match(serverSource, /STEM_IDLE_THREADS/);
+  assert.match(serverSource, /spleeterExecutionBudget\(availableParallelism\(\), stemResourceState\)/);
   assert.match(serverSource, /"--overlap", "0\.05"/);
-  assert.match(serverSource, /pauseStemWorker\(clean\.playback\.scene === "karaoke"\)/);
+  assert.match(serverSource, /stemResourceController\.update\(currentStemResourceSignals\(\)\)/);
 });
 
 test("la fila y el progreso Stems permanecen compactos hasta solicitar opciones", () => {
@@ -755,4 +761,35 @@ test("el Plan B alterna idiomas y permite buscar un enlace Karaoke", () => {
   assert.match(appSource, /Find Karaoke Link/);
   assert.match(appSource, /Copy Karaoke Link/);
   assert.match(serverSource, /\/api\/suggestions\/youtube/);
+});
+
+test("la fuente de stems se bloquea antes de reproducir y nunca cambia en caliente", () => {
+  const start = playerSource.slice(
+    playerSource.indexOf("async function startKaraoke()"),
+    playerSource.indexOf("async function pauseKaraoke()")
+  );
+  assert.ok(start.indexOf("lockStemSourceForCurrent()") < start.indexOf("media.play()"));
+  assert.match(serverSource, /function lockStemSourceForPlayback/);
+  assert.match(serverSource, /activeStemPlaybackLock/);
+  assert.match(serverSource, /STEM_HOT_SWAP_BLOCKED/);
+});
+
+test("Player y Star Screen intercambian heartbeat y acuse cada dos segundos", () => {
+  assert.match(starScreenSource, /function sendHeartbeat/);
+  assert.match(starScreenSource, /type: 'star-screen-heartbeat'/);
+  assert.match(starScreenSource, /type === 'star-screen-ack'/);
+  assert.match(starScreenSource, /setInterval\(sendHeartbeat, 2000\)/);
+  assert.match(playerSource, /type !== 'star-screen-heartbeat'/);
+  assert.match(playerSource, /type: 'star-screen-ack'/);
+});
+
+test("los snapshots diagnósticos no aceptan identidad ni estado arbitrario del cliente", () => {
+  assert.doesNotMatch(serverSource, /client:\s*clientSnapshot/);
+  assert.match(serverSource, /installationRef: diagnosticReference/);
+  assert.match(serverSource, /hotelRef: diagnosticReference/);
+  assert.match(serverSource, /activityRef: diagnosticReference/);
+  assert.doesNotMatch(serverSource, /currentState:\s*\{[\s\S]{0,260}hotelId:/);
+  assert.match(serverSource, /\["spleeter", "demucs", "original"\]\.includes/);
+  assert.match(serverSource, /DIAGNOSTIC_DELIVERY_COOLDOWN_MS = 30000/);
+  assert.match(serverSource, /diagnosticDeliveryInFlight/);
 });

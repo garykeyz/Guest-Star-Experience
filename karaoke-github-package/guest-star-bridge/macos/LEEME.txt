@@ -14,3 +14,16 @@ Las credenciales de Guest Star se guardan en macOS Keychain.
 
 La aplicación recibe solicitudes, reproduce video local en Star Screen o
 reconcilia la cola de VirtualDJ, calcula tiempos exactos y respeta el idioma.
+
+Guest Star es la única aplicación visible en Dock, Comando-Tab y barra de menú.
+Usa Guest Star → Preferencias… o Comando-coma para elegir salida de audio,
+pantalla de Star Screen, idioma, interfaz, IA y diagnóstico. Star Screen se
+reutiliza y vuelve a enfocarse; si desconectas la pantalla elegida, Guest Star la
+mueve a una disponible e informa el cambio.
+
+El paquete ya incluye Node, Spleeter rápido, Demucs HQ y sus modelos para Intel
+y Apple Silicon. AUTO deja lista la canción con caché/Spleeter y permite que
+Demucs mejore el caché sin retrasar ni cambiar una canción que ya empezó.
+
+Preferencias → Diagnóstico crea reportes sanitizados que funcionan sin conexión.
+No incluyen contraseñas, tokens, nombres de huéspedes, canciones ni media.

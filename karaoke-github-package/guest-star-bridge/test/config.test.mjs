@@ -55,7 +55,7 @@ test("permite olvidar carpeta y PIN por separado al cerrar", () => {
   assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 12 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
+test("la configuración 14 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -72,12 +72,78 @@ test("la configuración 12 recuerda sesión, selección e idioma sin guardar con
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 12);
+  assert.equal(runtime.configVersion, 14);
   assert.equal(runtime.uiLanguage, "en");
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");
   assert.equal(Object.hasOwn(stored, "password"), false);
+});
+
+test("persiste las Preferencias generales de audio, pantalla, IA e interfaz", () => {
+  const runtime = sanitizeConfig({
+    audioOutputDeviceId: "usb-interface-1",
+    starScreenDisplayId: "display-uuid-2",
+    defaultStemEngine: "demucs",
+    interfacePreferences: {
+      showStarScreenPreview: false,
+      showWaveform: true,
+      showEq: false,
+      showAdvancedControls: true
+    }
+  }, DEFAULT_CONFIG);
+  const stored = configForStorage(runtime);
+
+  assert.equal(stored.audioOutputDeviceId, "usb-interface-1");
+  assert.equal(stored.starScreenDisplayId, "display-uuid-2");
+  assert.equal(stored.defaultStemEngine, "demucs");
+  assert.deepEqual(stored.interfacePreferences, {
+    showStarScreenPreview: false,
+    showWaveform: true,
+    showEq: false,
+    showAdvancedControls: true
+  });
+});
+
+test("AUTO y diagnósticos privados son los valores seguros de la configuración 14", () => {
+  assert.equal(DEFAULT_CONFIG.configVersion, 14);
+  assert.equal(DEFAULT_CONFIG.defaultStemEngine, "auto");
+  assert.deepEqual(DEFAULT_CONFIG.diagnostics, {
+    autoSendTechnicalErrors: false,
+    testerMode: false
+  });
+
+  const runtime = sanitizeConfig({
+    defaultStemEngine: "AUTO",
+    diagnostics: {
+      autoSendTechnicalErrors: true,
+      testerMode: true
+    }
+  }, DEFAULT_CONFIG);
+  const stored = configForStorage(runtime);
+
+  assert.equal(runtime.defaultStemEngine, "auto");
+  assert.deepEqual(runtime.diagnostics, {
+    autoSendTechnicalErrors: true,
+    testerMode: true
+  });
+  assert.deepEqual(stored.diagnostics, runtime.diagnostics);
+});
+
+test("normaliza Preferencias inválidas a valores seguros", () => {
+  const runtime = sanitizeConfig({
+    audioOutputDeviceId: null,
+    starScreenDisplayId: null,
+    defaultStemEngine: "desconocido",
+    interfacePreferences: { showWaveform: false }
+  }, DEFAULT_CONFIG);
+
+  assert.equal(runtime.audioOutputDeviceId, "");
+  assert.equal(runtime.starScreenDisplayId, "");
+  assert.equal(runtime.defaultStemEngine, "auto");
+  assert.equal(runtime.interfacePreferences.showWaveform, false);
+  assert.equal(runtime.interfacePreferences.showEq, true);
+  assert.deepEqual(runtime.diagnostics, DEFAULT_CONFIG.diagnostics);
 });
 
 test("conserva las carpetas y archivos elegidos para música ambiental", () => {

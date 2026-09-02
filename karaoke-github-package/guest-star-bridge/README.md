@@ -25,8 +25,8 @@ el Superhost; no necesita Node, npm ni Terminal.
    Google se abre en Safari/Chrome para evitar un acceso inseguro dentro del
    WebView y regresa automáticamente a Guest Star al terminar.
 5. Selecciona hotel, sede y actividad entre tus asignaciones.
-6. En Settings, elige las carpetas locales y, si usarás Bridge, configura
-   Network Control.
+6. En **Guest Star → Preferencias…** (`⌘,`), elige las carpetas locales y, si
+   usarás Bridge, configura Network Control.
 7. Antes de iniciar selecciona Player o Bridge. La actividad bloquea ese modo
    hasta que Host o Superhost la finalice.
 
@@ -46,6 +46,36 @@ los secretos se guardan en macOS Keychain.
   reproducción interna.
 - **Aleatorio · Random** genera rondas en español, inglés, ambas listas o los
   favoritos del hotel sin repetir antes de completar cada vuelta.
+
+La ventana principal y Star Screen pertenecen al mismo host nativo Cocoa de
+**Guest Star**. Abrir Star Screen de nuevo enfoca y reubica la misma ventana en
+la pantalla elegida; si esa pantalla se desconecta, la app informa el fallback
+y la mueve a una pantalla disponible. El proceso visible ya no depende de una
+ventana `osascript`.
+
+## Player, audio y Stems IA
+
+- Preferencias separa la configuración general de la actividad y permite elegir
+  salida de audio, pantalla de Star Screen, idioma, interfaz, EQ y ayudas.
+- Karaoke, stems y música ambiental pasan por el mismo grafo de audio y la misma
+  salida. Si el dispositivo desaparece, Guest Star continúa por la salida
+  predeterminada y permite recuperarlo al reconectarlo.
+- El modo **AUTO** consulta primero el caché, usa Spleeter para dejar la canción
+  lista rápidamente y ejecuta Demucs como mejora oportunista. Nunca espera a
+  Demucs para iniciar ni cambia la fuente durante una canción en curso.
+- Los trabajos pesados se limitan a uno y reaccionan a estados reales
+  `IDLE`, `LIVE` y `PRESSURE` para proteger la reproducción.
+- Star Screen recibe únicamente los turnos que el Host dejó visibles y mantiene
+  heartbeat/acuse con Player para mostrar un estado de conexión real.
+
+## Diagnóstico
+
+**Preferencias → Diagnóstico** permite crear, copiar, guardar y exportar un
+reporte técnico, activar modo Tester y elegir el envío automático al Superhost.
+Los reportes funcionan offline, se reintentan después y agrupan errores
+repetidos por huella. Antes de guardar o enviar se eliminan secretos, datos de
+huéspedes, títulos privados y cargas de audio/video; las referencias operativas
+se anonimizan y las rutas de usuario se sanitizan.
 
 Las solicitudes activas y la cola real de VirtualDJ aparecen lado a lado; las
 completadas y omitidas se agrupan debajo, sin perder su número de llegada. Cada
@@ -123,6 +153,8 @@ completo.
 - selección y permisos verificados de nuevo por el servicio Guest Star.
 - el token de identidad Google se valida en el servidor contra el cliente OAuth;
   una cuenta desconocida nunca crea automáticamente un usuario Guest Star.
+- diagnósticos locales acotados, sanitizados y sin servicio externo de
+  telemetría nuevo.
 
 ## Pruebas
 

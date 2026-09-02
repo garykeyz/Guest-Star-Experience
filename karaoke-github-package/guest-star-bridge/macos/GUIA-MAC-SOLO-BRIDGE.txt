@@ -43,7 +43,8 @@ PASO 3 — INICIAR SESIÓN Y ELEGIR ACTIVIDAD
 PASO 4 — CONECTAR LA BIBLIOTECA
 
 1. Conecta el disco antes de abrir el evento.
-2. En Settings, selecciona la carpeta principal de karaoke.
+2. En Guest Star → Preferencias… (Comando-coma), selecciona la carpeta principal
+   de karaoke.
 3. Activa recordar carpetas solo si esta Mac es segura.
 4. Escribe el mismo puerto y contraseña de Network Control.
 5. Guarda, prueba VirtualDJ y espera el primer escaneo.

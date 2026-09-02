@@ -22,7 +22,8 @@ CONFIGURAR
 1. Abre Guest Star y confirma que la pantalla muestre v4.4.1.
 2. Inicia sesión con el usuario Host y su contraseña permanente.
 3. Selecciona hotel, sede y actividad asignados.
-4. En Settings, elige la carpeta de karaoke.
+4. En Guest Star → Preferencias… (Comando-coma), elige la carpeta de karaoke,
+   salida de audio y pantalla de Star Screen.
 5. Para Bridge, configura el mismo puerto/contraseña de Network Control.
 6. Elige Player o Bridge antes de iniciar; no puede alternarse durante el evento.
 
@@ -31,3 +32,7 @@ sesión en Guest Star con su cuenta Host.
 
 Las opciones de compatibilidad 3.x son solamente para el Superhost.
 Consulta GUIA-MAC-SOLO-BRIDGE.txt para la prueba completa y el evento.
+
+El instalador incluye el motor Stems IA Universal. No ejecutes instaladores
+adicionales: AUTO usa caché/Spleeter para disponibilidad rápida y Demucs como
+mejora de calidad sin retrasar la reproducción.

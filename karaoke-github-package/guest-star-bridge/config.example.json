@@ -8,6 +8,19 @@
     "/Users/tu-usuario/Music/Ambiente"
   ],
   "backgroundMusicVolume": 0.55,
+  "audioOutputDeviceId": "",
+  "starScreenDisplayId": "",
+  "defaultStemEngine": "auto",
+  "interfacePreferences": {
+    "showStarScreenPreview": true,
+    "showWaveform": true,
+    "showEq": true,
+    "showAdvancedControls": true
+  },
+  "diagnostics": {
+    "autoSendTechnicalErrors": false,
+    "testerMode": false
+  },
   "appsScriptUrl": "https://request.gstarxp.com/api/bridge",
   "hostPin": "",
   "rememberHostPin": true,

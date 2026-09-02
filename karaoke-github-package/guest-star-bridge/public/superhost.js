@@ -32,7 +32,8 @@ const COPY = {
       users: "Hosts y permisos",
       branding: "Experiencia pública",
       favorites: "Favoritos",
-      devices: "Dispositivos y auditoría"
+      devices: "Dispositivos y auditoría",
+      diagnostics: "Reportes y diagnóstico"
     },
     loading: "Cargando administración segura…",
     refresh: "Actualizar",
@@ -198,7 +199,8 @@ const COPY = {
       users: "Hosts & permissions",
       branding: "Public experience",
       favorites: "Favorites",
-      devices: "Devices & audit"
+      devices: "Devices & audit",
+      diagnostics: "Reports & diagnostics"
     },
     loading: "Loading secure administration…",
     refresh: "Refresh",
@@ -479,6 +481,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   let selectedFavoriteHotel = "";
   let selectedReviewActivity = "";
   let editingScheduleId = "";
+  let diagnosticState = null;
   let opened = false;
   let autoOpened = false;
   let loading = false;
@@ -683,6 +686,28 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     content.innerHTML = `<div class="superhost-grid two"><section class="superhost-card"><h3>${escapeHtml(text().devices)}</h3><div class="superhost-list">${(admin.devices || []).map((device) => `<article class="superhost-entity"><div><strong>${escapeHtml(value(device, "deviceName"))}</strong><small>${escapeHtml(users.get(value(device, "userId")) || "")} · ${escapeHtml(value(device, "status"))} · Bridge ${escapeHtml(value(device, "bridgeVersion"))} · VDJ ${checked(device.virtualDJConnected) ? "online" : "offline"}</small><small>${escapeHtml(text().lastHeartbeat)}: ${escapeHtml(value(device, "lastHeartbeatAt") || "—")}</small></div>${value(device, "status") === "active" ? `<button data-action="revoke-device" data-id="${escapeHtml(value(device, "deviceId"))}">${escapeHtml(text().revoke)}</button>` : ""}</article>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section><section class="superhost-card"><h3>${escapeHtml(text().audit)}</h3><div class="audit-list">${[...(admin.auditLog || [])].slice(-100).reverse().map((entry) => `<div><strong>${escapeHtml(value(entry, "action"))}</strong><span>${escapeHtml(value(entry, "createdAt"))}</span></div>`).join("") || `<p>${escapeHtml(text().noItems)}</p>`}</div></section></div>`;
   }
 
+  async function loadDiagnostics() {
+    try {
+      diagnosticState = await api("/api/diagnostics/state");
+      if (activeTab === "diagnostics") renderDiagnostics();
+    } catch (error) {
+      notify(error.message, true);
+    }
+  }
+
+  function renderDiagnostics() {
+    const reports = diagnosticState?.reports || [];
+    const health = diagnosticState?.health || {};
+    const labels = language === "es"
+      ? { title: "Reportes y diagnóstico", health: "Mapa de salud", reports: "Incidentes", empty: "No hay incidentes registrados.", occurrences: "ocurrencias", first: "Primera", last: "Última" }
+      : { title: "Reports & diagnostics", health: "Health map", reports: "Incidents", empty: "No incidents recorded.", occurrences: "occurrences", first: "First", last: "Last" };
+    content.innerHTML = `<div class="superhost-grid two diagnostic-superhost-grid">
+      <section class="superhost-card"><h3>${escapeHtml(labels.health)}</h3><div class="diagnostic-health-map">${Object.entries(health).map(([component, status]) => `<div data-health-status="${escapeHtml(status)}"><span>${["OK", "READY", "RUNNING", "LIVE"].includes(status) ? "✓" : ["ERROR", "OFFLINE"].includes(status) ? "✕" : "⚠"}</span><strong>${escapeHtml(component)}</strong><em>${escapeHtml(status)}</em></div>`).join("")}</div></section>
+      <section class="superhost-card"><h3>${escapeHtml(labels.title)}</h3><p>Session: <code>${escapeHtml(diagnosticState?.sessionDiagnosticId || "—")}</code></p><button class="button ghost" type="button" data-action="refresh-diagnostics">${escapeHtml(text().refresh)}</button></section>
+    </div>
+    <section class="superhost-card"><h3>${escapeHtml(labels.reports)}</h3><div class="diagnostic-report-list">${reports.length ? reports.map((report) => `<details class="diagnostic-report-card" data-severity="${escapeHtml(report.severity)}"><summary><span><b>${escapeHtml(report.severity)}</b> ${escapeHtml(report.summary || report.reportId)}</span><small>${escapeHtml(report.reportId)} · ${Number(report.occurrenceCount) || 1} ${escapeHtml(labels.occurrences)} · ${escapeHtml(report.status)}</small></summary><div class="diagnostic-report-detail"><p>${escapeHtml(report.description || report.lastError || "—")}</p><dl><div><dt>${escapeHtml(labels.first)}</dt><dd>${escapeHtml(report.firstSeenAt || report.createdAt)}</dd></div><div><dt>${escapeHtml(labels.last)}</dt><dd>${escapeHtml(report.lastSeenAt || report.createdAt)}</dd></div><div><dt>Modules</dt><dd>${escapeHtml((report.modules || []).join(", "))}</dd></div><div><dt>Build</dt><dd>${escapeHtml(report.build || "—")}</dd></div></dl><details><summary>Stack / Events</summary><pre>${escapeHtml(`${report.stack || "—"}\n\n${(report.recentEvents || []).slice(-30).map((entry) => `${entry.timestamp} ${entry.event} ${entry.summary || entry.message || ""}`).join("\n")}`)}</pre></details><div class="superhost-actions"><button data-action="diagnostic-status" data-id="${escapeHtml(report.reportId)}" data-status="Revisando">Revisando</button><button data-action="diagnostic-status" data-id="${escapeHtml(report.reportId)}" data-status="Resuelto">Resuelto</button><button data-action="diagnostic-status" data-id="${escapeHtml(report.reportId)}" data-status="Ignorado">Ignorado</button></div></div></details>`).join("") : `<p>${escapeHtml(labels.empty)}</p>`}</div></section>`;
+  }
+
   function render() {
     if (!admin) return;
     renderTabs();
@@ -691,7 +716,8 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     else if (activeTab === "users") renderUsers();
     else if (activeTab === "branding") renderBranding();
     else if (activeTab === "favorites") renderFavorites();
-    else renderDevices();
+    else if (activeTab === "devices") renderDevices();
+    else renderDiagnostics();
   }
 
   function formPayload(form) {
@@ -883,6 +909,20 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     if (!button) return;
     const action = button.dataset.action;
     const id = button.dataset.id;
+    if (action === "refresh-diagnostics") {
+      await loadDiagnostics();
+      return;
+    }
+    if (action === "diagnostic-status") {
+      try {
+        await api(`/api/diagnostics/reports/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: button.dataset.status })
+        });
+        await loadDiagnostics();
+      } catch (error) { notify(error.message, true); }
+      return;
+    }
     const hotel = (admin.hotels || []).find((item) => value(item, "hotelId") === id);
     if (action === "open-link") openExternal(value(hotel, "publicUrl"));
     else if (action === "copy-link") copyLink(value(hotel, "publicUrl"), text().saved);
@@ -984,6 +1024,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     activeTab = button.dataset.superhostTab;
     reviews = [];
     render();
+    if (activeTab === "diagnostics") void loadDiagnostics();
   });
 
   workspace.querySelectorAll("[data-superhost-language]").forEach((button) => {
