@@ -121,7 +121,7 @@ const STEM_ENGINE_VERIFICATION_PATH = resolve(STEM_DATA_ROOT, "data", "stem-engi
 const DEMUCS_ENGINE_CLI = process.env.GUEST_STAR_DEMUCS_CLI ||
   resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
-const BRIDGE_VERSION = "4.5";
+const BRIDGE_VERSION = "4.6";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
