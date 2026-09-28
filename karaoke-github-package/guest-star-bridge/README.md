@@ -1,4 +1,4 @@
-# Guest Star 4.4.1
+# Guest Star 4.5
 
 Aplicación local Universal para Mac con Player interno, Star Screen y Bridge
 opcional para VirtualDJ. Solicitudes, hotel, actividad, cola e historial son
@@ -18,7 +18,7 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Universal-v4.4.1-app.zip` o abre el DMG.
+1. Abre `GuestStar-4.5.pkg` y sigue el instalador, o usa el DMG/ZIP alternativo.
 2. Mueve **Guest Star.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
@@ -106,8 +106,8 @@ Bridge solo lo reemplaza mediante **Cambiar archivo** o lo retira mediante
 
 Desde 4.3.7, una canción marcada como cantada, omitida o retirada conserva esa
 decisión aunque el servidor entregue una lectura atrasada o el Bridge reinicie.
-Solo **Deshacer** permite restaurarla. La réplica hacia Google Sheets se agrupa
-globalmente para que una ráfaga de solicitudes no multiplique el trabajo.
+Solo **Deshacer** permite restaurarla. D1 conserva la decisión autoritativa sin
+crear réplicas ni trabajo secundario en Google Sheets.
 
 Desde 4.3.6, la sincronización operativa queda separada del respaldo histórico:
 las lecturas normales no crean eventos históricos ni bloquean la cola

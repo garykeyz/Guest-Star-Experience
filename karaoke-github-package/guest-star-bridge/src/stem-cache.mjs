@@ -8,6 +8,11 @@ import {
   stemCacheKey,
   validateStemManifest
 } from "./stem-auto.mjs";
+import {
+  GSX_DEFAULT_PROFILE,
+  gsxCacheKey,
+  inspectGSXStems
+} from "./gsx-stems.mjs";
 
 const SAMPLE_BYTES = 64 * 1024;
 
@@ -55,6 +60,27 @@ export function stemCachePaths(cacheRoot, fingerprint, engine, modelVersion) {
   };
 }
 
+export function gsxStemCachePaths(cacheRoot, fingerprint, engine, modelVersion, encodingProfile = GSX_DEFAULT_PROFILE.id) {
+  const normalizedEngine = normalizeStemEngine(engine, "spleeter");
+  if (normalizedEngine === "auto") throw new Error("Auto has no direct cache entry.");
+  const version = String(modelVersion || STEM_MODEL_VERSIONS[normalizedEngine]);
+  const cacheKey = gsxCacheKey({
+    sourceHash: fingerprint,
+    separationModel: normalizedEngine,
+    separationModelVersion: version,
+    encodingProfile
+  });
+  const directory = resolve(cacheRoot, "v4");
+  return {
+    cacheKey,
+    directory,
+    gsxPath: resolve(directory, `${cacheKey}.gsxstems`),
+    tempPath: resolve(directory, `${cacheKey}.tmp.gsxstems`),
+    lockPath: resolve(directory, `${cacheKey}.lock`),
+    encodingProfile
+  };
+}
+
 export function completeStemManifest({
   fingerprint,
   engine,
@@ -98,6 +124,37 @@ export async function inspectStemCache({
   modelVersion,
   probeDuration = null
 } = {}) {
+  const gsxPaths = gsxStemCachePaths(cacheRoot, fingerprint, engine, modelVersion);
+  let gsxReason = "gsx_cache_entry_missing";
+  try {
+    const [safeRoot, safeFile] = await Promise.all([realpath(cacheRoot), realpath(gsxPaths.gsxPath)]);
+    if (!safeFile.startsWith(`${safeRoot}${sep}`)) {
+      gsxReason = "cache_path_outside_root";
+    } else {
+      const gsx = await inspectGSXStems(safeFile, {
+        sourceHash: fingerprint,
+        separationModel: normalizeStemEngine(engine, "spleeter"),
+        separationModelVersion: String(modelVersion || STEM_MODEL_VERSIONS[normalizeStemEngine(engine, "spleeter")]),
+        encodingProfile: gsxPaths.encodingProfile
+      });
+      gsxReason = gsx.reason || "valid";
+      if (gsx.valid) {
+        return {
+          valid: true,
+          reason: "valid",
+          format: "gsx",
+          ...gsxPaths,
+          manifest: gsx.manifest,
+          durations: {
+            instrumental: Number(gsx.manifest.streams.instrumental.durationSeconds),
+            vocals: Number(gsx.manifest.streams.vocals.durationSeconds)
+          }
+        };
+      }
+    }
+  } catch {
+    // Missing GSX is expected while legacy caches are still supported.
+  }
   const paths = stemCachePaths(cacheRoot, fingerprint, engine, modelVersion);
   try {
     const [safeRoot, safeDirectory] = await Promise.all([
@@ -130,11 +187,12 @@ export async function inspectStemCache({
       vocals: { isFile: vocalsInfo.isFile(), size: vocalsInfo.size },
       measuredDurations
     });
-    return { ...validation, ...paths, manifest };
+    return { ...validation, format: validation.valid ? "legacy" : "", gsxReason, ...paths, manifest };
   } catch (error) {
     return {
       valid: false,
       reason: error instanceof SyntaxError ? "manifest_invalid_json" : "cache_entry_missing",
+      gsxReason,
       ...paths
     };
   }

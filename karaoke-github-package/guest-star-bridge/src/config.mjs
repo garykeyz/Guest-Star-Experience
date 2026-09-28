@@ -7,12 +7,10 @@ import { normalizeFavoriteSongs } from "./random-rotation.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = resolve(ROOT, "data");
 const CONFIG_PATH = resolve(DATA_DIR, "config.json");
-const LEGACY_DIRECT_APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 14,
+  configVersion: 15,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -37,6 +35,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   interfacePreferences: {
     showStarScreenPreview: true,
     showWaveform: true,
+    showStarScreenNowPlaying: true,
+    showActivityAccess: false,
+    showCurrentSongBackground: false,
+    starScreenSongSource: "request",
+    starScreenLineupCount: 5,
     showEq: true,
     showAdvancedControls: true
   },
@@ -45,15 +48,12 @@ export const DEFAULT_CONFIG = Object.freeze({
     testerMode: false
   },
   appsScriptUrl: BRIDGE_PROXY_URL,
-  hostPin: "",
-  rememberHostPin: true,
   virtualDJ: {
     host: "127.0.0.1",
     port: 80,
     password: "",
     timeoutMs: 3500
   },
-  requestIntervalSeconds: 2,
   scanIntervalSeconds: 10,
   autoQueueExact: true
 });
@@ -93,6 +93,21 @@ function normalizeInterfacePreferences(value, current = {}) {
     showWaveform: source.showWaveform === undefined
       ? previous.showWaveform !== false
       : source.showWaveform !== false,
+    showStarScreenNowPlaying: source.showStarScreenNowPlaying === undefined
+      ? previous.showStarScreenNowPlaying !== false
+      : source.showStarScreenNowPlaying !== false,
+    showActivityAccess: source.showActivityAccess === undefined
+      ? previous.showActivityAccess === true
+      : source.showActivityAccess === true,
+    showCurrentSongBackground: source.showCurrentSongBackground === undefined
+      ? previous.showCurrentSongBackground === true
+      : source.showCurrentSongBackground === true,
+    starScreenSongSource: source.starScreenSongSource === undefined
+      ? previous.starScreenSongSource === "local" ? "local" : "request"
+      : source.starScreenSongSource === "local" ? "local" : "request",
+    starScreenLineupCount: source.starScreenLineupCount === undefined
+      ? Number.isInteger(previous.starScreenLineupCount) && previous.starScreenLineupCount >= 1 && previous.starScreenLineupCount <= 5 ? previous.starScreenLineupCount : 5
+      : Number.isInteger(Number(source.starScreenLineupCount)) && Number(source.starScreenLineupCount) >= 1 && Number(source.starScreenLineupCount) <= 5 ? Number(source.starScreenLineupCount) : Number.isInteger(previous.starScreenLineupCount) && previous.starScreenLineupCount >= 1 && previous.starScreenLineupCount <= 5 ? previous.starScreenLineupCount : 5,
     showEq: source.showEq === undefined
       ? previous.showEq !== false
       : source.showEq !== false,
@@ -120,19 +135,21 @@ function normalizeDiagnosticPreferences(value, current = {}) {
 }
 
 export function migrateAppsScriptUrl(value, configVersion) {
+  void configVersion;
   const candidate = String(value || "").trim();
-  if (!candidate) return candidate;
+  if (!candidate) return BRIDGE_PROXY_URL;
   try {
     const url = new URL(candidate);
-    const directAppsScriptWebApp =
+    if (["localhost", "127.0.0.1"].includes(url.hostname)) return candidate;
+    if (
       url.protocol === "https:" &&
-      url.hostname === "script.google.com" &&
-      /^\/macros\/s\/[^/]+\/exec\/?$/.test(url.pathname);
-    if (directAppsScriptWebApp) return BRIDGE_PROXY_URL;
+      url.hostname === "request.gstarxp.com" &&
+      url.pathname.replace(/\/$/, "") === "/api/bridge"
+    ) return BRIDGE_PROXY_URL;
   } catch {
-    // sanitizeConfig will preserve the invalid value so the UI can report it.
+    // Invalid and retired endpoints are replaced with the fixed D1 proxy.
   }
-  return candidate;
+  return BRIDGE_PROXY_URL;
 }
 
 export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
@@ -235,14 +252,6 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
         : input.appsScriptUrl,
       input.configVersion === undefined ? current.configVersion : input.configVersion
     ),
-    hostPin:
-      input.hostPin === undefined || input.hostPin === ""
-        ? current.hostPin
-        : String(input.hostPin).replace(/\D/g, "").slice(0, 12),
-    rememberHostPin:
-      input.rememberHostPin === undefined
-        ? Boolean(current.rememberHostPin)
-        : Boolean(input.rememberHostPin),
     virtualDJ: {
       host:
         vdj.host === undefined ? currentVdj.host : String(vdj.host || "127.0.0.1").trim(),
@@ -253,12 +262,6 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
           : String(vdj.password),
       timeoutMs: numberInRange(vdj.timeoutMs, currentVdj.timeoutMs, 500, 15000)
     },
-    requestIntervalSeconds: numberInRange(
-      input.requestIntervalSeconds,
-      current.requestIntervalSeconds,
-      2,
-      120
-    ),
     scanIntervalSeconds: numberInRange(
       input.scanIntervalSeconds,
       current.scanIntervalSeconds,
@@ -281,8 +284,7 @@ export function configForStorage(config) {
     lastHotelId: clean.rememberSelection ? clean.lastHotelId : "",
     lastVenueId: clean.rememberSelection ? clean.lastVenueId : "",
     lastActivityId: clean.rememberSelection ? clean.lastActivityId : "",
-    libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : [],
-    hostPin: clean.rememberHostPin ? clean.hostPin : ""
+    libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : []
   };
 }
 
@@ -306,7 +308,6 @@ export async function loadConfig() {
         parsed.configVersion
       );
       parsed.configVersion = DEFAULT_CONFIG.configVersion;
-      parsed.requestIntervalSeconds = 2;
       if (parsed.autoQueueExact === undefined) parsed.autoQueueExact = true;
       if (parsed.rememberLibraryFolders === undefined) {
         parsed.rememberLibraryFolders = true;
@@ -326,7 +327,6 @@ export async function loadConfig() {
       if (parsed.diagnostics === undefined) {
         parsed.diagnostics = { ...DEFAULT_CONFIG.diagnostics };
       }
-      if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;
       if (parsed.rememberSelection === undefined) parsed.rememberSelection = true;
       if (parsed.superhostLanguage === undefined) parsed.superhostLanguage = "es";
@@ -377,8 +377,6 @@ export function publicConfig(config) {
     authToken: "",
     deviceToken: "",
     signedIn: Boolean(config.authToken && config.deviceToken && config.deviceId),
-    hostPin: "",
-    hostPinConfigured: Boolean(config.hostPin),
     favoriteSongsByHotel: {},
     virtualDJ: {
       ...config.virtualDJ,
@@ -391,6 +389,5 @@ export function publicConfig(config) {
 export {
   BRIDGE_PROXY_URL,
   CONFIG_PATH,
-  LEGACY_DIRECT_APPS_SCRIPT_URL,
   ROOT
 };

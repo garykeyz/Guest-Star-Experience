@@ -1,50 +1,12 @@
 import { normalizeText } from "./matcher.mjs";
+import { PLAN_B_SONGS } from "../public/shared/plan-b.js";
+import { GUEST_LANGUAGES, LANGUAGE_BY_CODE } from "../public/shared/guest-locales.js";
+
+const hostSong = (item) => ({song:item.title,artist:item.artist,language:LANGUAGE_BY_CODE[item.language]?.nativeName||item.language});
 
 export const ROTATION_CATALOGS = Object.freeze({
-  spanish: Object.freeze([
-    { song: "Vivir Mi Vida", artist: "Marc Anthony", language: "Español" },
-    { song: "La Vida Es un Carnaval", artist: "Celia Cruz", language: "Español" },
-    { song: "Suavemente", artist: "Elvis Crespo", language: "Español" },
-    { song: "Bailando", artist: "Enrique Iglesias", language: "Español" },
-    { song: "Burbujas de Amor", artist: "Juan Luis Guerra", language: "Español" },
-    { song: "Como La Flor", artist: "Selena", language: "Español" },
-    { song: "Colgando en Tus Manos", artist: "Carlos Baute y Marta Sánchez", language: "Español" },
-    { song: "La Camisa Negra", artist: "Juanes", language: "Español" },
-    { song: "Rayando el Sol", artist: "Maná", language: "Español" },
-    { song: "Me Rehúso", artist: "Danny Ocean", language: "Español" },
-    { song: "Procura", artist: "Chichi Peralta", language: "Español" },
-    { song: "Obsesión", artist: "Aventura", language: "Español" },
-    { song: "Despacito", artist: "Luis Fonsi", language: "Español" },
-    { song: "Robarte un Beso", artist: "Carlos Vives y Sebastián Yatra", language: "Español" },
-    { song: "Creo en Mí", artist: "Natalia Jiménez", language: "Español" },
-    { song: "Corre", artist: "Jesse & Joy", language: "Español" },
-    { song: "Entra en Mi Vida", artist: "Sin Bandera", language: "Español" },
-    { song: "Qué Agonía", artist: "Yuridia y Ángela Aguilar", language: "Español" },
-    { song: "Te Aviso, Te Anuncio", artist: "Shakira", language: "Español" },
-    { song: "Eres", artist: "Café Tacvba", language: "Español" }
-  ]),
-  english: Object.freeze([
-    { song: "Dancing Queen", artist: "ABBA", language: "English" },
-    { song: "I Wanna Dance with Somebody", artist: "Whitney Houston", language: "English" },
-    { song: "Don't Stop Believin'", artist: "Journey", language: "English" },
-    { song: "Sweet Caroline", artist: "Neil Diamond", language: "English" },
-    { song: "Livin' on a Prayer", artist: "Bon Jovi", language: "English" },
-    { song: "Man! I Feel Like a Woman!", artist: "Shania Twain", language: "English" },
-    { song: "I Want It That Way", artist: "Backstreet Boys", language: "English" },
-    { song: "Valerie", artist: "Amy Winehouse", language: "English" },
-    { song: "Shallow", artist: "Lady Gaga and Bradley Cooper", language: "English" },
-    { song: "Flowers", artist: "Miley Cyrus", language: "English" },
-    { song: "Someone Like You", artist: "Adele", language: "English" },
-    { song: "Perfect", artist: "Ed Sheeran", language: "English" },
-    { song: "Rolling in the Deep", artist: "Adele", language: "English" },
-    { song: "Uptown Funk", artist: "Mark Ronson feat. Bruno Mars", language: "English" },
-    { song: "Can't Help Falling in Love", artist: "Elvis Presley", language: "English" },
-    { song: "Zombie", artist: "The Cranberries", language: "English" },
-    { song: "What's Up?", artist: "4 Non Blondes", language: "English" },
-    { song: "Wonderwall", artist: "Oasis", language: "English" },
-    { song: "I Will Survive", artist: "Gloria Gaynor", language: "English" },
-    { song: "Before He Cheats", artist: "Carrie Underwood", language: "English" }
-  ])
+  spanish: Object.freeze(PLAN_B_SONGS.filter((item)=>item.language==="es").map(hostSong)),
+  english: Object.freeze(PLAN_B_SONGS.filter((item)=>item.language==="en").map(hostSong))
 });
 
 export function rotationSongKey(item = {}) {
@@ -67,7 +29,9 @@ export function normalizeFavoriteSongs(value) {
       favoriteId: String(raw?.favoriteId || "").trim().slice(0, 100),
       song,
       artist,
-      language: /^english$/i.test(language) ? "English" : "Español"
+      language: GUEST_LANGUAGES.find((candidate)=>[
+        candidate.code,candidate.songCode,candidate.englishName,candidate.nativeName
+      ].some((name)=>normalizeText(name)===normalizeText(language)))?.nativeName||language
     };
     const key = rotationSongKey(item);
     if (!unique.has(key)) unique.set(key, item);
@@ -137,6 +101,7 @@ export function isKnownRotationSong(item, favorites = []) {
   return [
     ...ROTATION_CATALOGS.spanish,
     ...ROTATION_CATALOGS.english,
+    ...PLAN_B_SONGS.map(hostSong),
     ...normalizeFavoriteSongs(favorites)
   ].some((candidate) => rotationSongKey(candidate) === key);
 }

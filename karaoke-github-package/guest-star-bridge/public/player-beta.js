@@ -1,14 +1,24 @@
+import { brandingTheme, renderBrandLogos } from './shared/branding-theme.js';
 import { setLocalQrImage } from './qr-ui.js';
+import { currentHostActivityAccess } from './host-activity-access.js';
+import { starScreenLifecycle, starScreenPreferences, starScreenRequestData } from './star-screen-presentation.js';
+import { initCurrentSongBackground } from './player-visuals.js';
+import { attachPlayerQueueUI, reorderPlayerQueue, queueStemLabel } from './player-queue-ui.js';
+import { deterministicFunnyMessage } from './shared/guest-locales.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const activeRequest = (item) => !item?.outcome &&
-  !['Ya cantó', 'Saltado', 'Retirada del Player'].includes(String(item?.status || '')) &&
-  (!item?.stem || item.stem.ready === true || item.stem.status === 'ready');
+  !['Ya cantó', 'Saltado', 'Retirada del Player'].includes(String(item?.status || ''));
 const terminalRequest = (item) => Boolean(item?.outcome) || ['Ya cantó', 'Saltado', 'Retirada del Player'].includes(String(item?.status || ''));
 const escapeHtml = (value) => String(value || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const isVideoName = (value) => /\.(mp4|m4v|mov|webm)$/i.test(String(value || ''));
 const normalizeSearch = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const FADE_MS = 760;
+// A media time-stretcher is not an AudioParam: changing its rate can restart
+// internal analysis. Pointer events arrive much faster than an audible control
+// needs, so keep a continuous gesture below six retunes per second and always
+// flush the final value when the gesture ends.
+const TEMPO_APPLY_MIN_INTERVAL_MS = 180;
 
 export function playerProgressState(currentTime, duration) {
   const total = Number(duration);
@@ -39,6 +49,63 @@ export function playerQueueOrderSignature(values = []) {
   return JSON.stringify([...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))]);
 }
 
+export const AUTO_GAIN_TARGET_OUTPUT_DB = Object.freeze([-12, -9, -6, -3]);
+
+export function normalizeAutoGainTargetOutputDb(value) {
+  const candidate = Number(value);
+  return AUTO_GAIN_TARGET_OUTPUT_DB.includes(candidate) ? candidate : -6;
+}
+
+// The visible dB selection is an output headroom choice, not a per-sample
+// target.  The musical target stays 8 LU below it, while true peak is capped
+// at the selected output level.
+export function autoGainMusicalTargetLufs(targetOutputDb) {
+  return normalizeAutoGainTargetOutputDb(targetOutputDb) - 8;
+}
+
+export function normalizeAutoGainSettings(value = {}) {
+  const finiteOr = (candidate, fallback) => Number.isFinite(Number(candidate)) ? Number(candidate) : fallback;
+  const targetOutputDb = normalizeAutoGainTargetOutputDb(value.targetOutputDb);
+  return {
+    enabled: value.enabled !== false,
+    targetOutputDb,
+    targetLufs: autoGainMusicalTargetLufs(targetOutputDb),
+    maxBoostDb: Math.max(0, Math.min(12, finiteOr(value.maxBoostDb, 6))),
+    maxAttenuationDb: Math.max(0, Math.min(24, finiteOr(value.maxAttenuationDb, 12))),
+    truePeakCeilingDbtp: targetOutputDb,
+    masterDb: Math.max(-60, Math.min(0, finiteOr(value.masterDb, 0)))
+  };
+}
+
+export function calculateTrackAutoGain(analysis, settings = {}) {
+  const normalized = normalizeAutoGainSettings(settings);
+  const loudness = Number(analysis?.integratedLufs);
+  const peak = Number(analysis?.truePeakDbtp);
+  if (!normalized.enabled || !Number.isFinite(loudness) || !Number.isFinite(peak)) {
+    return { appliedDb: 0, pending: !analysis || analysis.pending === true };
+  }
+  const bounded = Math.max(-normalized.maxAttenuationDb, Math.min(normalized.maxBoostDb, normalized.targetLufs - loudness));
+  return { appliedDb: Math.min(bounded, normalized.truePeakCeilingDbtp - peak), pending: false };
+}
+
+export function masterVolumeGain(percent) {
+  return Math.max(0, Math.min(100, Number(percent) || 0)) / 100;
+}
+
+export function masterVolumeDb(percent) {
+  const gain = masterVolumeGain(percent);
+  return gain > 0 ? 20 * Math.log10(gain) : -60;
+}
+
+export function linearToDbfs(value) {
+  return value > 0 ? Math.max(-60, 20 * Math.log10(value)) : -60;
+}
+
+export function dbToLinear(db) {
+  const value = Number(db);
+  return value <= -60 ? 0 : 10 ** (value / 20);
+}
+
 export function movePlayerQueueOrder(values, id, direction) {
   const order = [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))];
   const index = order.indexOf(String(id));
@@ -66,6 +133,12 @@ export function choosePlayerQueueOrder({ remoteOrder, localOrder, pendingSignatu
   };
 }
 
+export function playerTrackChangeAllowed({ activeTrackId = '', targetTrackId = '', authorized = false } = {}) {
+  const active = String(activeTrackId || '');
+  const target = String(targetTrackId || '');
+  return Boolean(target) && (authorized === true || !active);
+}
+
 export function playerStarScreenConnection({
   expected = false,
   lastHeartbeatAt = 0,
@@ -84,13 +157,231 @@ export function playerAudioRecoveryAction(state) {
   return state === 'running' ? 'ready' : 'wait';
 }
 
-export function playerAudioOutputSupported(AudioEngine, mediaDevices) {
-  return Boolean(
+export function playerAudioOutputSupported(AudioEngine, mediaDevices, nativeBridge = false) {
+  return Boolean(nativeBridge || (
     AudioEngine &&
     typeof AudioEngine.prototype?.setSinkId === 'function' &&
     mediaDevices &&
     typeof mediaDevices.enumerateDevices === 'function'
-  );
+  ));
+}
+
+export function tempoRate(originalBpm, targetBpm) {
+  const original = Number(originalBpm);
+  const target = Number(targetBpm);
+  if (!(original > 0) || !(target > 0)) return 1;
+  return Math.max(0.5, Math.min(1.5, target / original));
+}
+
+export function normalizeTempoPercent(value) {
+  return Math.max(50, Math.min(150, Math.round((Number(value) || 100) * 10) / 10));
+}
+
+export function applyTempoRate(element, rate) {
+  const normalizedRate = Math.max(0.5, Math.min(1.5, Number(rate) || 1));
+  if (!element) return normalizedRate;
+  // WebKit uses the prefixed property while modern engines use preservesPitch.
+  // Both keep the tempo control from becoming a hidden pitch control.
+  // Do not reassign any of these values when nothing changed: assigning
+  // playbackRate restarts WebKit's real-time time-stretch analysis.
+  try {
+    if (element.preservesPitch !== true) element.preservesPitch = true;
+    if (element.webkitPreservesPitch !== true) element.webkitPreservesPitch = true;
+    if (Math.abs((Number(element.playbackRate) || 1) - normalizedRate) > 0.0001) {
+      element.playbackRate = normalizedRate;
+    }
+  } catch {
+    // An unavailable media element will receive the requested rate after it
+    // loads.  A tempo interaction must never interrupt the active player.
+  }
+  return normalizedRate;
+}
+
+export function tempoApplicationDelay({
+  now = 0,
+  lastAppliedAt = -Infinity,
+  minimumIntervalMs = TEMPO_APPLY_MIN_INTERVAL_MS,
+  immediate = false
+} = {}) {
+  if (immediate) return 0;
+  const elapsed = Math.max(0, Number(now) - Number(lastAppliedAt));
+  return Math.max(0, Math.round(Number(minimumIntervalMs) || 0) - elapsed);
+}
+
+// AVAudioEngine owns the audible clock.  WebKit receives only a gentle visual
+// correction: small drift is absorbed with a bounded rate adjustment and a
+// decoder-expensive seek is reserved for a real discontinuity.
+export function nativeVisualSyncPlan({
+  audioPosition = 0,
+  visualPosition = 0,
+  tempoPercent = 100,
+  seeking = false,
+  millisecondsSinceHardSeek = Infinity,
+  hardSeekThreshold = 0.25,
+  hardSeekCooldownMs = 1500
+} = {}) {
+  const nativePosition = Math.max(0, Number(audioPosition) || 0);
+  const currentPosition = Math.max(0, Number(visualPosition) || 0);
+  const baseRate = Math.max(0.5, Math.min(1.5, (Number(tempoPercent) || 100) / 100));
+  const drift = nativePosition - currentPosition;
+  const hardSeek = !seeking && Math.abs(drift) >= hardSeekThreshold && Number(millisecondsSinceHardSeek) >= hardSeekCooldownMs;
+  const correction = Math.max(-0.04, Math.min(0.04, drift * 0.5));
+  const playbackRate = hardSeek || Math.abs(drift) < 0.025
+    ? baseRate
+    : Math.max(0.5, Math.min(1.5, baseRate * (1 + correction)));
+  return { drift, baseRate, playbackRate, seekTo: hardSeek ? nativePosition : null };
+}
+
+export function nextTempoPercent(current, direction, step = 1) {
+  const increment = Math.abs(Number(step) || 1);
+  return normalizeTempoPercent(normalizeTempoPercent(current) + Math.sign(Number(direction) || 0) * increment);
+}
+
+export function bpmAtTempo(originalBpm, tempoPercent = 100) {
+  const bpm = Number(originalBpm);
+  return bpm > 0 ? Math.round(bpm * normalizeTempoPercent(tempoPercent) / 100) : 0;
+}
+
+export function nextSemitone(current, direction) {
+  return Math.max(-6, Math.min(6, Math.round(Number(current) || 0) + Math.sign(Number(direction) || 0)));
+}
+
+export function trackAnalysisIsCurrent({ generation, currentGeneration, requestId, currentRequestId } = {}) {
+  return Number(generation) === Number(currentGeneration) && String(requestId || '') === String(currentRequestId || '');
+}
+
+export function embeddedBpm(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || 0);
+  const limit = Math.min(bytes.length - 11, 1024 * 1024);
+  for (let index = 0; index < limit; index += 1) {
+    if (bytes[index] !== 0x54 || bytes[index + 1] !== 0x42 || bytes[index + 2] !== 0x50 || bytes[index + 3] !== 0x4d) continue;
+    const size = ((bytes[index + 4] << 24) >>> 0) + (bytes[index + 5] << 16) + (bytes[index + 6] << 8) + bytes[index + 7];
+    if (size < 2 || size > 32 || index + 10 + size > bytes.length) continue;
+    const text = String.fromCharCode(...bytes.subarray(index + 11, index + 10 + size)).replace(/\0/g, '').trim();
+    const bpm = Number(text.match(/\d+(?:\.\d+)?/)?.[0]);
+    if (bpm >= 30 && bpm <= 300) return Math.round(bpm);
+  }
+  return 0;
+}
+
+export function fadeGainForVolume(configuredVolume, targetVolume) {
+  const configured = Math.max(0, Math.min(1, Number(configuredVolume) || 0));
+  const target = Math.max(0, Math.min(configured, Number(targetVolume) || 0));
+  return configured > 0 ? target / configured : 0;
+}
+
+const PITCH_NAMES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+export function transposeKey(key, semitones = 0) {
+  const match = String(key || '').trim().match(/^([A-G])([#b]?)(m?)$/);
+  if (!match) return '';
+  const flatToSharp = { Db: 'C#', Eb: 'D#', Gb: 'F#', Ab: 'G#', Bb: 'A#' };
+  const root = flatToSharp[`${match[1]}${match[2]}`] || `${match[1]}${match[2]}`;
+  const index = PITCH_NAMES_SHARP.indexOf(root);
+  if (index < 0) return '';
+  const shifted = PITCH_NAMES_SHARP[(index + Math.round(Number(semitones) || 0) % 12 + 12) % 12];
+  return `${shifted}${match[3]}`;
+}
+
+function fftMagnitudes(input) {
+  const size = input.length;
+  const real = new Float64Array(size);
+  const imag = new Float64Array(size);
+  for (let index = 0; index < size; index += 1) real[index] = input[index] * (0.5 - 0.5 * Math.cos(2 * Math.PI * index / (size - 1)));
+  for (let index = 1, reverse = 0; index < size; index += 1) {
+    let bit = size >> 1;
+    for (; reverse & bit; bit >>= 1) reverse ^= bit;
+    reverse ^= bit;
+    if (index < reverse) { [real[index], real[reverse]] = [real[reverse], real[index]]; [imag[index], imag[reverse]] = [imag[reverse], imag[index]]; }
+  }
+  for (let length = 2; length <= size; length <<= 1) {
+    const angle = -2 * Math.PI / length;
+    for (let offset = 0; offset < size; offset += length) {
+      for (let index = 0; index < length / 2; index += 1) {
+        const cosine = Math.cos(angle * index); const sine = Math.sin(angle * index);
+        const even = offset + index; const odd = even + length / 2;
+        const tr = real[odd] * cosine - imag[odd] * sine;
+        const ti = real[odd] * sine + imag[odd] * cosine;
+        real[odd] = real[even] - tr; imag[odd] = imag[even] - ti;
+        real[even] += tr; imag[even] += ti;
+      }
+    }
+  }
+  return real.slice(0, size / 2).map((value, index) => Math.hypot(value, imag[index]));
+}
+
+export function analyzeAudioFeatures(samples, sampleRate) {
+  const pcm = samples instanceof Float32Array ? samples : Float32Array.from(samples || []);
+  const rate = Number(sampleRate) || 44100;
+  if (pcm.length < rate * 2) return { bpm: null, key: '', keyConfidence: 0 };
+  const hop = 256;
+  const windowSize = 1024;
+  const envelope = [];
+  let previousEnergy = 0;
+  for (let offset = 0; offset + windowSize <= pcm.length; offset += hop) {
+    let energy = 0;
+    for (let index = 0; index < windowSize; index += 1) energy += pcm[offset + index] * pcm[offset + index];
+    energy = Math.sqrt(energy / windowSize);
+    envelope.push(Math.max(0, energy - previousEnergy));
+    previousEnergy = energy;
+  }
+  let bestBpm = 0; let bestScore = -Infinity;
+  for (let bpm = 60; bpm <= 200; bpm += 1) {
+    const lag = (60 * rate) / (bpm * hop);
+    let score = 0;
+    const first = Math.ceil(lag);
+    for (let index = first; index < envelope.length; index += 1) {
+      const position = index - lag; const before = Math.floor(position); const fraction = position - before;
+      const delayed = envelope[before] * (1 - fraction) + (envelope[before + 1] || 0) * fraction;
+      score += envelope[index] * delayed;
+    }
+    const normalized = score / Math.max(1, envelope.length - first);
+    if (normalized > bestScore) { bestScore = normalized; bestBpm = bpm; }
+  }
+  if (bestBpm > 0 && bestBpm < 70) bestBpm *= 2;
+  else if (bestBpm > 150) bestBpm = Math.round(bestBpm / 2);
+  const envelopePeak = Math.max(...envelope);
+  const validBpm = envelopePeak > 0 && envelope.filter((value) => value >= envelopePeak * 0.2).length >= 4;
+
+  const fftSize = 4096;
+  const chroma = new Float64Array(12);
+  const analysisSeconds = Math.min(120, pcm.length / rate);
+  const frames = Math.max(1, Math.min(180, Math.floor(analysisSeconds * 2)));
+  for (let frame = 0; frame < frames; frame += 1) {
+    const offset = Math.min(pcm.length - fftSize, Math.floor((pcm.length - fftSize) * frame / Math.max(1, frames - 1)));
+    const magnitudes = fftMagnitudes(pcm.subarray(Math.max(0, offset), Math.max(0, offset) + fftSize));
+    for (let bin = Math.ceil(55 * fftSize / rate); bin < magnitudes.length; bin += 1) {
+      const frequency = bin * rate / fftSize;
+      if (frequency > 1760) break;
+      if (magnitudes[bin] < magnitudes[bin - 1] || magnitudes[bin] < magnitudes[bin + 1]) continue;
+      const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
+      chroma[(midi % 12 + 12) % 12] += Math.sqrt(magnitudes[bin]);
+    }
+  }
+  const majorProfile = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const minorProfile = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  const chromaMean = chroma.reduce((sum, value) => sum + value, 0) / 12;
+  const chromaNorm = Math.sqrt(chroma.reduce((sum, value) => sum + (value - chromaMean) ** 2, 0));
+  if (chromaNorm < 1e-9) return { bpm: bestScore > 0 && validBpm ? bestBpm : null, key: '', keyConfidence: 0 };
+  let bestKey = ''; let bestKeyScore = -Infinity; let secondKeyScore = -Infinity;
+  for (let root = 0; root < 12; root += 1) {
+    for (const [profile, suffix] of [[majorProfile, ''], [minorProfile, 'm']]) {
+      const profileMean = profile.reduce((sum, value) => sum + value, 0) / 12;
+      const profileNorm = Math.sqrt(profile.reduce((sum, value) => sum + (value - profileMean) ** 2, 0)) || 1;
+      let score = 0;
+      for (let pitch = 0; pitch < 12; pitch += 1) score += (chroma[pitch] - chromaMean) * (profile[(pitch - root + 12) % 12] - profileMean);
+      score /= chromaNorm * profileNorm;
+      if (score > bestKeyScore) {
+        secondKeyScore = bestKeyScore;
+        bestKeyScore = score;
+        bestKey = `${PITCH_NAMES_SHARP[root]}${suffix}`;
+      } else if (score > secondKeyScore) secondKeyScore = score;
+    }
+  }
+  // A profile correlation is only a ranking, not a calibrated probability.
+  // Report a bounded margin so ambiguous major/relative-minor results remain
+  // visibly low-confidence instead of being presented as certain.
+  const keyConfidence = Math.max(0, Math.min(1, (bestKeyScore - secondKeyScore) / 0.25));
+  return { bpm: bestScore > 0 && validBpm ? bestBpm : null, key: bestKey, keyConfidence };
 }
 
 function disconnectNode(node) {
@@ -101,8 +392,9 @@ export function reconnectPlayerAudioGraph(graph) {
   if (!graph?.destination) throw new Error('The Player audio destination is unavailable.');
   const nodes = [
     graph.source, graph.instrumentalSource, graph.vocalsSource, graph.backgroundSource,
-    graph.normalGain, graph.instrumentalGain, graph.vocalsGain, graph.backgroundGain,
-    graph.bus, graph.low, graph.mid, graph.high, graph.analyser, graph.master
+    graph.normalGain, graph.instrumentalGain, graph.vocalsGain, graph.backgroundGain, graph.backgroundFade,
+    graph.bus, graph.karaokeAutoGain, graph.backgroundAutoGain, graph.pitch, graph.low, graph.mid, graph.high,
+    graph.analyser, graph.master, graph.karaokeFade, graph.outputMix, graph.finalMaster, graph.outputAnalyser
   ];
   nodes.forEach(disconnectNode);
   graph.source.connect(graph.normalGain);
@@ -111,19 +403,27 @@ export function reconnectPlayerAudioGraph(graph) {
   graph.instrumentalGain.connect(graph.bus);
   graph.vocalsSource.connect(graph.vocalsGain);
   graph.vocalsGain.connect(graph.bus);
-  graph.bus.connect(graph.low);
+  graph.bus.connect(graph.karaokeAutoGain || graph.pitch || graph.low);
+  if (graph.karaokeAutoGain) graph.karaokeAutoGain.connect(graph.pitch || graph.low);
+  if (graph.pitch) graph.pitch.connect(graph.low);
   graph.low.connect(graph.mid);
   graph.mid.connect(graph.high);
   graph.high.connect(graph.analyser);
   graph.analyser.connect(graph.master);
-  graph.master.connect(graph.destination);
-  graph.backgroundSource.connect(graph.backgroundGain);
-  graph.backgroundGain.connect(graph.destination);
+  graph.master.connect(graph.karaokeFade || graph.outputMix || graph.destination);
+  if (graph.karaokeFade) graph.karaokeFade.connect(graph.outputMix || graph.destination);
+  graph.backgroundSource.connect(graph.backgroundAutoGain || graph.backgroundGain);
+  if (graph.backgroundAutoGain) graph.backgroundAutoGain.connect(graph.backgroundGain);
+  graph.backgroundGain.connect(graph.backgroundFade || graph.destination);
+  if (graph.backgroundFade) graph.backgroundFade.connect(graph.outputMix || graph.destination);
+  if (graph.outputMix) graph.outputMix.connect(graph.finalMaster || graph.destination);
+  if (graph.finalMaster) graph.finalMaster.connect(graph.outputAnalyser || graph.destination);
+  if (graph.outputAnalyser) graph.outputAnalyser.connect(graph.destination);
   graph.connected = true;
   return graph;
 }
 
-function normalizeBrandImageUrl(value) {
+export function normalizeBrandImageUrl(value) {
   const source = String(value || '').trim();
   if (!source) return '';
   try {
@@ -166,6 +466,7 @@ function shuffled(values) {
 
 export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = null, operations = {} }) {
   let media = $('#playerMedia');
+  const currentSongBackground = initCurrentSongBackground({ getMedia: () => media, getSource: () => sourceForCurrent() });
   let instrumentalAudio = $('#playerInstrumentalAudio');
   let vocalsAudio = $('#playerVocalsAudio');
   let backgroundAudio = $('#playerBackgroundAudio');
@@ -173,9 +474,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   const channel = new BroadcastChannel('guest-star-player');
   let state = null;
   let currentId = '';
+  let activePlaybackSession = null;
   let order = [];
   let queueVisibility = {};
+  let starScreenLanguage = 'es';
+  let dedicationVisibleId = '';
+  let dedicationVisibleText = '';
   let pendingOrderSignature = '';
+  let queueOrderSaveTimer = 0;
+  let queueOrderSaveInFlight = false;
+  let queueOrderSavePending = false;
   let pendingVisibilitySignature = '';
   const openYoutubeIds = new Set();
   const expandedRequestIds = new Set();
@@ -185,8 +493,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let libraryOffset = 0;
   let libraryHasMore = false;
   let libraryBrowseAll = false;
+  let libraryGeneration = 0;
+  let librarySearchTimer = 0;
+  let libraryOpened = false;
+  let libraryScanAt = '';
+  let libraryRequestKey = '';
+  let libraryLoading = false;
   let planBItems = [];
   let planBLoading = false;
+  let planBSelectionMade = false;
+  let activePlanBList = 'both';
   let pendingTrack = null;
   let stageMode = 'lobby';
   let scenePhase = 'lobby';
@@ -194,6 +510,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let publishSequence = 0;
   let transitionToken = 0;
   let transitionBusy = false;
+  let karaokeFadeGeneration = 0;
+  let backgroundFadeGeneration = 0;
   let intentionalMediaReset = false;
   let intentionalBackgroundReset = false;
   let backgroundCurrentId = '';
@@ -213,14 +531,86 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let audioContext = null;
   let analyser = null;
   let mediaAudioGraph = null;
+  let pitchWorkletState = 'loading';
+  let pitchWorkletPromise = null;
   let waveformFrame = 0;
+  let nativeWaveformPaintAt = -Infinity;
   let audioRecoveryPromise = null;
   let audioOutputLost = false;
   let currentAudioOutputId = '';
   let lastRequestedAudioOutputId = null;
+  let tempoPercent = 100;
+  let karaokeTempoTimer = 0;
+  let karaokeTempoLastAppliedAt = -Infinity;
+  let karaokeTempoLocked = false;
+  let keySemitones = 0;
+  let backgroundTempoPercent = 100;
+  let backgroundTempoTimer = 0;
+  let backgroundTempoLastAppliedAt = -Infinity;
+  let backgroundTempoLocked = false;
+  let currentAnalysis = null;
+  let analysisGeneration = 0;
+  let backgroundAnalysis = null;
+  let backgroundAnalysisGeneration = 0;
+  let currentLoudness = null;
+  let backgroundLoudness = null;
+  let karaokeAutoGainDb = 0;
+  let backgroundAutoGainDb = 0;
+  let appliedMasterDb = 0;
+  const gainRampGeneration = { karaoke: 0, background: 0, master: 0 };
+  const analysisCache = new Map();
+  const analysisTasks = new Map();
+  const analysisControllers = new Map();
+  let analysisTail = Promise.resolve();
+  const nativeAudioRequests = new Map();
+  const nativeDeckConfigPending = new Map();
+  const nativeDeckConfigTimers = new Map();
+  let nativeAudioState = null;
+  let nativeAudioStateReceivedAt = 0;
+  let nativeKaraokeGain = mediaTargetVolume;
+  let nativeBackgroundGain = backgroundTargetVolume;
+  let nativeVisualSeekUntil = 0;
+  let nativeVisualSeekTimer = 0;
+  let nativeVisualSeekPending = false;
+  let nativeVisualPlaybackExpected = false;
+  let nativeVisualPlayPending = false;
+  let nativeVisualPlayRetryAt = 0;
+  let karaokeSeekGeneration = 0;
+  let karaokeSeekInFlight = false;
+  let karaokeQueuedSeek = null;
+  let stemIntegrationTask = null;
+  let masterPercent = 100;
+  let outputMeterTimer = 0;
+  const outputMeterSamples = new Float32Array(512);
+  let outputMeterSource = { rmsL: 0, rmsR: 0, peakL: 0, peakR: 0, receivedAt: -Infinity };
+  const outputMeterVisual = { rms: 0, peak: 0, held: 0, until: 0, paintedAt: 0 };
+  let karaokeScrubPreview = null;
+  let karaokeSeekPointerActive = false;
+  let nativeKaraokeTransportIntent = null;
+  let nativeKaraokeTransportIntentAt = -Infinity;
+  let nativeBackgroundTransportIntent = null;
+  let nativeBackgroundTransportIntentAt = -Infinity;
+  let nativeBackgroundWasPlaying = false;
+  let nativeKaraokeClockOverride = null;
+  let karaokePendingStartPosition = 0;
+  // A row selection is a transport boundary, not merely a UI change.  Keep
+  // this identity separate from the AVAudioEngine deck so a late metadata,
+  // stem, or AVFoundation download from the former row can never become the
+  // source for the newly selected video.
+  let karaokeMediaGeneration = 0;
+  let karaokeMediaRequestId = '';
+  let nativeKaraokeDeckRequestId = '';
+  let karaokeNativeLoadPromise = null;
+  let lockedStemRequestId = '';
+  let nativeTransportPublishAt = -Infinity;
+  let visualTransportRevision = 0;
+  let nativeKaraokeWasPlaying = false;
+  let nativeLastHardVisualSeekAt = -Infinity;
+  let nativeAudioHealthSignature = '';
+  const nativeVideoSyncMetrics = { stateEvents: 0, hardSeeks: 0, rateWrites: 0, maxDriftSeconds: 0 };
+  let nativeWaveformHistory = [];
   let lockedStemEngine = '';
-  let stemEngineSelection = 'auto';
-  let stemEngineExplicitlyChanged = false;
+  const automaticStemRequestIds = new Set();
   let directSearchTimer = 0;
   let directSearchGeneration = 0;
   let directSearchTracks = [];
@@ -232,7 +622,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let starScreenExpected = false;
   let starScreenLastHeartbeatAt = 0;
   let starScreenHeartbeatVisible = false;
+  let starScreenVideoHealth = null;
   const audioSettingsKey = 'guest-star:player-audio-processing';
+  const autoGainSettingsKey = 'guest-star:auto-gain-v1';
   let audioSettings = (() => {
     try {
       const saved = JSON.parse(localStorage.getItem(audioSettingsKey) || '{}');
@@ -240,12 +632,503 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         low: Math.max(-12, Math.min(12, Number(saved.low) || 0)),
         mid: Math.max(-12, Math.min(12, Number(saved.mid) || 0)),
         high: Math.max(-12, Math.min(12, Number(saved.high) || 0)),
-        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0))
+        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0)),
+        backgroundTempoPercent: normalizeTempoPercent(saved.backgroundTempoPercent),
+        backgroundTempoLocked: saved.backgroundTempoLocked === true
       };
-    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0 }; }
+    } catch { return { low: 0, mid: 0, high: 0, vocalLevel: 0, backgroundTempoPercent: 100, backgroundTempoLocked: false }; }
   })();
+  let autoGainSettings = (() => {
+    try { return normalizeAutoGainSettings(JSON.parse(localStorage.getItem(autoGainSettingsKey) || '{}')); }
+    catch { return normalizeAutoGainSettings(); }
+  })();
+  masterPercent = autoGainSettings.masterDb <= -60 ? 0 : Math.round(dbToLinear(autoGainSettings.masterDb) * 100);
+  appliedMasterDb = masterVolumeDb(masterPercent);
+  backgroundTempoPercent = audioSettings.backgroundTempoPercent;
+  backgroundTempoLocked = audioSettings.backgroundTempoLocked;
 
   const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  const nativeAudioBridge = () => Boolean(window.webkit?.messageHandlers?.guestStarNative?.postMessage);
+  const usingNativeAudio = () => nativeAudioBridge();
+  window.addEventListener('gueststar:native-audio-result', (event) => {
+    const detail = event.detail || {};
+    const pending = nativeAudioRequests.get(String(detail.requestId || ''));
+    if (!pending) return;
+    nativeAudioRequests.delete(String(detail.requestId || ''));
+    window.clearTimeout(pending.timeout);
+    if (detail.ok === false) pending.reject(new Error(detail.error || 'La operación nativa de audio falló.'));
+    else pending.resolve(detail);
+  });
+
+  function nativeAudioRequest(action, payload = {}) {
+    return new Promise((resolve, reject) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // A video may need an AVFoundation extraction pass before it becomes an
+      // audio file.  Keep the request alive long enough for a local, large
+      // karaoke asset without silently falling back to WebKit audio.
+      const timeout = window.setTimeout(() => { nativeAudioRequests.delete(requestId); reject(new Error('El bridge nativo de audio no respondió.')); }, 60000);
+      nativeAudioRequests.set(requestId, { resolve, reject, timeout });
+      window.webkit.messageHandlers.guestStarNative.postMessage({ action, requestId, ...payload });
+    });
+  }
+
+  function nativeAudioCommand(action, payload = {}) {
+    if (!usingNativeAudio()) return;
+    window.webkit.messageHandlers.guestStarNative.postMessage({ action, ...payload });
+  }
+
+  function silenceWebKitAudio() {
+    if (!usingNativeAudio()) return;
+    // WKWebView still owns the video frames and metadata, but never an audible
+    // track.  All four possible audio sources are rendered by AVAudioEngine.
+    for (const element of [media, instrumentalAudio, vocalsAudio, backgroundAudio]) element.muted = true;
+  }
+
+  function visualRate(element, percent) {
+    const rate = Math.max(0.5, Math.min(1.5, Number(percent) / 100 || 1));
+    try {
+      if (Math.abs((Number(element.playbackRate) || 1) - rate) > 0.003) {
+        element.playbackRate = rate;
+        nativeVideoSyncMetrics.rateWrites += 1;
+      }
+    } catch { /* The next metadata event will apply it. */ }
+    return rate;
+  }
+
+  function visualRateValue(element, rate) {
+    return visualRate(element, Math.max(50, Math.min(150, Number(rate) * 100)));
+  }
+
+  function nativeVisualSeekIsPending() {
+    return nativeVisualSeekPending || performance.now() < nativeVisualSeekUntil;
+  }
+
+  function setVisualClockPosition(element, position) {
+    nativeVisualSeekPending = true;
+    nativeVisualSeekUntil = performance.now() + 1200;
+    window.clearTimeout(nativeVisualSeekTimer);
+    try { element.currentTime = Math.max(0, Number(position) || 0); } catch { /* Metadata may still be loading. */ }
+    nativeVisualSeekTimer = window.setTimeout(() => {
+      nativeVisualSeekPending = false;
+      nativeVisualSeekUntil = 0;
+    }, 1200);
+  }
+
+  function karaokeMediaSource(requestId = currentId) {
+    const id = String(requestId || '');
+    return id ? `/api/player/media/${encodeURIComponent(id)}` : '';
+  }
+
+  function karaokeStemSource(requestId, kind, engine = lockedStemEngine) {
+    const id = String(requestId || '');
+    const selectedEngine = String(engine || '').toLowerCase();
+    if (!id || !['instrumental', 'vocals'].includes(kind) || !['spleeter', 'demucs'].includes(selectedEngine)) return '';
+    return `/api/player/stems/${encodeURIComponent(id)}/${kind}?engine=${encodeURIComponent(selectedEngine)}`;
+  }
+
+  function nativeKaraokeSources(requestId = currentId) {
+    const id = String(requestId || '');
+    const original = absoluteMediaURL(karaokeMediaSource(id));
+    // Never read currentSrc here.  WKWebView may keep the previous video's
+    // resolved URL while the replacement is loading, which made its audio
+    // become the native track for a newly selected row.
+    if (!original) return [];
+    if (!lockedStemSourceReady(id)) return [{ slot: 'original', url: original, gain: 1 }];
+    if (current()?.stem?.format === 'gsx') return stemSourcesForEngine(id, lockedStemEngine);
+    return [
+      { slot: 'instrumental', url: absoluteMediaURL(karaokeStemSource(id, 'instrumental')), gain: 1 },
+      // The source is always loaded at unity.  vocalLevel is sent separately
+      // to the native vocals mixer, so a slider move changes only that real
+      // channel and can never be mistaken for the master gain.
+      { slot: 'vocals', url: absoluteMediaURL(karaokeStemSource(id, 'vocals')), gain: 1 }
+    ].filter((source) => Boolean(source.url));
+  }
+
+  function nativeDeckIsLoaded(deck) {
+    return Number((nativeAudioState?.decks || []).find((entry) => entry.deck === deck)?.sources) > 0;
+  }
+
+  function nativeDeckState(deck) {
+    return (nativeAudioState?.decks || []).find((entry) => entry.deck === deck) || null;
+  }
+
+  // Native transport replies and its four-per-second status snapshots arrive
+  // on separate IPC paths.  Keep a very short optimistic snapshot between
+  // them so a just-paused deck cannot be announced to Star Screen as playing,
+  // and a just-seeked deck cannot be announced at its old position.
+  function setNativeKaraokeTransportSnapshot(position, playing) {
+    const bounded = Math.max(0, Number(position) || 0);
+    nativeKaraokeClockOverride = {
+      position: bounded,
+      playing: Boolean(playing),
+      tempoPercent,
+      receivedAt: performance.now()
+    };
+    karaokePendingStartPosition = bounded;
+  }
+
+  function setNativeKaraokeTransportIntent(playing, position) {
+    nativeKaraokeTransportIntent = Boolean(playing);
+    nativeKaraokeTransportIntentAt = performance.now();
+    if (Number.isFinite(Number(position))) setNativeKaraokeTransportSnapshot(position, playing);
+  }
+
+  function nativeKaraokeTransportIsPlaying() {
+    if (!usingNativeAudio()) return Boolean(media.src && !media.paused && !media.ended);
+    // An explicit play/pause reply owns the UI for a bounded handoff window.
+    // After that, the native deck is again the sole source of truth (including
+    // natural end-of-track and output-device recovery).
+    if (nativeKaraokeTransportIntent !== null && performance.now() - nativeKaraokeTransportIntentAt < 1250) {
+      return nativeKaraokeTransportIntent;
+    }
+    nativeKaraokeTransportIntent = null;
+    return nativeAudioState?.running === true && nativeDeckState('karaoke')?.playing === true;
+  }
+
+  function karaokeTransportIsPlaying() {
+    return nativeKaraokeTransportIsPlaying();
+  }
+
+  // WKWebView may suspend a muted <audio> element whenever its window is
+  // minimized or occluded.  It is metadata-only in native mode, so its paused
+  // state must never be allowed to control AVAudioEngine's ambient deck.
+  function backgroundTransportIsPlaying() {
+    if (!usingNativeAudio()) return Boolean(backgroundAudio.src && !backgroundAudio.paused && !backgroundAudio.ended);
+    if (nativeBackgroundTransportIntent !== null && performance.now() - nativeBackgroundTransportIntentAt < 1250) {
+      return nativeBackgroundTransportIntent;
+    }
+    nativeBackgroundTransportIntent = null;
+    return nativeAudioState?.running === true && nativeDeckState('background')?.playing === true;
+  }
+
+  function backgroundClockPosition() {
+    const position = Number(nativeDeckState('background')?.position);
+    return usingNativeAudio() && Number.isFinite(position) ? Math.max(0, position) : Math.max(0, Number(backgroundAudio.currentTime) || 0);
+  }
+
+  function backgroundClockDuration() {
+    const duration = Number(nativeDeckState('background')?.duration);
+    return usingNativeAudio() && duration > 0 ? duration : Math.max(0, Number(backgroundAudio.duration) || 0);
+  }
+
+  function keepNativeVideoVisualPlaying(element = media) {
+    if (!usingNativeAudio() || !nativeVisualPlaybackExpected || !element.paused || element.ended || nativeVisualPlayPending) return;
+    const now = performance.now();
+    if (now < nativeVisualPlayRetryAt) return;
+    nativeVisualPlayPending = true;
+    Promise.resolve(element.play())
+      .then(() => { nativeVisualPlayRetryAt = 0; })
+      .catch(() => { nativeVisualPlayRetryAt = performance.now() + 1000; })
+      .finally(() => { nativeVisualPlayPending = false; });
+  }
+
+  function karaokeClockPosition() {
+    const deck = nativeDeckState('karaoke');
+    const position = Number(deck?.position);
+    if (!usingNativeAudio()) return Math.max(0, Number(media.currentTime) || 0);
+    const optimistic = nativeKaraokeClockOverride;
+    if (optimistic && performance.now() - optimistic.receivedAt < 1250) {
+      const rate = Math.max(50, Math.min(150, Number(optimistic.tempoPercent) || tempoPercent)) / 100;
+      const elapsed = optimistic.playing ? Math.max(0, (performance.now() - optimistic.receivedAt) / 1000) : 0;
+      const duration = Number(deck?.duration) || Number(media.duration);
+      const predicted = optimistic.position + elapsed * rate;
+      return duration > 0 ? Math.min(duration, predicted) : predicted;
+    }
+    // A fresh AVAudioEngine reports an empty karaoke deck as position zero.
+    // Keep the recovered position visible and ready for nativeAudioLoad until
+    // that deck has actual files; otherwise reopening the app looks like a
+    // reset and Play starts the restored song at the wrong time.
+    if (!nativeDeckIsLoaded('karaoke')) return Math.max(0, Number(karaokePendingStartPosition) || 0);
+    if (!Number.isFinite(position)) return Math.max(0, Number(media.currentTime) || 0);
+    const elapsed = deck?.playing === true ? Math.max(0, (performance.now() - nativeAudioStateReceivedAt) / 1000) : 0;
+    const predicted = position + elapsed * (Math.max(50, Math.min(150, Number(deck?.tempoPercent) || tempoPercent)) / 100);
+    const duration = Number(deck?.duration);
+    return duration > 0 ? Math.min(duration, predicted) : predicted;
+  }
+
+  function karaokeClockDuration() {
+    const duration = Number(nativeDeckState('karaoke')?.duration);
+    return usingNativeAudio() && duration > 0 ? duration : Math.max(0, Number(media.duration) || 0);
+  }
+
+  function nativeDeckConfiguration(deck, position) {
+    return {
+      deck,
+      position: Math.max(0, Number(position) || 0),
+      tempoPercent: deck === 'karaoke' ? tempoPercent : backgroundTempoPercent,
+      pitchSemitones: deck === 'karaoke' ? keySemitones : 0,
+      volume: deck === 'karaoke' ? nativeKaraokeGain : nativeBackgroundGain,
+      autoGainDb: deck === 'karaoke' ? karaokeAutoGainDb : backgroundAutoGainDb,
+      vocalLevel: deck === 'karaoke' ? audioSettings.vocalLevel : 0,
+      eq: deck === 'karaoke'
+        ? { low: audioSettings.low, mid: audioSettings.mid, high: audioSettings.high }
+        : { low: 0, mid: 0, high: 0 }
+    };
+  }
+
+  async function loadNativeDeck(deck, sources, position = 0) {
+    if (!usingNativeAudio()) return null;
+    silenceWebKitAudio();
+    const result = await nativeAudioRequest('nativeAudioLoad', {
+      ...nativeDeckConfiguration(deck, position),
+      sources
+    });
+    recordAudio('NATIVE_AUDIO_DECK_READY', 'INFO', {
+      deck,
+      engine: result.engine,
+      timePitch: result.timePitch,
+      duration: result.duration
+    });
+    return result;
+  }
+
+  function flushNativeDeckConfiguration(deck) {
+    window.clearTimeout(nativeDeckConfigTimers.get(deck));
+    nativeDeckConfigTimers.delete(deck);
+    const payload = nativeDeckConfigPending.get(deck);
+    nativeDeckConfigPending.delete(deck);
+    if (payload) nativeAudioCommand('nativeAudioConfigure', payload);
+  }
+
+  function configureNativeDeck(deck, values = {}, { immediate = false } = {}) {
+    if (!usingNativeAudio()) return;
+    const position = deck === 'karaoke' ? karaokeClockPosition() : backgroundClockPosition();
+    nativeDeckConfigPending.set(deck, { ...nativeDeckConfiguration(deck, position), ...values, deck });
+    if (immediate) {
+      flushNativeDeckConfiguration(deck);
+      return;
+    }
+    if (!nativeDeckConfigTimers.has(deck)) {
+      nativeDeckConfigTimers.set(deck, window.setTimeout(() => flushNativeDeckConfiguration(deck), 33));
+    }
+  }
+
+  function configureNativeMaster() {
+    if (usingNativeAudio()) nativeAudioCommand('nativeAudioMaster', { gain: masterVolumeGain(masterPercent), masterDb: appliedMasterDb });
+  }
+
+  async function playNativeDeck(deck, position) {
+    if (!usingNativeAudio()) return;
+    return nativeAudioRequest('nativeAudioPlay', { deck, position: Math.max(0, Number(position) || 0) });
+  }
+
+  async function playNativeBackgroundDeck(position) {
+    if (!usingNativeAudio()) return;
+    nativeBackgroundTransportIntent = true;
+    nativeBackgroundTransportIntentAt = performance.now();
+    const result = await playNativeDeck('background', position);
+    nativeBackgroundTransportIntent = true;
+    nativeBackgroundTransportIntentAt = performance.now();
+    nativeBackgroundWasPlaying = true;
+    return result;
+  }
+
+  async function pauseNativeBackgroundDeck() {
+    if (!usingNativeAudio()) return;
+    nativeBackgroundTransportIntent = false;
+    nativeBackgroundTransportIntentAt = performance.now();
+    const result = await nativeAudioRequest('nativeAudioPause', { deck: 'background' });
+    nativeBackgroundTransportIntent = false;
+    nativeBackgroundTransportIntentAt = performance.now();
+    nativeBackgroundWasPlaying = false;
+    return result;
+  }
+
+  function pauseNativeDeck(deck) { nativeAudioCommand('nativeAudioPause', { deck }); }
+  function stopNativeDeck(deck) { nativeAudioCommand('nativeAudioStop', { deck }); }
+  function seekNativeDeck(deck, position) { nativeAudioCommand('nativeAudioSeek', { deck, position: Math.max(0, Number(position) || 0) }); }
+
+  async function pauseNativeKaraokeDeck(position) {
+    if (!usingNativeAudio()) return;
+    // Set this before the IPC round trip.  The native timer deliberately
+    // stops when playback stops, so waiting for its next snapshot can leave a
+    // visible video running with no audible audio.
+    setNativeKaraokeTransportIntent(false, position);
+    const result = await nativeAudioRequest('nativeAudioPause', { deck: 'karaoke' });
+    setNativeKaraokeTransportIntent(false, Number(result.position ?? position));
+  }
+
+  function cancelPendingKaraokeSeek() {
+    karaokeSeekGeneration += 1;
+    karaokeQueuedSeek = null;
+    karaokeScrubPreview = null;
+    karaokeSeekPointerActive = false;
+  }
+
+  function seekKaraokeTransport(position) {
+    const target = Math.max(0, Math.min(karaokeClockDuration() || Infinity, Number(position) || 0));
+    const generation = ++karaokeSeekGeneration;
+    karaokeQueuedSeek = { target, generation, mediaGeneration: karaokeMediaGeneration, requestId: currentId };
+    karaokeScrubPreview = target;
+    // Decode the requested frame immediately; native IPC runs concurrently.
+    // Only one native seek and one latest pending seek can exist at a time.
+    setVisualClockPosition(media, target);
+    if (usingNativeAudio()) setNativeKaraokeTransportSnapshot(target, karaokeTransportIsPlaying());
+    visualTransportRevision += 1;
+    renderNow();
+    publish();
+    return flushKaraokeSeek();
+  }
+
+  async function flushKaraokeSeek() {
+    if (karaokeSeekInFlight || !karaokeQueuedSeek) return;
+    karaokeSeekInFlight = true;
+    const request = karaokeQueuedSeek;
+    karaokeQueuedSeek = null;
+    const { target, generation, mediaGeneration, requestId } = request;
+    const requestedAt = performance.now();
+    recordAudio('SEEK_REQUEST', 'INFO', { position: target, trackId: requestId });
+    try {
+      const result = usingNativeAudio() && nativeKaraokeDeckRequestId === requestId && nativeDeckIsLoaded('karaoke')
+        ? await nativeAudioRequest('nativeAudioSeek', { deck: 'karaoke', position: target, revision: generation })
+        : { position: target };
+      if (generation !== karaokeSeekGeneration || mediaGeneration !== karaokeMediaGeneration || requestId !== currentId) return;
+      const committed = Number(result.position ?? target);
+      if (usingNativeAudio()) setNativeKaraokeTransportSnapshot(committed, karaokeTransportIsPlaying());
+      karaokeScrubPreview = null;
+      recordAudio('SEEK_COMPLETE', 'INFO', { position: committed, roundTripMs: Math.round(performance.now() - requestedAt), trackId: requestId });
+      renderNow(); publish(); scheduleRuntimeSave(0);
+    } catch (error) {
+      if (generation === karaokeSeekGeneration && requestId === currentId) {
+        karaokeScrubPreview = null;
+        renderNow();
+        showNotice(`No se pudo cambiar la posición: ${error.message}`, true);
+      }
+    } finally {
+      karaokeSeekInFlight = false;
+      if (karaokeQueuedSeek) void flushKaraokeSeek();
+    }
+  }
+
+  function publishNativeTransportUpdate() {
+    const now = performance.now();
+    if (now - nativeTransportPublishAt < 250) return;
+    nativeTransportPublishAt = now;
+    renderNow();
+    publish();
+    if (Date.now() - lastRuntimeCheckpoint >= 10000) {
+      lastRuntimeCheckpoint = Date.now();
+      scheduleRuntimeSave(500);
+    }
+  }
+
+  window.addEventListener('gueststar:native-audio-state', (event) => {
+    nativeAudioState = event.detail || null;
+    nativeAudioStateReceivedAt = performance.now();
+    if (!nativeAudioState) return;
+    // End the optimistic handoff when the corresponding rendered clock arrives.
+    if (!karaokeSeekInFlight && !karaokeQueuedSeek) nativeKaraokeClockOverride = null;
+    if (nativeAudioState.error) {
+      recordAudio('NATIVE_AUDIO_ENGINE_ERROR', 'ERROR', { message: nativeAudioState.error });
+      diagnostics?.setHealth?.('Audio', 'ERROR', { engine: 'AVAudioEngine', message: nativeAudioState.error });
+      nativeKaraokeTransportIntent = null;
+      nativeVisualPlaybackExpected = false;
+      renderNow();
+      publish();
+      return;
+    }
+    const healthSignature = `${nativeAudioState.running ? 'OK' : 'RECOVERING'}:${nativeAudioState.timePitchNodeCount || 0}`;
+    if (healthSignature !== nativeAudioHealthSignature) {
+      nativeAudioHealthSignature = healthSignature;
+      diagnostics?.setHealth?.('Audio', nativeAudioState.running ? 'OK' : 'RECOVERING', {
+        engine: nativeAudioState.engine || 'AVAudioEngine',
+        timePitchNodes: nativeAudioState.timePitchNodeCount || 0
+      });
+    }
+    nativeVideoSyncMetrics.stateEvents += 1;
+    for (const deck of Array.isArray(nativeAudioState.decks) ? nativeAudioState.decks : []) {
+      const element = deck.deck === 'karaoke' ? media : deck.deck === 'background' ? backgroundAudio : null;
+      if (!element || !Number.isFinite(Number(deck.position))) continue;
+      if (deck.deck === 'karaoke') {
+        nativeWaveformHistory.push(Math.max(0, Math.min(1, Number(deck.meter) || 0)));
+        if (nativeWaveformHistory.length > 96) nativeWaveformHistory = nativeWaveformHistory.slice(-96);
+      }
+      // Background has no visual surface to correct. Its HTML element is a
+      // metadata mirror only; native transport must survive WebKit suspension
+      // while the app is hidden or not key.
+      if (deck.deck !== 'karaoke') {
+        if (usingNativeAudio()) {
+          if (nativeBackgroundTransportIntent !== null && deck.playing === nativeBackgroundTransportIntent) {
+            nativeBackgroundTransportIntent = null;
+          }
+          const playing = backgroundTransportIsPlaying();
+          const endedNaturally = nativeBackgroundWasPlaying && !playing &&
+            Number(deck.duration) > 0 && Number(deck.position) >= Number(deck.duration) - 0.08 &&
+            stageMode === 'lobby' && !backgroundTransition;
+          nativeBackgroundWasPlaying = playing;
+          if (endedNaturally) void playNextBackground();
+        } else visualRate(element, deck.tempoPercent);
+        continue;
+      }
+      if (!karaokeSeekInFlight && !karaokeQueuedSeek) channel.postMessage({
+        type: 'player-clock', currentId, currentTime: karaokeClockPosition(),
+        playing: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
+        tempoPercent, publishedAt: Date.now()
+      });
+      // The Player element is intentionally hidden; Star Screen is the single
+      // WebKit video decoder.  Keeping this second element playing consumed a
+      // full additional decode pipeline and competed with visible frames.
+      // AVAudioEngine remains the clock, while the visible follower receives
+      // transport snapshots below.
+      if (usingNativeAudio()) {
+        if (!element.paused) element.pause();
+        const reportedPlaying = deck.playing === true;
+        if (nativeKaraokeTransportIntent !== null) {
+          if (reportedPlaying === nativeKaraokeTransportIntent || performance.now() - nativeKaraokeTransportIntentAt >= 1250) {
+            nativeKaraokeTransportIntent = null;
+          }
+        }
+        const playing = nativeKaraokeTransportIsPlaying();
+        const endedNaturally = nativeKaraokeWasPlaying && !playing &&
+          Number(deck.duration) > 0 && Number(deck.position) >= Number(deck.duration) - 0.08 &&
+          stageMode === 'karaoke' && Boolean(currentId) && !transitionBusy;
+        nativeKaraokeWasPlaying = playing;
+        if (endedNaturally) {
+          nativeVisualPlaybackExpected = false;
+          void advance('completed');
+        } else if (playing) {
+          publishNativeTransportUpdate();
+        } else {
+          // This is the confirming status event for a pause or a seek while
+          // paused.  Publish it once, since the native timer will not run
+          // again while both decks are stopped.
+          renderNow();
+          publish();
+        }
+        continue;
+      }
+      const plan = nativeVisualSyncPlan({
+        audioPosition: deck.position,
+        visualPosition: element.currentTime,
+        tempoPercent: deck.tempoPercent,
+        seeking: element.seeking || nativeVisualSeekIsPending(),
+        millisecondsSinceHardSeek: performance.now() - nativeLastHardVisualSeekAt
+      });
+      nativeVideoSyncMetrics.maxDriftSeconds = Math.max(nativeVideoSyncMetrics.maxDriftSeconds, Math.abs(plan.drift));
+      if (plan.seekTo !== null) {
+        nativeLastHardVisualSeekAt = performance.now();
+        nativeVideoSyncMetrics.hardSeeks += 1;
+        setVisualClockPosition(element, plan.seekTo);
+      }
+      visualRateValue(element, plan.playbackRate);
+      if (deck.playing === true) keepNativeVideoVisualPlaying(element);
+    }
+  });
+
+  function analyzeOffThread(samples, sampleRate, signal) {
+    if (typeof Worker !== 'function') return Promise.reject(new Error('El análisis necesita un Worker para preservar la reproducción.'));
+    return new Promise((resolve, reject) => {
+      const worker = new Worker('/audio-analysis-worker.js', { type: 'module' });
+      const cleanup = () => { window.clearTimeout(timeout); signal?.removeEventListener('abort', abort); worker.terminate(); };
+      const abort = () => { cleanup(); reject(new DOMException('Análisis sustituido.', 'AbortError')); };
+      const timeout = window.setTimeout(() => { cleanup(); reject(new Error('El análisis de audio excedió el tiempo disponible.')); }, 30000);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) { abort(); return; }
+      worker.addEventListener('message', (event) => { cleanup(); event.data?.error ? reject(new Error(event.data.error)) : resolve(event.data); }, { once: true });
+      worker.addEventListener('error', (event) => { cleanup(); reject(new Error(event.message || 'El analizador de audio falló.')); }, { once: true });
+      worker.postMessage({ samples: samples.buffer, sampleRate }, [samples.buffer]);
+    });
+  }
 
   function paintRange(input) {
     if (!input) return;
@@ -269,6 +1152,135 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     localStorage.setItem(audioSettingsKey, JSON.stringify(audioSettings));
   }
 
+  function persistAutoGainSettings() {
+    // Keep the pre-existing Master preference intact, but persist only the
+    // two Auto Gain choices rather than exposing or carrying DSP internals.
+    localStorage.setItem(autoGainSettingsKey, JSON.stringify({
+      enabled: autoGainSettings.enabled,
+      targetOutputDb: autoGainSettings.targetOutputDb,
+      masterDb: autoGainSettings.masterDb
+    }));
+  }
+
+  function renderAutoGainSettings() {
+    const enabled = $('#preferenceAutoGain');
+    if (enabled) enabled.checked = autoGainSettings.enabled;
+    const target = $('#preferenceAutoGainTarget');
+    if (target) target.value = String(autoGainSettings.targetOutputDb);
+    const master = $('#playerMasterVolume');
+    if (master && document.activeElement !== master) { master.value = String(masterPercent); paintRange(master); }
+    const masterValue = $('#playerMasterVolumeValue');
+    if (masterValue) masterValue.textContent = `${masterPercent}% · ${masterPercent ? `${appliedMasterDb.toFixed(1)} dB` : '−∞'}`;
+    const karaokeReadout = $('#playerKaraokeAutoGain');
+    if (karaokeReadout) karaokeReadout.textContent = currentLoudness?.pending ? 'AUTO pendiente' : `AUTO ${karaokeAutoGainDb >= 0 ? '+' : ''}${karaokeAutoGainDb.toFixed(1)} dB`;
+    const backgroundReadout = $('#playerBackgroundAutoGain');
+    if (backgroundReadout) backgroundReadout.textContent = backgroundLoudness?.pending ? 'AUTO pendiente' : `AUTO ${backgroundAutoGainDb >= 0 ? '+' : ''}${backgroundAutoGainDb.toFixed(1)} dB`;
+  }
+
+  function rampGain(kind, targetDb, duration = 260) {
+    const generation = ++gainRampGeneration[kind];
+    const current = kind === 'karaoke' ? karaokeAutoGainDb : kind === 'background' ? backgroundAutoGainDb : appliedMasterDb;
+    const target = Number(targetDb) || 0;
+    const parameter = kind === 'karaoke' ? mediaAudioGraph?.karaokeAutoGain?.gain : kind === 'background' ? mediaAudioGraph?.backgroundAutoGain?.gain : mediaAudioGraph?.finalMaster?.gain;
+    if (parameter) setAudioParam(parameter, dbToLinear(target), 0.075);
+    const startedAt = performance.now();
+    let lastNativeAt = -Infinity;
+    const frame = (now) => {
+      if (generation !== gainRampGeneration[kind]) return;
+      const progress = duration <= 0 ? 1 : Math.min(1, Math.max(0, (now - startedAt) / duration));
+      const value = current + (target - current) * (0.5 - Math.cos(Math.PI * progress) / 2);
+      if (kind === 'karaoke') karaokeAutoGainDb = value;
+      else if (kind === 'background') backgroundAutoGainDb = value;
+      else appliedMasterDb = value;
+      if (usingNativeAudio() && (now - lastNativeAt >= 32 || progress >= 1)) {
+        lastNativeAt = now;
+        if (kind === 'master') configureNativeMaster();
+        else configureNativeDeck(kind, { autoGainDb: value }, { immediate: true });
+      }
+      if (progress < 1) requestAnimationFrame(frame);
+      else renderAutoGainSettings();
+    };
+    requestAnimationFrame(frame);
+  }
+
+  function applyAutoGain({ smooth = true } = {}) {
+    rampGain('karaoke', calculateTrackAutoGain(currentLoudness, autoGainSettings).appliedDb, smooth ? 260 : 0);
+    rampGain('background', calculateTrackAutoGain(backgroundLoudness, autoGainSettings).appliedDb, smooth ? 260 : 0);
+    applyMasterVolume();
+    renderAutoGainSettings();
+  }
+
+  function applyMasterVolume() {
+    appliedMasterDb = masterVolumeDb(masterPercent);
+    // The render thread performs a 12 ms ramp. No rAF/transport/stem update.
+    setAudioParam(mediaAudioGraph?.finalMaster?.gain, masterVolumeGain(masterPercent), 0.004);
+    configureNativeMaster();
+    renderAutoGainSettings();
+  }
+
+  function paintOutputMeter() {
+    const now = performance.now();
+    let rms = 0; let peak = 0;
+    if (usingNativeAudio()) {
+      if (now - outputMeterSource.receivedAt < 250) {
+        rms = Math.max(outputMeterSource.rmsL, outputMeterSource.rmsR);
+        peak = Math.max(outputMeterSource.peakL, outputMeterSource.peakR);
+      }
+    } else if (mediaAudioGraph?.outputAnalyser && audioContext?.state === 'running') {
+      mediaAudioGraph.outputAnalyser.getFloatTimeDomainData(outputMeterSamples);
+      let energy = 0;
+      for (let i = 0; i < outputMeterSamples.length; i += 1) {
+        const sample = outputMeterSamples[i]; energy += sample * sample; peak = Math.max(peak, Math.abs(sample));
+      }
+      rms = Math.sqrt(energy / outputMeterSamples.length);
+    }
+    const elapsed = Math.min(1, (now - outputMeterVisual.paintedAt) / 1000);
+    outputMeterVisual.paintedAt = now;
+    outputMeterVisual.rms = Math.max(rms, outputMeterVisual.rms * Math.exp(-elapsed * 9));
+    outputMeterVisual.peak = peak;
+    if (peak >= outputMeterVisual.held || now >= outputMeterVisual.until) {
+      outputMeterVisual.held = peak; outputMeterVisual.until = now + 800;
+    }
+    const percent = (value) => Math.max(0, Math.min(100, (linearToDbfs(value) + 60) / 60 * 100));
+    const fill = $('#playerOutputMeterFill');
+    const marker = $('#playerOutputMeterPeak');
+    const value = $('#playerOutputMeterValue');
+    if (fill) fill.style.transform = `scaleX(${percent(outputMeterVisual.rms) / 100})`;
+    if (marker) marker.style.left = `${percent(outputMeterVisual.held)}%`;
+    if (value) value.textContent = peak > 0.001 ? `${linearToDbfs(peak).toFixed(1)} dBFS` : '−∞ dBFS';
+    const meter = $('#playerOutputMeter');
+    if (meter) {
+      meter.dataset.level = peak > 10 ** (-3 / 20) ? 'red' : peak >= 10 ** (-12 / 20) ? 'yellow' : 'green';
+      meter.setAttribute('aria-valuenow', String(Math.round(linearToDbfs(peak))));
+    }
+  }
+
+  window.addEventListener('gueststar:native-output-meter', (event) => {
+    outputMeterSource = { ...event.detail, receivedAt: performance.now() };
+    if (opened && !document.hidden) paintOutputMeter();
+  });
+
+  async function requestLoudness(kind, id, { force = false } = {}) {
+    if (!id) return null;
+    const pending = { pending: true };
+    if (kind === 'karaoke') currentLoudness = pending; else backgroundLoudness = pending;
+    renderAutoGainSettings();
+    try {
+      const result = await api(`/api/player/loudness/${kind}/${encodeURIComponent(id)}`, force ? { method: 'POST', body: JSON.stringify({ force: true }) } : undefined);
+      const active = kind === 'karaoke' ? currentId : (backgroundPendingId || backgroundCurrentId);
+      if (String(active) !== String(id)) return result;
+      if (kind === 'karaoke') currentLoudness = result; else backgroundLoudness = result;
+      applyAutoGain();
+      return result;
+    } catch (error) {
+      const active = kind === 'karaoke' ? currentId : (backgroundPendingId || backgroundCurrentId);
+      if (String(active) !== String(id)) return null;
+      if (kind === 'karaoke') currentLoudness = { error: error.message }; else backgroundLoudness = { error: error.message };
+      applyAutoGain();
+      return null;
+    }
+  }
+
   function setAudioParam(parameter, value, smoothing = 0.035) {
     if (!parameter || !audioContext) return;
     const now = audioContext.currentTime;
@@ -276,7 +1288,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     parameter.setTargetAtTime(Number(value) || 0, now, smoothing);
   }
 
-  function applyAudioSettings() {
+  function applyAudioSettings({ synchronizePlayback = false } = {}) {
+    if (usingNativeAudio()) {
+      configureNativeDeck('karaoke');
+      configureNativeDeck('background');
+      configureNativeMaster();
+      if (synchronizePlayback) applyPlaybackProcessing();
+      return;
+    }
     if (!mediaAudioGraph) return;
     setAudioParam(mediaAudioGraph.low.gain, audioSettings.low);
     setAudioParam(mediaAudioGraph.mid.gain, audioSettings.mid);
@@ -285,7 +1304,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     setAudioParam(mediaAudioGraph.normalGain.gain, stemsReady ? 0 : 1, 0.025);
     setAudioParam(mediaAudioGraph.instrumentalGain.gain, stemsReady ? 1 : 0, 0.025);
     setAudioParam(mediaAudioGraph.vocalsGain.gain, stemsReady ? audioSettings.vocalLevel : 0, 0.025);
-    setAudioParam(mediaAudioGraph.backgroundGain?.gain, 1, 0.025);
+    setAudioParam(mediaAudioGraph.master?.gain, mediaTargetVolume, 0.025);
+    setAudioParam(mediaAudioGraph.backgroundGain?.gain, backgroundTargetVolume, 0.025);
+    setAudioParam(mediaAudioGraph.karaokeAutoGain?.gain, dbToLinear(karaokeAutoGainDb), 0.075);
+    setAudioParam(mediaAudioGraph.backgroundAutoGain?.gain, dbToLinear(backgroundAutoGainDb), 0.075);
+    setAudioParam(mediaAudioGraph.finalMaster?.gain, masterVolumeGain(masterPercent), 0.004);
+    // EQ, gain, fade and output maintenance must not retune a live media
+    // element. A rate change is requested only when a media source or graph
+    // has just been created/recovered.
+    if (synchronizePlayback) applyPlaybackProcessing();
   }
 
   function renderAudioSettings() {
@@ -306,8 +1333,139 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const stemsReady = lockedStemSourceReady();
     if (vocalControl) vocalControl.classList.remove('hidden');
     if (vocal) vocal.disabled = !stemsReady;
-    const engine = $('#playerStemEngine');
-    if (engine && !engine.matches(':active')) engine.value = stemEngineSelection;
+    renderPlaybackProcessing();
+  }
+
+  function setPreservedRate(element, rate) {
+    return applyTempoRate(element, rate);
+  }
+
+  function ensurePitchWorklet(graph = mediaAudioGraph) {
+    if (!graph || graph.pitchWorklet || pitchWorkletState !== 'ready' || typeof AudioWorkletNode !== 'function') return graph?.pitchWorklet || null;
+    try {
+      const bypass = graph.pitch;
+      const worklet = new AudioWorkletNode(audioContext, 'guest-star-pitch-shifter');
+      graph.pitch = worklet;
+      graph.pitchWorklet = worklet;
+      disconnectNode(bypass);
+      reconnectPlayerAudioGraph(graph);
+      return worklet;
+    } catch (error) {
+      pitchWorkletState = 'unsupported';
+      recordAudio('PITCH_WORKLET_CREATE_FAILED', 'ERROR', { message: error.message });
+      renderPlaybackProcessing();
+      return null;
+    }
+  }
+
+  function setPitchRatio(node, semitones) {
+    // Tempo is handled by WebKit's preservesPitch path.  The independent pitch
+    // processor stays out of the signal path at 0 semitones, preventing an
+    // unnecessary worklet from competing with real-time time-stretching.
+    const pitchNode = Number(semitones) === 0 ? node?.pitchWorklet || node : ensurePitchWorklet(mediaAudioGraph);
+    const parameter = pitchNode?.parameters?.get?.('ratio');
+    if (parameter) setAudioParam(parameter, 2 ** (Number(semitones || 0) / 12), 0.02);
+  }
+
+  function applyPitchProcessing() {
+    if (usingNativeAudio()) {
+      configureNativeDeck('karaoke', { pitchSemitones: keySemitones }, { immediate: true });
+      return;
+    }
+    setPitchRatio(mediaAudioGraph?.pitch, keySemitones);
+  }
+
+  function applyKaraokeTempoNow() {
+    window.clearTimeout(karaokeTempoTimer);
+    karaokeTempoTimer = 0;
+    karaokeTempoLastAppliedAt = performance.now();
+    const karaokeRate = tempoPercent / 100;
+    if (usingNativeAudio()) {
+      // playbackRate is visual clock only in native mode: the muted video must
+      // advance with AVAudioUnitTimePitch, but it never renders WebKit audio.
+      visualRate(media, tempoPercent);
+      if (lockedStemSourceReady()) [instrumentalAudio, vocalsAudio].forEach((element) => visualRate(element, tempoPercent));
+      configureNativeDeck('karaoke', { tempoPercent }, { immediate: true });
+      publish();
+      return;
+    }
+    setPreservedRate(media, karaokeRate);
+    // Stems are synchronized only when they are part of the active mix.  This
+    // avoids waking two inactive WebKit decoders for every karaoke adjustment.
+    if (lockedStemSourceReady()) [instrumentalAudio, vocalsAudio].forEach((element) => setPreservedRate(element, karaokeRate));
+  }
+
+  function applyBackgroundTempoNow() {
+    window.clearTimeout(backgroundTempoTimer);
+    backgroundTempoTimer = 0;
+    backgroundTempoLastAppliedAt = performance.now();
+    if (usingNativeAudio()) {
+      visualRate(backgroundAudio, backgroundTempoPercent);
+      configureNativeDeck('background', { tempoPercent: backgroundTempoPercent }, { immediate: true });
+      return;
+    }
+    setPreservedRate(backgroundAudio, backgroundTempoPercent / 100);
+  }
+
+  function scheduleKaraokeTempoApplication({ immediate = false } = {}) {
+    window.clearTimeout(karaokeTempoTimer);
+    const delay = tempoApplicationDelay({ now: performance.now(), lastAppliedAt: karaokeTempoLastAppliedAt, immediate });
+    if (delay <= 0) applyKaraokeTempoNow();
+    else karaokeTempoTimer = window.setTimeout(applyKaraokeTempoNow, delay);
+  }
+
+  function scheduleBackgroundTempoApplication({ immediate = false } = {}) {
+    window.clearTimeout(backgroundTempoTimer);
+    const delay = tempoApplicationDelay({ now: performance.now(), lastAppliedAt: backgroundTempoLastAppliedAt, immediate });
+    if (delay <= 0) applyBackgroundTempoNow();
+    else backgroundTempoTimer = window.setTimeout(applyBackgroundTempoNow, delay);
+  }
+
+  function applyPlaybackProcessing() {
+    // This path is used at graph/media initialization, never for every slider
+    // event.  It applies the current independent values without rebuilding the
+    // graph or resetting position, fades, output selection, or key state.
+    applyKaraokeTempoNow();
+    applyBackgroundTempoNow();
+    applyPitchProcessing();
+  }
+
+  function renderPlaybackProcessing() {
+    const bpm = currentAnalysis?.bpm || 0;
+    const currentBpm = bpmAtTempo(bpm, tempoPercent);
+    const tempoLabel = Number.isInteger(tempoPercent) ? String(tempoPercent) : tempoPercent.toFixed(1);
+    $('#playerBpmValue').textContent = bpm ? (tempoPercent === 100 ? `${bpm} BPM` : `${bpm} → ${currentBpm} BPM`) : '—';
+    $('#playerBpmStatus').textContent = currentAnalysis?.pending ? 'Analizando pista actual…' : currentAnalysis?.error ? 'Análisis no disponible para esta pista' : bpm ? `Original: ${bpm} · Actual: ${currentBpm}` : currentId ? 'BPM no detectable' : 'Selecciona una canción';
+    const key = currentAnalysis?.key || '';
+    const shiftedKey = transposeKey(key, keySemitones);
+    $('#playerKeyValue').textContent = shiftedKey ? `${key} → ${shiftedKey}` : '—';
+    $('#playerKeyStatus').textContent = currentAnalysis?.pending ? 'Analizando pista actual…' : currentAnalysis?.error ? 'Análisis no disponible para esta pista' : key ? `Original: ${key} · confianza de perfil ${Math.round((Number(currentAnalysis?.keyConfidence) || 0) * 100)}% · ${keySemitones > 0 ? '+' : ''}${keySemitones} semitonos` : currentId ? 'Tonalidad no detectable' : 'Selecciona una canción';
+    $('#playerKeyReanalyze').disabled = !current()?.localAvailable || currentAnalysis?.pending === true;
+    $('#playerTempo').value = String(tempoPercent); $('#playerTempoValue').textContent = `${tempoLabel}%`; paintRange($('#playerTempo'));
+    $('#playerTempoLock').checked = karaokeTempoLocked;
+    $('#playerTempo').disabled = karaokeTempoLocked;
+    $('#playerTempoDown').disabled = karaokeTempoLocked || tempoPercent <= 50;
+    // Reset is an explicit recovery action. It returns only this player's tempo
+    // to its original rate without changing the independent Lock Tempo state.
+    $('#playerTempoReset').disabled = tempoPercent === 100;
+    $('#playerTempoUp').disabled = karaokeTempoLocked || tempoPercent >= 150;
+    $('#playerKeyShiftValue').textContent = `${keySemitones > 0 ? '+' : ''}${keySemitones}`;
+    const backgroundBpm = backgroundAnalysis?.bpm || 0;
+    const backgroundCurrentBpm = bpmAtTempo(backgroundBpm, backgroundTempoPercent);
+    const backgroundTempoLabel = Number.isInteger(backgroundTempoPercent) ? String(backgroundTempoPercent) : backgroundTempoPercent.toFixed(1);
+    const backgroundTrack = backgroundPending() || backgroundCurrent();
+    $('#playerBackgroundBpmValue').textContent = backgroundBpm ? (backgroundTempoPercent === 100 ? `${backgroundBpm} BPM` : `${backgroundBpm} → ${backgroundCurrentBpm} BPM`) : '—';
+    $('#playerBackgroundBpmStatus').textContent = backgroundAnalysis?.pending ? 'Analizando pista de fondo…' : backgroundAnalysis?.error ? 'Análisis no disponible' : backgroundBpm ? `Original: ${backgroundBpm} · Actual: ${backgroundCurrentBpm}` : backgroundTrack ? 'BPM no detectable' : 'Selecciona una pista';
+    $('#playerBackgroundTempo').value = String(backgroundTempoPercent); $('#playerBackgroundTempoValue').textContent = `${backgroundTempoLabel}%`; paintRange($('#playerBackgroundTempo'));
+    $('#playerBackgroundTempoLock').checked = backgroundTempoLocked;
+    $('#playerBackgroundTempo').disabled = backgroundTempoLocked;
+    $('#playerBackgroundTempoDown').disabled = backgroundTempoLocked || backgroundTempoPercent <= 50;
+    $('#playerBackgroundTempoReset').disabled = backgroundTempoPercent === 100;
+    $('#playerBackgroundTempoUp').disabled = backgroundTempoLocked || backgroundTempoPercent >= 150;
+    const pitchDisabled = !usingNativeAudio() && pitchWorkletState === 'unsupported';
+    $('#playerKeyDown').disabled = pitchDisabled || keySemitones <= -6;
+    $('#playerKeyReset').disabled = pitchDisabled || keySemitones === 0;
+    $('#playerKeyUp').disabled = pitchDisabled || keySemitones >= 6;
   }
 
   function setScene(modeName, phase = modeName) {
@@ -318,19 +1476,30 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function fadeVolume(element, target, duration = FADE_MS, valid = () => true) {
+    const fadeGeneration = element === backgroundAudio ? ++backgroundFadeGeneration : 0;
+    const isValid = () => (element !== backgroundAudio || fadeGeneration === backgroundFadeGeneration) && valid();
     const destination = Math.max(0, Math.min(1, Number(target) || 0));
-    const origin = Math.max(0, Math.min(1, Number(element.volume) || 0));
-    if (duration <= 0 || Math.abs(origin - destination) < 0.002) {
-      if (valid()) element.volume = destination;
-      return Promise.resolve(valid());
+    const nativeBackground = usingNativeAudio() && element === backgroundAudio;
+    const gain = nativeBackground ? null : element === backgroundAudio ? mediaAudioGraph?.backgroundFade?.gain : null;
+    const fadeDestination = gain ? fadeGainForVolume(backgroundTargetVolume, destination) : destination;
+    const readVolume = () => nativeBackground ? nativeBackgroundGain : gain ? gain.value : element.volume;
+    const writeVolume = (value) => {
+      if (nativeBackground) setBackgroundVolume(value);
+      else if (gain) gain.value = value;
+      else element.volume = value;
+    };
+    const origin = Math.max(0, Math.min(1, Number(readVolume()) || 0));
+    if (duration <= 0 || Math.abs(origin - fadeDestination) < 0.002) {
+      if (isValid()) writeVolume(fadeDestination);
+      return Promise.resolve(isValid());
     }
     const startedAt = performance.now();
     return new Promise((resolve) => {
       const frame = (now) => {
-        if (!valid()) { resolve(false); return; }
+        if (!isValid()) { resolve(false); return; }
         const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
-        element.volume = origin + (destination - origin) * eased;
+        writeVolume(origin + (fadeDestination - origin) * eased);
         if (progress < 1) requestAnimationFrame(frame);
         else resolve(true);
       };
@@ -338,21 +1507,34 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     });
   }
 
-  function waitUntilPlayable(element, generation, timeoutMs = 3500) {
-    if (element.readyState >= 3) return Promise.resolve();
+  function absoluteMediaURL(value) {
+    try { return value ? new URL(value, location.origin).href : ''; }
+    catch { return ''; }
+  }
+
+  function waitUntilPlayable(element, generation, timeoutMs = 3500, { expectedSource = '', isCurrent = () => true } = {}) {
+    const expected = absoluteMediaURL(expectedSource);
+    const matchesExpectedSource = () => !expected || absoluteMediaURL(element.currentSrc || element.src) === expected;
+    const valid = () => isCurrent() && (element !== backgroundAudio || generation === backgroundGeneration);
+    if (valid() && matchesExpectedSource() && element.readyState >= 3) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const timeout = window.setTimeout(() => finish(new Error('El archivo tardó demasiado en cargar.')), timeoutMs);
       const finish = (error) => {
         window.clearTimeout(timeout);
         element.removeEventListener('canplay', onReady);
         element.removeEventListener('error', onError);
-        if (generation !== backgroundGeneration && element === backgroundAudio) reject(new Error('Carga reemplazada.'));
+        if (!valid()) reject(new Error('Carga reemplazada.'));
         else if (error) reject(error);
         else resolve();
       };
-      const onReady = () => finish();
+      const onReady = () => {
+        if (!valid()) { finish(new Error('Carga reemplazada.')); return; }
+        // An old canplay can be delivered after src has changed.  Leave this
+        // waiter armed until the requested resource itself is playable.
+        if (matchesExpectedSource()) finish();
+      };
       const onError = () => finish(new Error('Formato o códec no compatible.'));
-      element.addEventListener('canplay', onReady, { once: true });
+      element.addEventListener('canplay', onReady);
       element.addEventListener('error', onError, { once: true });
     });
   }
@@ -360,11 +1542,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   const activityId = () => String(state?.account?.current?.activityId || '');
   const storageKey = () => `guest-star:player-order:${activityId() || 'none'}`;
   const visibilityStorageKey = () => `guest-star:player-star-visibility:${activityId() || 'none'}`;
+  const starScreenLanguageKey = () => `guest-star:star-screen-language:${activityId() || 'none'}`;
+  const playerSessionKey = () => `guest-star:player-session:${activityId() || 'none'}`;
   const requestsById = () => new Map((state?.requests || []).map((item) => [String(item.id), item]));
   const mode = () => String(state?.operatingMode?.selected || '');
   const activityRunning = () => Boolean(state?.activity?.activityRunning && state?.activity?.activityStartedAt);
   const activityConfigured = () => Boolean(activityId() && state?.tenant?.activity);
-  const playerPreparationReady = () => activityConfigured() && mode() === 'player';
+  const finishedPlayerSession = () => activityConfigured() && Boolean(state?.activity?.activityFinishedAt) && localStorage.getItem(playerSessionKey()) === '1';
+  const playerPreparationReady = () => activityConfigured() && (mode() === 'player' || finishedPlayerSession());
   const playerReady = () => mode() === 'player' && activityRunning();
   const backgroundTracks = () => Array.isArray(state?.backgroundMusic?.tracks) ? state.backgroundMusic.tracks : [];
 
@@ -391,14 +1576,42 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     return JSON.stringify(Object.fromEntries(Object.entries(value || {}).sort(([left], [right]) => left.localeCompare(right))));
   }
 
-  function saveOrder({ remote = false } = {}) {
+  function saveOrder({ remote = false, queueOnly = false } = {}) {
     localStorage.setItem(storageKey(), JSON.stringify(order));
     localStorage.setItem(visibilityStorageKey(), JSON.stringify(queueVisibility));
     if (remote) {
       pendingOrderSignature = playerQueueOrderSignature(order);
+      if (queueOnly) { scheduleQueueOrderSave(); return; }
       pendingVisibilitySignature = visibilitySignature();
       scheduleRuntimeSave(120);
     }
+  }
+
+  function scheduleQueueOrderSave() {
+    queueOrderSavePending = true;
+    window.clearTimeout(queueOrderSaveTimer);
+    queueOrderSaveTimer = window.setTimeout(() => void persistQueueOrder(), 120);
+  }
+
+  async function persistQueueOrder() {
+    if (queueOrderSaveInFlight || !playerPreparationReady()) return;
+    queueOrderSaveInFlight = true;
+    try {
+      while (queueOrderSavePending) {
+        queueOrderSavePending = false;
+        // The existing runtime endpoint accepts partial updates. Omitting playback
+        // also avoids running its playback/stem-lock update branch on a reorder.
+        await api('/api/player/runtime', {
+          method: 'POST', body: JSON.stringify({ queueOrder: [...order] }), keepalive: true
+        });
+      }
+    } catch {
+      // Keep the local order and retry delivery to the local server. Its existing
+      // persistence mechanism takes care of disk and cloud synchronization.
+      queueOrderSavePending = true;
+      window.clearTimeout(queueOrderSaveTimer);
+      queueOrderSaveTimer = window.setTimeout(() => void persistQueueOrder(), 2000);
+    } finally { queueOrderSaveInFlight = false; }
   }
 
   function runtimePayload() {
@@ -407,9 +1620,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       queueVisibility: { ...queueVisibility },
       playback: {
         currentRequestId: currentId,
-        currentTimeSeconds: Math.max(0, Number(media.currentTime) || 0),
+        currentTimeSeconds: karaokeClockPosition(),
         scene: stageMode === 'karaoke' ? 'karaoke' : 'lobby',
-        wasPlaying: stageMode === 'karaoke' && Boolean(media.src && !media.paused && !media.ended)
+        wasPlaying: stageMode === 'karaoke' && karaokeTransportIsPlaying()
       }
     };
   }
@@ -442,7 +1655,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     order = [...order.filter((id) => ids.includes(id)), ...ids.filter((id) => !order.includes(id))];
     if (pendingOrderSignature && playerQueueOrderSignature(order) !== previousSignature) {
       pendingOrderSignature = playerQueueOrderSignature(order);
-      scheduleRuntimeSave(120);
+      scheduleQueueOrderSave();
     }
     saveOrder();
     return order.map((id) => byId.get(id)).filter(Boolean);
@@ -458,20 +1671,63 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const venue = state?.tenant?.venue || {};
     const activity = state?.tenant?.activity || {};
     const share = state?.tenant?.share || {};
+    const access = currentHostActivityAccess(state, { superhostInHostView: opened });
+    const nextSchedule = (state?.tenant?.schedules || [])
+      .filter(item => item.status === 'active' && item.activityId === activity.activityId && item.venueId === venue.venueId && Date.parse(item.scheduledStartAt) > Date.now())
+      .sort((a, b) => Date.parse(a.scheduledStartAt) - Date.parse(b.scheduledStartAt))[0];
     return {
       hotelName: hotel.name || 'Guest Star',
+      hotelTimeZone: hotel.timezone || 'UTC',
       venueName: venue.name || 'Venue',
       activityName: activity.name || 'Actividad actual',
-      logoUrl: branding.showHotelLogo === false
-        ? ''
-        : normalizeBrandImageUrl(branding.hotelLogoUrl || branding.teamLogoUrl || hotel.logoUrl || hotel.logo || hotel.branding?.logoUrl || ''),
-      publicUrl: share.publicUrl || ''
+      nextOccurrence: nextSchedule ? {
+        scheduledStartAt: nextSchedule.scheduledStartAt,
+        hotelName: hotel.name || '', venueName: venue.name || '', activityName: activity.name || ''
+      } : null,
+      hotelLogoUrl: normalizeBrandImageUrl(branding.hotelLogoUrl || hotel.logoUrl || hotel.logo || hotel.branding?.logoUrl || ''),
+      teamLogoUrl: normalizeBrandImageUrl(branding.teamLogoUrl || ''),
+      starScreenColors: {primary: brandingTheme(branding)['--gs-primary'], secondary: brandingTheme(branding)['--gs-secondary'], accent: brandingTheme(branding)['--gs-accent']},
+      publicUrl: share.publicUrl || '',
+      activityAccess: access?.pin && access?.joinUrl ? {
+        pin: access.pin, joinUrl: access.joinUrl,
+        nextOccurrenceAt: nextSchedule?.scheduledStartAt || ''
+      } : null
     };
   }
 
-  function current() { return requestsById().get(currentId) || null; }
+  function activePlaybackLocked() {
+    return Boolean(activePlaybackSession?.trackId && currentId === activePlaybackSession.trackId);
+  }
+
+  function lockActivePlayback(item, source) {
+    activePlaybackSession = {
+      trackId: String(item?.id || ''),
+      item: item ? { ...item } : null,
+      source: String(source || ''),
+      lockedAt: Date.now()
+    };
+  }
+
+  function releaseActivePlayback(trackId = currentId) {
+    if (activePlaybackSession?.trackId === String(trackId || '')) activePlaybackSession = null;
+  }
+
+  function current() {
+    return requestsById().get(currentId) ||
+      (activePlaybackSession?.trackId === currentId ? activePlaybackSession.item : null);
+  }
   function guest(item) { return [item?.singer, item?.guestAlias].filter(Boolean).join(' ') || 'Próximo cantante'; }
-  function sourceForCurrent() { return currentId ? `/api/player/media/${encodeURIComponent(currentId)}` : ''; }
+  function currentDedication() {
+    const selected = current();
+    if (selected && activeRequest(selected)) return String(selected.comment || '').trim() ? selected : null;
+    const first = queue()[0];
+    return String(first?.comment || '').trim() ? first : null;
+  }
+  function sourceForCurrent() {
+    return activePlaybackSession?.trackId === currentId
+      ? activePlaybackSession.source
+      : karaokeMediaSource(currentId);
+  }
   function backgroundCurrent() { return backgroundTracks().find((track) => track.id === backgroundCurrentId) || null; }
   function backgroundPending() { return backgroundTracks().find((track) => track.id === backgroundPendingId) || null; }
 
@@ -480,12 +1736,30 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const request = current();
     const exactFile = request?.matches?.find((match) => match.exact)?.filePath || request?.queuedFilePath || '';
     const background = backgroundCurrent();
+    const upcoming = queue().filter(visibleOnStarScreen);
+    const phraseContext = request ? 'preparingSong' : upcoming.length ? 'nextSinger' : 'waitingSinger';
+    const funnyMessage = deterministicFunnyMessage(starScreenLanguage, phraseContext, `${state?.activity?.activityId || info.activityName}|${request?.id || ''}|${upcoming[0]?.id || ''}|${phraseContext}`);
+    const lifecycle = starScreenLifecycle({
+      status: state?.tenant?.activity?.status,
+      activityRunning: activityRunning(),
+      finishedAt: state?.activity?.activityFinishedAt,
+      requestsOpen: state?.activity?.accepting === true
+    });
+    const dedicationTarget = currentDedication();
     return {
       ...info,
+      starScreenLanguage,
+      funnyMessage,
+      activityLifecycle: lifecycle,
+      finalExperience: lifecycle.mode === 'post-activity' ? { nextActivity: info.nextOccurrence } : null,
+      dedication: dedicationTarget && dedicationVisibleId === String(dedicationTarget.id)
+        ? { requestId: String(dedicationTarget.id), text: String(dedicationTarget.comment || '').trim() }
+        : null,
       displayMode: stageMode === 'karaoke' && request ? 'karaoke' : 'lobby',
       scene: { mode: stageMode, phase: scenePhase, revision: sceneRevision, fadeMs: FADE_MS },
       currentId,
       now: request ? {
+        ...starScreenRequestData(request),
         id: request.id,
         singer: request.singer,
         guestAlias: request.guestAlias,
@@ -496,19 +1770,26 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         isVideo: isVideoName(exactFile)
       } : null,
       mediaUrl: sourceForCurrent(),
-      playing: stageMode === 'karaoke' && Boolean(media.src && !media.paused && !media.ended),
-      currentTime: media.currentTime || 0,
-      duration: Number.isFinite(media.duration) ? media.duration : 0,
+      visualTransportRevision,
+      playing: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
+      currentTime: karaokeClockPosition(),
+      duration: karaokeClockDuration(),
+      // The configured value is published immediately so the muted visual
+      // follower switches rate in the same transport transaction as native
+      // AVAudioUnitTimePitch, rather than waiting for a status timer tick.
+      tempoPercent,
       volume: mediaTargetVolume,
       background: {
         track: background,
-        playing: Boolean(backgroundAudio.src && !backgroundAudio.paused && !backgroundAudio.ended),
-        currentTime: backgroundAudio.currentTime || 0,
-        duration: Number.isFinite(backgroundAudio.duration) ? backgroundAudio.duration : 0,
+        playing: backgroundTransportIsPlaying(),
+        currentTime: backgroundClockPosition(),
+        duration: backgroundClockDuration(),
         volume: backgroundTargetVolume
       },
       showQueueCount: state?.activity?.showStarScreenQueueCount !== false,
-      queue: queue().filter(visibleOnStarScreen).map((item) => ({
+      starScreenPreferences: starScreenPreferences(state?.config?.interfacePreferences),
+      queue: upcoming.map((item) => ({
+        ...starScreenRequestData(item),
         id: item.id,
         singer: item.singer,
         guestAlias: item.guestAlias,
@@ -519,7 +1800,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         visibleOnStarScreen: true
       })),
       stems: {
-        requestedEngine: stemEngineSelection,
+        requestedEngine: 'auto',
         lockedEngine: lockedStemEngine,
         ready: lockedStemSourceReady(),
         status: current()?.stem?.status || 'none'
@@ -529,6 +1810,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function publish() {
     if (!state) return;
+    renderDedication();
     const payload = { ...playerState(), sequence: ++publishSequence, publishedAt: Date.now() };
     channel.postMessage(payload);
     localStorage.setItem('guest-star:player-state', JSON.stringify(payload));
@@ -561,18 +1843,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     $('#playerHotelName').textContent = info.hotelName;
     $('#playerShareHotel').textContent = info.hotelName;
     $('#playerShareUrl').textContent = info.publicUrl || 'La actividad todavía no tiene enlace público.';
-    const logo = $('#playerHotelLogo'), fallback = $('#playerHotelFallback');
-    fallback.textContent = info.hotelName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
-    if (!logo.dataset.brandEvents) {
-      logo.dataset.brandEvents = '1';
-      logo.addEventListener('load', () => { logo.classList.remove('hidden'); fallback.classList.add('hidden'); });
-      logo.addEventListener('error', () => { logo.classList.add('hidden'); fallback.classList.remove('hidden'); });
-    }
-    if (!info.logoUrl) {
-      logo.classList.add('hidden'); fallback.classList.remove('hidden'); logo.removeAttribute('src'); logo.dataset.brandUrl = '';
-    } else if (logo.dataset.brandUrl !== info.logoUrl) {
-      logo.dataset.brandUrl = info.logoUrl; logo.classList.add('hidden'); fallback.classList.remove('hidden'); logo.src = info.logoUrl;
-    }
+    renderBrandLogos($('#playerBrandLogos'), [info.hotelLogoUrl, info.teamLogoUrl], normalizeBrandImageUrl);
+
     const qr = $('#playerQr');
     try {
       if (info.publicUrl && qr.dataset.qrText !== info.publicUrl) setLocalQrImage(qr, info.publicUrl, 360);
@@ -606,7 +1878,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         : 'Detección automática activa';
     $('#playerRequestsMetric').textContent = `${summary.active.length} ${summary.active.length === 1 ? 'solicitud' : 'solicitudes'}`;
     $('#playerRequestsDetail').textContent = state?.sheet?.error || (state?.sheet?.syncing ? 'Actualizando solicitudes…' : 'Cola del Player sincronizada');
-    $('#playerEngineMetric').textContent = stageMode === 'karaoke' && media.src && !media.paused ? 'Reproduciendo' : preparationReady ? 'Preparado' : 'En espera';
+    $('#playerEngineMetric').textContent = stageMode === 'karaoke' && karaokeTransportIsPlaying() ? 'Reproduciendo' : preparationReady ? 'Preparado' : 'En espera';
     $('#playerEngineDetail').textContent = selectedMode === 'bridge' ? 'Esta actividad está configurada para VirtualDJ' : 'Video karaoke limpio en Star Screen';
     $('#playerActivityMetric').textContent = activityRunning() ? `En curso · solicitudes ${accepting ? 'abiertas' : 'cerradas'}` : configured ? 'Lista para iniciar' : 'Sin configurar';
     $('#playerActivityDetail').textContent = activityRunning() ? `Transcurrido ${formatDuration(summary.elapsedSeconds)}` : !configured ? 'Selecciona hotel, venue y actividad' : selectedMode ? 'Modo preparado para iniciar' : 'Elige Player o Bridge';
@@ -634,12 +1906,12 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     primary.dataset.action = status === 'in_progress' ? 'finish' : status === 'finished' ? 'start-new' : 'start';
     primary.textContent = status === 'in_progress' ? 'Finalizar actividad' : status === 'finished' ? 'Iniciar nueva actividad' : 'Iniciar actividad';
     primary.disabled = !state?.tenant?.activity || (status === 'in_progress' ? !can('canFinishActivity') : status === 'finished' ? !can('canStartNewActivity') : !can('canStartActivity'));
-    $('#playerShare').disabled = !configured || !info.publicUrl;
     $('#playerSettings').disabled = !configured;
     $('#playerScan').disabled = !configured;
     $('#playerSync').disabled = !configured;
     $('#playerOpenStarScreen').disabled = !preparationReady;
-    $('#playerClose').classList.toggle('hidden', activityRunning() && selectedMode === 'player');
+    $('#playerStarScreenLanguage').disabled = !activityConfigured();
+    $('#playerStarScreenLanguage').value = starScreenLanguage;
     document.querySelectorAll('[data-player-drawer]').forEach((button) => { button.disabled = !configured; });
     $('#playerPlay').disabled = !ready || (!current() && !queue().length);
     $('#playerRestart').disabled = !ready || !current() || !media.src || transitionBusy;
@@ -651,30 +1923,17 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     $('#playerBackgroundNext').disabled = !preparationReady || !hasBackground || stageMode === 'karaoke' || Boolean(backgroundTransition);
     $('#playerBackgroundPlaySelected').disabled = !preparationReady || !backgroundSelectedId || stageMode === 'karaoke' || Boolean(backgroundTransition);
     const stemTarget = current() || queue()[0] || null;
-    const stemQuick = $('#playerStemQuickAction');
     const stemStatus = $('#playerStemQuickStatus');
-    const stemSelect = $('#playerStemEngine');
     const stemReady = stemTarget?.stem?.ready === true;
     const stemBusy = stemTarget?.stem && !stemReady && stemTarget.stem.status !== 'failed';
-    if (stemSelect) {
-      stemSelect.value = stemEngineSelection;
-      stemSelect.disabled = state?.stemEngine?.available !== true;
-      const engines = state?.stemEngine?.engines || {};
-      const spleeterOption = stemSelect.querySelector('[value="spleeter"]');
-      const demucsOption = stemSelect.querySelector('[value="demucs"]');
-      if (spleeterOption) spleeterOption.disabled = engines.spleeter?.available === false;
-      if (demucsOption) demucsOption.disabled = engines.demucs?.available === false;
-    }
-    if (!state?.stemEngine?.available) stemStatus.textContent = 'Motores IA no disponibles';
+    if (!state?.stemEngine?.available) stemStatus.textContent = state?.stemEngine?.message || 'Motores IA no disponibles';
     else if (!stemTarget) stemStatus.textContent = 'Selecciona una pista';
     else if (!stemTarget.localAvailable) stemStatus.textContent = 'Falta el archivo local';
     else if (stemReady && stemTarget.stem?.improving) stemStatus.textContent = `AUTO · ${stemTarget.stem.engine || 'Spleeter'} listo · mejorando calidad…`;
     else if (stemReady) stemStatus.textContent = `${String(stemTarget.stem?.engine || 'IA').toUpperCase()} listo · instrumental + voz`;
     else if (stemBusy) stemStatus.textContent = `${Math.round(Number(stemTarget.stem.progress) || 0)}% · ${stemTarget.stem.phase || 'Preparando rápido…'}`;
-    else if (stemTarget.stem?.status === 'failed') stemStatus.textContent = 'Falló · se puede reintentar';
-    else stemStatus.textContent = `${guest(stemTarget)} · lista para preparar`;
-    stemQuick.textContent = stemReady ? '✓ IA lista' : stemBusy ? 'Preparando…' : stemTarget?.stem?.status === 'failed' ? '↻ Reintentar' : `✦ Preparar ${stemEngineSelection === 'demucs' ? 'HQ' : stemEngineSelection === 'spleeter' ? 'rápido' : 'AUTO'}`;
-    stemQuick.disabled = !preparationReady || !state?.stemEngine?.available || !stemTarget?.localAvailable || stemReady || stemBusy;
+    else if (stemTarget.stem?.status === 'failed') stemStatus.textContent = 'IA no disponible para esta pista · la reproducción continúa normal';
+    else stemStatus.textContent = 'IA se iniciará automáticamente en segundo plano';
   }
 
   function youtubeDropdown(item) {
@@ -684,8 +1943,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     let content = '';
     if (links.length) {
       content = `<div class="player-youtube-list">${links.map((link, index) => {
-        const kind = link.resultType === 'karaoke' ? 'Karaoke con letras' : 'Lyrics con voz';
-        const detail = [kind, link.channel, formatDuration(link.durationSeconds, true)].filter(Boolean).join(' · ');
+        const detail = [link.channel || 'Canal no indicado', formatDuration(link.durationSeconds, true)].filter(Boolean).join(' · ');
         return `<article class="player-youtube-option"><span><strong>${index + 1}. ${escapeHtml(link.title || 'Versión de YouTube')}</strong><small>${escapeHtml(detail)}</small></span><div><button type="button" data-player-youtube-copy="${requestId}" data-player-youtube-url="${escapeHtml(link.url)}">Copiar</button><button type="button" data-player-youtube-open="${escapeHtml(link.url)}">Abrir ↗</button></div></article>`;
       }).join('')}</div>`;
     } else if (item.youtubeSearching) {
@@ -701,16 +1959,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   function stemAction(item) {
     if (!state?.stemEngine?.available || !item.localAvailable) return '';
     if (item.stem?.ready) return `<div class="player-stem-ready">${escapeHtml(String(item.stem.engine || 'IA').toUpperCase())} LISTO · instrumental + control de voz${item.stem.improving ? ' · mejora HQ en segundo plano' : ''}</div>`;
-    const retry = item.stem?.status === 'failed';
-    return `<button class="player-stem-prepare" type="button" data-player-stem-prepare="${escapeHtml(item.id)}">${retry ? '↻ Reintentar stems IA' : `✦ Preparar stems ${stemEngineSelection.toUpperCase()}`}</button>`;
+    return `<div class="player-stem-prepare" aria-live="polite">${item.stem?.status === 'failed' ? 'IA no disponible · reproducción normal' : 'IA automática en segundo plano'}</div>`;
+  }
+
+  function dedicationQueueControl(item) {
+    if (!String(item.comment || '').trim()) return '';
+    const id = String(item.id);
+    const eligible = activityRunning() && String(currentDedication()?.id || '') === id;
+    const visible = eligible && dedicationVisibleId === id;
+    return `<button class="button ghost player-queue-dedication-toggle" type="button" data-player-dedication="${escapeHtml(id)}" aria-pressed="${visible}" ${eligible ? '' : 'disabled title="Disponible cuando sea el próximo turno o el turno actual"'}>${visible ? 'Ocultar dedicatoria de Star Screen' : 'Mostrar dedicatoria en Star Screen'}</button>`;
   }
 
   function renderQueue() {
     const items = queue();
-    const preparing = (state?.requests || []).filter((item) =>
-      !terminalRequest(item) && item.stem && item.stem.ready !== true && item.stem.status !== 'ready'
-    );
-    if (currentId && !items.some((item) => String(item.id) === currentId)) {
+    if (currentId && !items.some((item) => String(item.id) === currentId) && !activePlaybackLocked()) {
       currentId = '';
       setScene('lobby');
       media.pause();
@@ -719,13 +1981,6 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     }
     $('#playerQueueCount').textContent = String(items.length);
     let cumulativeSeconds = 0;
-    const preparationHtml = preparing.length
-      ? `<section class="player-stem-jobs"><strong>STEMS IA EN PREPARACIÓN</strong>${preparing.map((item) => {
-        const progress = Math.max(0, Math.min(100, Math.round(Number(item.stem.progress) || 0)));
-        const failed = item.stem.status === 'failed';
-        return `<article><span class="player-stem-progress ${failed ? 'failed' : ''}" style="--stem-progress:${progress * 3.6}deg"><b>${failed ? '!' : `${progress}%`}</b></span><span class="player-stem-job-copy"><b>${escapeHtml(guest(item))}</b><small>${escapeHtml(item.song)} · ${escapeHtml(item.stem.phase || 'Esperando')}</small></span>${failed ? `<button type="button" data-player-stem-prepare="${escapeHtml(item.id)}">Reintentar</button>` : ''}</article>`;
-      }).join('')}</section>`
-      : '';
     const queueHtml = items.length
       ? items.map((item, index) => {
         const estimated = new Date(Date.now() + cumulativeSeconds * 1000);
@@ -735,10 +1990,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         const localOwn = item.sourceType === 'player_local';
         const expanded = expandedRequestIds.has(String(item.id));
         const publicVisible = visibleOnStarScreen(item);
-        return `<article class="player-queue-row ${String(item.id) === currentId ? 'active' : ''} ${expanded ? 'expanded' : ''}" data-player-row="${escapeHtml(item.id)}"><div class="player-queue-compact"><button class="player-queue-select" data-player-request="${escapeHtml(item.id)}"><b>#${index + 1}</b><span><strong>${escapeHtml(guest(item))}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''}</small></span><i class="player-local-state ${item.localAvailable ? '' : 'missing'}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</i></button><button class="player-queue-expand" type="button" data-player-expand="${escapeHtml(item.id)}" aria-expanded="${expanded}" title="${expanded ? 'Ocultar opciones' : 'Mostrar opciones'}">⌄</button></div><div class="player-queue-details ${expanded ? '' : 'hidden'}"><div class="player-queue-meta"><em>${localOwn ? 'Agregada manualmente al Player' : `Llegada #${index + 1}`} · turno estimado ${escapeHtml(clockTime(estimated))}</em><em>${escapeHtml(item.language || 'Idioma no indicado')} · ${escapeHtml(formatDuration(duration))}</em>${comment ? `<q>${escapeHtml(comment)}</q>` : ''}</div><div class="player-queue-actions" aria-label="Acciones para ${escapeHtml(guest(item))}"><button data-player-move="-1" data-player-id="${escapeHtml(item.id)}" ${index === 0 ? 'disabled' : ''} title="Subir un turno">↑</button><button data-player-move="1" data-player-id="${escapeHtml(item.id)}" ${index === items.length - 1 ? 'disabled' : ''} title="Bajar un turno">↓</button><button data-player-row-outcome="completed" data-player-id="${escapeHtml(item.id)}" title="Marcar como ya cantó">✓</button><button data-player-row-outcome="skipped" data-player-id="${escapeHtml(item.id)}" title="Saltar cantante">↷</button><button class="danger" data-player-row-outcome="removed" data-player-id="${escapeHtml(item.id)}" title="Quitar de la fila">×</button><button class="player-public-visibility ${publicVisible ? '' : 'is-hidden-public'}" data-player-visibility="${escapeHtml(item.id)}" title="${publicVisible ? 'Ocultar solo de Star Screen' : 'Volver a mostrar en Star Screen'}">${publicVisible ? '◉ Público' : '○ Oculto'}</button></div>${stemAction(item)}${youtubeDropdown(item)}</div></article>`;
+        return `<article class="player-queue-row ${String(item.id) === currentId ? 'active' : ''} ${expanded ? 'expanded' : ''}" data-player-row="${escapeHtml(item.id)}"><div class="player-queue-compact"><button class="player-queue-drag-handle" type="button" data-player-drag="${escapeHtml(item.id)}" aria-label="Reordenar turno de ${escapeHtml(guest(item))}" title="Arrastrar para reordenar · ↑/↓ con teclado">⠿</button><button class="player-queue-select" data-player-request="${escapeHtml(item.id)}"><b>#${index + 1}</b><span><strong class="player-queue-singer-line"><span>${escapeHtml(guest(item))}</span>${comment ? `<svg class="player-queue-dedication-indicator" viewBox="0 0 24 24" role="img" aria-label="Tiene dedicatoria"><title>${escapeHtml(comment)}</title><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>` : ''}</strong><small>${escapeHtml(item.song)}${item.artist ? ` · ${escapeHtml(item.artist)}` : ''}</small></span><span class="player-queue-status"><i class="player-local-state ${item.localAvailable ? '' : 'missing'}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</i>${item.stem ? `<i class="player-queue-stem-state ${item.stem.status === 'failed' ? 'failed' : ''}" title="${escapeHtml(item.stem.phase || queueStemLabel(item.stem))}">${escapeHtml(queueStemLabel(item.stem))}</i>` : ''}</span></button><button class="player-queue-expand" type="button" data-player-expand="${escapeHtml(item.id)}" aria-expanded="${expanded}" aria-controls="playerQueueOptions" aria-haspopup="dialog" title="${expanded ? 'Ocultar opciones' : 'Mostrar opciones'}">⌄</button></div><div class="player-queue-details ${expanded ? '' : 'hidden'}"><div class="player-queue-meta"><em>${localOwn ? 'Agregada manualmente al Player' : `Llegada #${index + 1}`} · turno estimado ${escapeHtml(clockTime(estimated))}</em><em>${escapeHtml(item.language || 'Idioma no indicado')} · ${escapeHtml(formatDuration(duration))}</em>${comment ? `<q>${escapeHtml(comment)}</q>` : ''}</div>${dedicationQueueControl(item)}<div class="player-queue-actions" aria-label="Acciones para ${escapeHtml(guest(item))}"><button data-player-move="-1" data-player-id="${escapeHtml(item.id)}" ${index === 0 ? 'disabled' : ''} title="Subir un turno">↑</button><button data-player-move="1" data-player-id="${escapeHtml(item.id)}" ${index === items.length - 1 ? 'disabled' : ''} title="Bajar un turno">↓</button><button data-player-row-outcome="completed" data-player-id="${escapeHtml(item.id)}" title="Marcar como ya cantó">✓</button><button data-player-row-outcome="skipped" data-player-id="${escapeHtml(item.id)}" title="Saltar cantante">↷</button><button class="danger" data-player-row-outcome="removed" data-player-id="${escapeHtml(item.id)}" title="Quitar de la fila">×</button><button class="player-public-visibility ${publicVisible ? '' : 'is-hidden-public'}" data-player-visibility="${escapeHtml(item.id)}" title="${publicVisible ? 'Ocultar solo de Star Screen' : 'Volver a mostrar en Star Screen'}">${publicVisible ? '◉ Público' : '○ Oculto'}</button></div>${stemAction(item)}${youtubeDropdown(item)}</div></article>`;
       }).join('')
       : '<p class="player-empty">No hay solicitudes activas en esta actividad.</p>';
-    $('#playerQueue').innerHTML = `${preparationHtml}${queueHtml}`;
+    $('#playerQueue').innerHTML = queueHtml;
+    queueUI.refresh();
   }
 
   function renderCompleted() {
@@ -755,11 +2011,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function activePlanBItems() {
-    if (planBItems.length) return planBItems;
+    if (planBSelectionMade) return planBItems;
     return Array.isArray(state?.hitSuggestions) ? state.hitSuggestions : [];
   }
 
+  function renderPlanBFilters() {
+    document.querySelectorAll('[data-player-plan-b-list]').forEach((button) => {
+      const active = button.dataset.playerPlanBList === activePlanBList;
+      button.classList.toggle('primary', active);
+      button.classList.toggle('ghost', !active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+
   function renderPlanB() {
+    renderPlanBFilters();
     const items = activePlanBItems();
     $('#playerPlanBBadge').textContent = String(items.length);
     if (planBLoading) {
@@ -769,33 +2035,44 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     $('#playerPlanB').innerHTML = items.length
       ? items.map((item, index) => {
         const youtube = Array.isArray(item.youtube) ? item.youtube.slice(0, 6) : [];
+        const song = String(item.song || '').trim() || 'Título no indicado';
+        const artist = String(item.artist || '').trim() || 'Artista no indicado';
+        const language = String(item.language || item.list || '').trim() || 'Idioma no indicado';
+        const listLabel = ({ spanish: 'Español', english: 'English', favorites: 'Favoritos', both: 'Balanceada' })[item.list] || item.list;
+        const source = String(item.fileName || (item.localAvailable ? 'Biblioteca local' : listLabel ? `Lista ${listLabel}` : '')).trim();
         const localAction = item.localAvailable && item.trackId
           ? `<button class="button primary" type="button" data-player-plan-b-assign="${index}">Asignar cantante</button>`
           : !youtube.length
             ? `<button class="button ghost" type="button" data-player-plan-b-youtube="${index}">${item.youtubeSearching ? 'Buscando…' : item.youtubeSearched ? 'Reintentar' : 'Buscar Karaoke'}</button>`
             : '';
         const youtubeOptions = youtube.length
-          ? `<details class="player-plan-b-youtube" open><summary>${youtube.length} ${youtube.length === 1 ? 'versión' : 'versiones'} Karaoke/Lyrics</summary><div>${youtube.map((link, optionIndex) => `<article><span><strong>${optionIndex + 1}. ${escapeHtml(link.title || 'Versión de YouTube')}</strong><small>${escapeHtml([link.channel || 'Canal no indicado', link.resultType === 'karaoke' ? 'Karaoke' : 'Lyrics', formatDuration(link.durationSeconds, true)].filter(Boolean).join(' · '))}</small></span><button type="button" data-player-plan-b-copy="${escapeHtml(link.url)}">Copiar</button><button type="button" data-player-plan-b-open="${escapeHtml(link.url)}">Abrir ↗</button></article>`).join('')}</div></details>`
+          ? `<details class="player-plan-b-youtube" open><summary>${youtube.length} ${youtube.length === 1 ? 'versión' : 'versiones'} Karaoke/Lyrics</summary><div>${youtube.map((link, optionIndex) => `<article><span><strong>${optionIndex + 1}. ${escapeHtml(link.title || 'Título externo no indicado')}</strong><small class="player-plan-b-youtube-artist">${escapeHtml(artist)}</small><small>${escapeHtml(['YouTube', link.channel || 'Canal no indicado', link.resultType === 'karaoke' ? 'Karaoke' : 'Lyrics', formatDuration(link.durationSeconds, true)].filter(Boolean).join(' · '))}</small></span><button type="button" data-player-plan-b-copy="${escapeHtml(link.url)}">Copiar</button><button type="button" data-player-plan-b-open="${escapeHtml(link.url)}">Abrir ↗</button></article>`).join('')}</div></details>`
           : '';
-        return `<article class="player-plan-b-row"><span>${escapeHtml(item.language || item.list || 'Plan B')}</span><div><strong>${escapeHtml(item.song)}</strong><small>${escapeHtml(item.artist || 'Artista no indicado')}</small></div><em class="${item.localAvailable ? 'available' : ''}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</em>${localAction}${youtubeOptions}</article>`;
+        return `<article class="player-plan-b-row"><div class="player-plan-b-primary"><strong>${escapeHtml(song)}</strong><small>${escapeHtml(artist)}</small></div><div class="player-plan-b-meta"><span>${escapeHtml(language)}</span><em class="${item.localAvailable ? 'available' : ''}">${item.localAvailable ? 'LOCAL' : 'SIN ARCHIVO'}</em>${source ? `<small title="${escapeHtml(source)}">${escapeHtml(source)}</small>` : ''}</div>${localAction ? `<div class="player-plan-b-action">${localAction}</div>` : ''}${youtubeOptions}</article>`;
       }).join('')
       : '<p class="player-empty">Pulsa Balanceada, Español, English o Favoritos para preparar el Plan B.</p>';
   }
 
   async function drawPlanB(list) {
     if (planBLoading) return;
+    const requestedList = ['spanish', 'english', 'favorites', 'both'].includes(list) ? list : 'both';
+    activePlanBList = requestedList;
+    planBItems = [];
+    planBSelectionMade = true;
     planBLoading = true;
     renderPlanB();
     try {
       const data = await api('/api/rotation/draw', {
         method: 'POST',
-        body: JSON.stringify({ list, count: 8 })
+        body: JSON.stringify({ list: requestedList, count: 8 })
       });
       planBItems = data.items || [];
       showNotice(planBItems.length
         ? 'Plan B actualizado. Las pistas locales se pueden asignar directamente a un cantante.'
         : 'Esa lista todavía no tiene pistas disponibles.');
-    } catch (error) { showNotice(error.message, true); }
+    } catch (error) {
+      showNotice(error.message, true);
+    }
     finally { planBLoading = false; renderPlanB(); }
   }
 
@@ -818,10 +2095,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function renderNow() {
     const item = current();
-    const progress = playerProgressState(media.currentTime, media.duration);
+    currentSongBackground.render();
+    const progress = playerProgressState(karaokeScrubPreview ?? karaokeClockPosition(), karaokeClockDuration());
     $('#playerNowSong').textContent = item?.song || 'Selecciona una canción';
     $('#playerNowSinger').textContent = item ? guest(item) : 'Star Lineup y la música de fondo permanecen activos hasta pulsar Reproducir.';
-    $('#playerPlayLabel').textContent = stageMode === 'karaoke' && !media.paused ? '⏸ Pausar' : '▶ Reproducir';
+    $('#playerPlayLabel').textContent = stageMode === 'karaoke' && karaokeTransportIsPlaying() ? '⏸ Pausar' : '▶ Reproducir';
     $('#playerCurrentTime').textContent = formatDuration(progress.currentTime, true);
     $('#playerDuration').textContent = formatDuration(progress.duration, true);
     const seek = $('#playerSeek');
@@ -866,53 +2144,260 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const background = state?.backgroundMusic || {};
     const track = backgroundPending() || backgroundCurrent();
     const sources = Array.isArray(background.sources) ? background.sources : [];
+    const hasConfiguredSources = sources.length > 0;
+    const configuredSourceLabel = sources.length === 1
+      ? sources[0]
+      : `${sources.length} fuentes configuradas`;
     const configuredVolume = Math.max(0, Math.min(1, Number(background.volume ?? backgroundTargetVolume)));
     if (!$('#playerBackgroundVolume').matches(':active') && !backgroundTransition && Math.abs(configuredVolume - backgroundTargetVolume) > 0.001) backgroundTargetVolume = configuredVolume;
     $('#playerBackgroundVolume').value = String(backgroundTargetVolume);
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
     paintRange($('#playerBackgroundVolume'));
     $('#playerBackgroundCount').textContent = `${Number(background.count) || 0} pistas`;
-    $('#playerBackgroundSong').textContent = track?.song || 'Sin música configurada';
-    $('#playerBackgroundArtist').textContent = track?.artist || (background.error || 'Selecciona una carpeta o un archivo de audio.');
+    // A source can be fully restored after launch before the rotation picks
+    // its first track.  Do not misreport that healthy state as unconfigured.
+    $('#playerBackgroundSong').textContent = track?.song || (hasConfiguredSources ? 'Música ambiental configurada' : 'Sin música configurada');
+    $('#playerBackgroundArtist').textContent = track?.artist || (background.error || (hasConfiguredSources ? configuredSourceLabel : 'Selecciona una carpeta o un archivo de audio.'));
     $('#playerBackgroundStatus').textContent = backgroundStatusOverride || (stageMode === 'karaoke'
       ? 'Pausada mientras canta el invitado'
       : backgroundTransition
         ? 'Aplicando transición suave…'
-      : backgroundAudio.src && !backgroundAudio.paused
-        ? `Reproduciendo aleatoriamente · ${formatDuration(backgroundAudio.currentTime, true)}`
-        : track ? 'Lista para Star Lineup' : 'En espera');
-    $('#playerBackgroundToggleLabel').textContent = backgroundAudio.src && !backgroundAudio.paused ? '⏸ Pausar ambiente' : '▶ Reproducir ambiente';
+      : backgroundTransportIsPlaying()
+        ? `Reproduciendo aleatoriamente · ${formatDuration(backgroundClockPosition(), true)}`
+        : track || hasConfiguredSources
+          ? Number(background.count) > 0 ? 'Lista para Star Lineup' : 'Analizando fuentes configuradas…'
+          : 'En espera');
+    $('#playerBackgroundToggleLabel').textContent = backgroundTransportIsPlaying() ? '⏸ Pausar música de fondo' : '▶ Reproducir música de fondo';
     $('#playerBackgroundSources').innerHTML = sources.length
       ? sources.map((source, index) => `<div class="player-background-source"><span>${escapeHtml(source)}</span><button type="button" data-background-remove="${index}" aria-label="Quitar fuente">×</button></div>`).join('')
       : '<p class="player-empty">Aún no se configuró música de fondo.</p>';
     renderBackgroundPicker();
   }
 
+  function renderDedication() {
+    const target = activityRunning() ? currentDedication() : null;
+    const id = String(target?.id || '');
+    const text = String(target?.comment || '').trim();
+    if (dedicationVisibleId && (dedicationVisibleId !== id || dedicationVisibleText !== text)) {
+      dedicationVisibleId = ''; dedicationVisibleText = '';
+    }
+    document.querySelectorAll('[data-player-dedication]').forEach((button) => {
+      const eligible = button.dataset.playerDedication === id;
+      const visible = eligible && dedicationVisibleId === id;
+      button.disabled = !eligible;
+      button.setAttribute('aria-pressed', String(visible));
+      button.textContent = visible ? 'Ocultar dedicatoria de Star Screen' : 'Mostrar dedicatoria en Star Screen';
+    });
+    const panel = $('#playerDedication');
+    panel.hidden = !id;
+    if (!id) {
+      $('#playerDedicationText').textContent = '';
+      $('#playerDedicationToggle').dataset.requestId = '';
+      $('#playerDedicationToggle').setAttribute('aria-pressed', 'false');
+      return;
+    }
+    $('#playerDedicationSinger').textContent = guest(target);
+    $('#playerDedicationText').textContent = text;
+    const visible = dedicationVisibleId === id;
+    const button = $('#playerDedicationToggle');
+    button.dataset.requestId = id;
+    button.setAttribute('aria-pressed', String(visible));
+    button.textContent = visible ? 'Ocultar de Star Screen' : 'Mostrar en Star Screen';
+  }
+
+  function toggleDedication(id) {
+    const target = activityRunning() ? currentDedication() : null;
+    if (!target || String(target.id) !== String(id)) return;
+    dedicationVisibleId = dedicationVisibleId === String(id) ? '' : String(id);
+    dedicationVisibleText = dedicationVisibleId ? String(target.comment || '').trim() : '';
+    publish();
+  }
+
   function render() {
     if (!state) return;
-    renderBranding(); renderQueue(); renderCompleted(); renderPlanB(); renderNow(); renderBackground(); renderAudioSettings(); renderOperations(); publish();
+    renderBranding(); renderQueue(); renderCompleted(); renderPlanB(); renderNow(); renderBackground(); renderAudioSettings(); renderAutoGainSettings(); renderOperations(); publish();
   }
 
   async function loadRequest(id, autoplay = false) {
     if (!playerReady()) { showNotice('Inicia la actividad en modo Player antes de reproducir.', true); return; }
-    if (transitionBusy) return;
-    const item = requestsById().get(String(id));
+    const requestId = String(id || '');
+    if (!playerTrackChangeAllowed({ activeTrackId: activePlaybackSession?.trackId, targetTrackId: requestId })) {
+      showNotice('La pista cargada está protegida. Usa Devolver, Saltar, Ya cantó o Quitar para liberar el Player.', true);
+      return false;
+    }
+    const item = requestsById().get(requestId);
     if (!item) return;
-    if (stageMode === 'karaoke' && currentId && currentId !== String(id)) await enterLobby({ clearMedia: true });
-    currentId = String(id);
+    // Last selected row wins.  Cancelling the old transition also invalidates
+    // its async media and native-deck work before this selection awaits a
+    // lobby fade.
+    const mediaGeneration = ++karaokeMediaGeneration;
+    if (transitionBusy) {
+      transitionToken += 1;
+      transitionBusy = false;
+      nativeVisualPlaybackExpected = false;
+    }
+    // A slider's delayed seek belongs to the song it was issued for.  It must
+    // never land on the next song while an AVFoundation extraction is pending.
+    cancelPendingKaraokeSeek();
+    const restoredPosition = pendingResumeTime;
+    pendingResumeTime = null;
+    karaokePendingStartPosition = Math.max(0, Number(restoredPosition) || 0);
+    setNativeKaraokeTransportIntent(false, karaokePendingStartPosition);
+    nativeKaraokeDeckRequestId = '';
+    karaokeNativeLoadPromise = null;
+    // nativeAudioStop also invalidates an in-flight AVFoundation extraction in
+    // the host.  Without it, a former row could finish downloading after this
+    // row had replaced the video and install the wrong audio into the deck.
+    if (usingNativeAudio()) stopNativeDeck('karaoke');
+    if (stageMode === 'karaoke' && currentId && currentId !== requestId) await enterLobby({ clearMedia: true });
+    if (mediaGeneration !== karaokeMediaGeneration) return;
+    analysisGeneration += 1;
+    analysisControllers.get('karaoke')?.abort();
+    currentId = requestId;
+    karaokeMediaRequestId = requestId;
+    tempoPercent = 100; karaokeTempoLocked = false; keySemitones = 0;
+    visualTransportRevision += 1;
+    nativeKaraokeWasPlaying = false;
+    nativeLastHardVisualSeekAt = -Infinity;
+    Object.assign(nativeVideoSyncMetrics, { stateEvents: 0, hardSeeks: 0, rateWrites: 0, maxDriftSeconds: 0 });
+    const analysisKey = trackAnalysisKey(currentId, item);
+    currentAnalysis = item.localAvailable ? (analysisCache.get(analysisKey) || { pending: true }) : { bpm: null, key: '', error: 'No hay un archivo local para analizar.' };
+    currentLoudness = item.localAvailable ? { pending: true } : { error: 'No hay un archivo local para analizar.' };
+    applyAutoGain();
     setScene('lobby');
     if (!item.localAvailable) { render(); showNotice('Esta solicitud todavía no tiene un archivo local exacto.', true); return; }
-    const source = `/api/player/media/${encodeURIComponent(currentId)}`;
+    const source = karaokeMediaSource(requestId);
+    lockActivePlayback(item, source);
     const expected = new URL(source, location.origin).href;
-    if (media.src !== expected) { media.pause(); resetPlayerProgress(); media.src = source; media.load(); }
+    if (media.src !== expected) {
+      media.pause();
+      resetPlayerProgress();
+      media.src = source;
+      media.load();
+      // This muted, hidden element only supplies duration/metadata.  Mark the
+      // internal seek so its event cannot enqueue a second native seek.
+      setVisualClockPosition(media, karaokePendingStartPosition);
+    }
     clearStemMedia();
-    applyAudioSettings();
+    if (usingNativeAudio()) {
+      lockStemSourceForCurrent();
+      // Preparing a selected local file does not wait for AI or stop background.
+      // Play can use this cached deck instead of downloading/exporting again.
+      const preload = loadNativeDeck('karaoke', nativeKaraokeSources(requestId), karaokePendingStartPosition)
+        .then(() => {
+          if (mediaGeneration === karaokeMediaGeneration && requestId === currentId) nativeKaraokeDeckRequestId = requestId;
+        })
+        .catch(error => recordAudio('NATIVE_PRELOAD_DEFERRED', 'WARNING', { trackId: requestId, message: error.message }));
+      karaokeNativeLoadPromise = preload;
+    }
+    applyAudioSettings({ synchronizePlayback: true });
     render();
+    void queueStemsForAvailability(item);
+    void analyzeCurrentTrack(currentId, source, analysisKey);
+    void requestLoudness('karaoke', currentId);
     if (autoplay) await startKaraoke();
     else await ensureBackgroundPlaying();
   }
 
+  async function analyzeMediaSource(source, signal) {
+    let context = null;
+    try {
+      signal.throwIfAborted();
+      const response = await fetch(source, { signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (Number(response.headers.get('content-length')) > 96 * 1024 * 1024) throw new Error('Análisis diferido: archivo grande.');
+      const bytes = await response.arrayBuffer();
+      signal.throwIfAborted();
+      const taggedBpm = embeddedBpm(bytes);
+      const AnalysisContext = window.AudioContext || window.webkitAudioContext;
+      if (typeof AnalysisContext !== 'function') throw new Error('Este sistema no ofrece decodificación de audio para el análisis.');
+      context = new AnalysisContext();
+      // decodeAudioData is asynchronous. Avoid an additional full-file copy.
+      let decoded = await context.decodeAudioData(bytes);
+      signal.throwIfAborted();
+      const targetRate = Math.min(11025, decoded.sampleRate);
+      const stride = Math.max(1, Math.round(decoded.sampleRate / targetRate));
+      const length = Math.min(Math.floor(decoded.length / stride), targetRate * 120);
+      const mono = new Float32Array(length);
+      for (let offset = 0; offset < length; offset += 16384) {
+        signal.throwIfAborted();
+        for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+          const data = decoded.getChannelData(channel);
+          for (let index = offset; index < Math.min(length, offset + 16384); index += 1) mono[index] += data[index * stride] / decoded.numberOfChannels;
+        }
+        await wait(0); // Give video/transport input a turn between bounded chunks.
+      }
+      const sampleRate = decoded.sampleRate / stride;
+      decoded = null;
+      await context.close(); context = null;
+      const result = await analyzeOffThread(mono, sampleRate, signal);
+      return taggedBpm ? { ...result, bpm: taggedBpm, bpmSource: 'metadata' } : { ...result, bpmSource: 'audio' };
+    } finally {
+      try { await context?.close(); } catch { /* The temporary decoder may already be closed. */ }
+    }
+  }
+
+  function trackAnalysisKey(requestId, item) {
+    return `${requestId}|${item?.filePath || item?.queuedFilePath || item?.matches?.[0]?.filePath || ''}`;
+  }
+
+  function analysisForSource(analysisKey, source) {
+    if (analysisCache.has(analysisKey)) return Promise.resolve(analysisCache.get(analysisKey));
+    if (analysisTasks.has(analysisKey)) return analysisTasks.get(analysisKey);
+    const lane = analysisKey.startsWith('background|') ? 'background' : 'karaoke';
+    analysisControllers.get(lane)?.abort();
+    const controller = new AbortController();
+    analysisControllers.set(lane, controller);
+    const task = analysisTail.catch(() => {}).then(() => analyzeMediaSource(source, controller.signal))
+      .catch((error) => ({ bpm: null, key: '', error: error.message, cancelled: error.name === 'AbortError' }))
+      .then((result) => {
+        if (!controller.signal.aborted && analysisTasks.get(analysisKey) === task) {
+          analysisCache.set(analysisKey, result);
+          if (analysisCache.size > 64) analysisCache.delete(analysisCache.keys().next().value);
+        }
+        return result;
+      })
+      .finally(() => {
+        if (analysisTasks.get(analysisKey) === task) analysisTasks.delete(analysisKey);
+        if (analysisControllers.get(lane) === controller) analysisControllers.delete(lane);
+      });
+    analysisTail = task;
+    analysisTasks.set(analysisKey, task);
+    return task;
+  }
+
+  async function analyzeCurrentTrack(requestId, source, analysisKey = requestId) {
+    const generation = ++analysisGeneration;
+    const cached = analysisCache.has(analysisKey);
+    const result = await analysisForSource(analysisKey, source);
+    if (trackAnalysisIsCurrent({ generation, currentGeneration: analysisGeneration, requestId, currentRequestId: currentId })) { currentAnalysis = result; renderPlaybackProcessing(); }
+    recordAudio(result.error ? 'TRACK_ANALYSIS_FAILED' : 'TRACK_ANALYSIS_COMPLETED', result.error ? 'WARNING' : 'INFO', result.error ? { message: result.error } : { bpm: result.bpm, key: result.key, cached });
+  }
+
+  async function analyzeBackgroundTrack(trackId, source, analysisKey = `background|${trackId}`) {
+    const generation = ++backgroundAnalysisGeneration;
+    const cached = analysisCache.has(analysisKey);
+    const result = await analysisForSource(analysisKey, source);
+    const activeId = backgroundPendingId || backgroundCurrentId;
+    if (trackAnalysisIsCurrent({ generation, currentGeneration: backgroundAnalysisGeneration, requestId: trackId, currentRequestId: activeId })) { backgroundAnalysis = result; renderPlaybackProcessing(); }
+    recordAudio(result.error ? 'BACKGROUND_TRACK_ANALYSIS_FAILED' : 'BACKGROUND_TRACK_ANALYSIS_COMPLETED', result.error ? 'WARNING' : 'INFO', result.error ? { message: result.error } : { bpm: result.bpm, cached });
+  }
+
+  function prepareBackgroundAnalysis(track) {
+    backgroundAnalysisGeneration += 1;
+    analysisControllers.get('background')?.abort();
+    if (!track?.id) { backgroundAnalysis = null; backgroundLoudness = null; applyAutoGain(); renderPlaybackProcessing(); return; }
+    const analysisKey = `background|${track.id}`;
+    backgroundAnalysis = analysisCache.get(analysisKey) || { pending: true };
+    backgroundLoudness = { pending: true };
+    applyAutoGain();
+    renderPlaybackProcessing();
+    if (!analysisCache.has(analysisKey)) void analyzeBackgroundTrack(track.id, `/api/player/background/media/${encodeURIComponent(track.id)}`, analysisKey);
+    void requestLoudness('background', track.id);
+  }
+
   async function startKaraoke() {
+    recordAudio('KARAOKE_START_REQUEST', 'INFO', { trackId: currentId, stageMode, transitionBusy });
     if (!playerReady()) { showNotice('Inicia la actividad en modo Player antes de reproducir.', true); return; }
     if (transitionBusy) return;
     if (!current()) {
@@ -926,19 +2411,39 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       media.src = source;
       media.load();
     }
+    const requestId = String(currentId || '');
+    const mediaGeneration = karaokeMediaGeneration;
+    if (!requestId || karaokeMediaRequestId !== requestId) return;
+    const isCurrentSelection = () => (
+      currentId === requestId &&
+      karaokeMediaRequestId === requestId &&
+      karaokeMediaGeneration === mediaGeneration
+    );
     lockStemSourceForCurrent();
     const token = ++transitionToken;
     transitionBusy = true;
     const resuming = stageMode === 'karaoke';
+    const nativeDeckAlreadyLoaded = usingNativeAudio() &&
+      nativeKaraokeDeckRequestId === requestId && nativeDeckIsLoaded('karaoke');
+    let startPosition = nativeDeckAlreadyLoaded && resuming
+      ? karaokeClockPosition()
+      : Math.max(0, Number(karaokePendingStartPosition) || 0);
+    nativeVisualPlaybackExpected = true;
     ensureAudioEngine();
     setKaraokeVolume(0);
     try {
       await ensureAudioReady('karaoke-start');
-      let stemElements = lockedStemSourceReady() ? [instrumentalAudio, vocalsAudio] : [];
+      let stemElements = !usingNativeAudio() && lockedStemSourceReady() ? [instrumentalAudio, vocalsAudio] : [];
       try {
         await Promise.all([
-          waitUntilPlayable(media, backgroundGeneration, 8000),
-          ...stemElements.map((element) => waitUntilPlayable(element, backgroundGeneration, 8000))
+          waitUntilPlayable(media, mediaGeneration, 8000, {
+            expectedSource: karaokeMediaSource(requestId),
+            isCurrent: isCurrentSelection
+          }),
+          ...stemElements.map((element) => waitUntilPlayable(element, mediaGeneration, 8000, {
+            expectedSource: element.src,
+            isCurrent: isCurrentSelection
+          }))
         ]);
       } catch (error) {
         if (!stemElements.length) throw error;
@@ -946,15 +2451,61 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         clearStemMedia();
         lockedStemEngine = 'original';
         stemElements = [];
-        applyAudioSettings();
+        applyAudioSettings({ synchronizePlayback: true });
         recordAudio('STEM_SOURCE_FALLBACK_ORIGINAL', 'WARNING', { engine: failedEngine, message: error.message });
-        await waitUntilPlayable(media, backgroundGeneration, 8000);
+        await waitUntilPlayable(media, mediaGeneration, 8000, {
+          expectedSource: karaokeMediaSource(requestId),
+          isCurrent: isCurrentSelection
+        });
+      }
+      if (token !== transitionToken || !isCurrentSelection()) return;
+      if (usingNativeAudio() && (!resuming || !nativeDeckAlreadyLoaded)) {
+        // The host may scrub while AVFoundation is preparing the file.  The
+        // latest staged master position wins over the initial load snapshot.
+        startPosition = karaokePendingStartPosition;
+        try {
+          if (karaokeNativeLoadPromise) await karaokeNativeLoadPromise;
+          if (!isCurrentSelection()) return;
+          if (nativeKaraokeDeckRequestId !== requestId) await loadNativeDeck('karaoke', nativeKaraokeSources(requestId), startPosition);
+          if (token !== transitionToken || !isCurrentSelection()) return;
+          nativeKaraokeDeckRequestId = requestId;
+        } catch (error) {
+          if (!lockedStemSourceReady()) throw error;
+          const failedEngine = lockedStemEngine;
+          clearStemMedia();
+          lockedStemEngine = 'original';
+          applyAudioSettings({ synchronizePlayback: true });
+          recordAudio('NATIVE_STEM_SOURCE_FALLBACK_ORIGINAL', 'WARNING', { engine: failedEngine, message: error.message });
+          await loadNativeDeck('karaoke', nativeKaraokeSources(requestId), startPosition);
+          if (token !== transitionToken || !isCurrentSelection()) {
+            stopNativeDeck('karaoke');
+            return;
+          }
+          nativeKaraokeDeckRequestId = requestId;
+        }
+      }
+      if (usingNativeAudio() && (!resuming || !nativeDeckAlreadyLoaded)) {
+        startPosition = karaokePendingStartPosition;
       }
       syncStemTimes(true);
-      await Promise.all([
-        media.play(),
-        ...stemElements.map((element) => element.play())
+      const visualPlayback = usingNativeAudio() ? Promise.resolve() : media.play().catch((error) => {
+        // The muted WebKit element is only a video follower. A transient
+        // visual autoplay pause must not cancel AVAudioEngine transport.
+        if (!usingNativeAudio()) throw error;
+        nativeVisualPlayRetryAt = performance.now() + 250;
+      });
+      const playbackResults = await Promise.all([
+        visualPlayback,
+        ...stemElements.map((element) => element.play()),
+        ...(usingNativeAudio() ? [playNativeDeck('karaoke', startPosition)] : [])
       ]);
+      if (token !== transitionToken || !isCurrentSelection()) return;
+      if (usingNativeAudio()) {
+        const nativeResult = playbackResults.at(-1);
+        setNativeKaraokeTransportIntent(true, Number(nativeResult?.position ?? startPosition));
+        media.pause();
+      }
+      else keepNativeVideoVisualPlaying(media);
       if (token !== transitionToken) return;
       if (!resuming) {
         setScene('karaoke', 'to-karaoke');
@@ -963,19 +2514,24 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       render();
       await Promise.all([
         fadeKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume, resuming ? 360 : FADE_MS, () => token === transitionToken),
-        backgroundAudio.src && !backgroundAudio.paused
+        backgroundAudio.src && backgroundTransportIsPlaying()
           ? fadeVolume(backgroundAudio, 0, FADE_MS, () => token === transitionToken)
           : Promise.resolve(true)
       ]);
       if (token !== transitionToken) return;
       backgroundAudio.pause();
-      backgroundAudio.volume = 0;
+      if (usingNativeAudio()) await pauseNativeBackgroundDeck();
+      else pauseNativeDeck('background');
+      setBackgroundFade(0);
       setScene('karaoke');
       scheduleRuntimeSave(0);
       backgroundStatusOverride = '';
       render();
     } catch (error) {
       if (token === transitionToken) {
+        recordAudio('KARAOKE_START_FAILED', 'ERROR', { trackId: requestId, message: error.message, nativeDeckLoaded: nativeDeckIsLoaded('karaoke'), mediaReadyState: media.readyState });
+        nativeVisualPlaybackExpected = false;
+        setNativeKaraokeTransportIntent(false, karaokeClockPosition());
         setScene('lobby');
         setKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume);
         render();
@@ -983,23 +2539,27 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         showNotice(`No se pudo reproducir el video: ${error.message}`, true);
       }
     } finally {
-      if (token === transitionToken) { transitionBusy = false; render(); }
+      if (token === transitionToken) { transitionBusy = false; render(); scheduleRuntimeSave(0); }
     }
   }
 
   async function pauseKaraoke() {
-    if (media.paused || transitionBusy) return;
+    if (!karaokeTransportIsPlaying()) return;
     const token = ++transitionToken;
     transitionBusy = true;
+    nativeVisualPlaybackExpected = false;
     try {
-      await fadeKaraokeVolume(0, 320, () => token === transitionToken);
-      if (token === transitionToken) {
-        media.pause();
-        instrumentalAudio.pause();
-        vocalsAudio.pause();
-      }
+      const pausePosition = karaokeClockPosition();
+      if (usingNativeAudio()) setNativeKaraokeTransportIntent(false, pausePosition);
+      media.pause();
+      pauseStemTracks();
+      renderNow();
+      publish();
+      if (usingNativeAudio()) await pauseNativeKaraokeDeck(pausePosition);
+      else pauseNativeDeck('karaoke');
+      nativeKaraokeWasPlaying = false;
     } finally {
-      if (token === transitionToken) { transitionBusy = false; render(); }
+      if (token === transitionToken) { transitionBusy = false; render(); scheduleRuntimeSave(0); }
     }
   }
 
@@ -1007,28 +2567,40 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     if (!media.src || transitionBusy) return;
     const token = ++transitionToken;
     transitionBusy = true;
-    const wasPlaying = !media.paused;
+    const wasPlaying = karaokeTransportIsPlaying();
     try {
       if (wasPlaying) await fadeKaraokeVolume(0, 240, () => token === transitionToken);
       if (token !== transitionToken) return;
-      media.currentTime = 0;
+      await seekKaraokeTransport(0);
       syncStemTimes(true);
       if (wasPlaying) {
+        nativeVisualPlaybackExpected = true;
         await ensureAudioReady('karaoke-restart');
-        const stemElements = lockedStemSourceReady() ? [instrumentalAudio, vocalsAudio] : [];
+        const stemElements = !usingNativeAudio() && lockedStemSourceReady() ? [instrumentalAudio, vocalsAudio] : [];
         await Promise.all([
           waitUntilPlayable(media, backgroundGeneration, 8000),
           ...stemElements.map((element) => waitUntilPlayable(element, backgroundGeneration, 8000))
         ]);
         syncStemTimes(true);
-        await Promise.all([
-          media.play(),
-          ...stemElements.map((element) => element.play())
+        const visualPlayback = usingNativeAudio() ? Promise.resolve() : media.play().catch((error) => {
+          if (!usingNativeAudio()) throw error;
+          nativeVisualPlayRetryAt = performance.now() + 250;
+        });
+        const playbackResults = await Promise.all([
+          visualPlayback,
+          ...stemElements.map((element) => element.play()),
+          ...(usingNativeAudio() ? [playNativeDeck('karaoke', 0)] : [])
         ]);
+        if (usingNativeAudio()) {
+          const nativeResult = playbackResults.at(-1);
+          setNativeKaraokeTransportIntent(true, Number(nativeResult?.position ?? 0));
+          media.pause();
+        }
+        else keepNativeVideoVisualPlaying(media);
         await fadeKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume, 360, () => token === transitionToken);
       }
     } finally {
-      if (token === transitionToken) { transitionBusy = false; render(); }
+      if (token === transitionToken) { transitionBusy = false; render(); scheduleRuntimeSave(0); }
     }
   }
 
@@ -1049,10 +2621,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     backgroundTransition = (async () => {
       try { await ensureAudioReady('background-start'); }
       catch (error) { backgroundStatusOverride = error.message; return false; }
-      backgroundStatusOverride = 'Aplicando fade de música ambiental…';
+      backgroundStatusOverride = 'Aplicando fade de música de fondo…';
       renderBackground();
-      if (backgroundAudio.src && !backgroundAudio.paused) await fadeVolume(backgroundAudio, 0, 420, () => generation === backgroundGeneration);
+      if (backgroundAudio.src && backgroundTransportIsPlaying()) await fadeVolume(backgroundAudio, 0, 420, () => generation === backgroundGeneration);
       backgroundAudio.pause();
+      // On the first ambient Play after launch the native deck does not exist
+      // yet. Loading the next track creates it; pausing it first rejects the
+      // transition and leaves this background-only UI flow at the fade status.
+      if (usingNativeAudio()) {
+        if (nativeDeckIsLoaded('background')) await pauseNativeBackgroundDeck();
+      } else pauseNativeDeck('background');
       const maximumAttempts = Math.min(backgroundTracks().length, 3);
       for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
         if (!backgroundShuffle.length || !backgroundShuffle.some((id) => backgroundTracks().some((track) => track.id === id) && !backgroundFailedIds.has(id))) refillBackgroundShuffle();
@@ -1067,15 +2645,24 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         backgroundPendingId = nextId;
         const track = backgroundPending();
         if (!track) continue;
-        backgroundStatusOverride = `Preparando ${track.song || track.name || 'música ambiental'}…`;
-        backgroundAudio.volume = 0;
+        prepareBackgroundAnalysis(track);
+        backgroundStatusOverride = `Preparando ${track.song || track.name || 'música de fondo'}…`;
+        setBackgroundVolume(backgroundTargetVolume); setBackgroundFade(0);
         backgroundAudio.src = `/api/player/background/media/${encodeURIComponent(track.id)}`;
         backgroundAudio.load();
+        applyBackgroundTempoNow();
         renderBackground(); publish();
         try {
           await waitUntilPlayable(backgroundAudio, generation);
           if (generation !== backgroundGeneration || stageMode !== 'lobby') return false;
-          await backgroundAudio.play();
+          if (usingNativeAudio()) {
+            await loadNativeDeck('background', [{ slot: 'original', url: backgroundAudio.currentSrc || backgroundAudio.src, gain: 1 }], backgroundAudio.currentTime);
+          }
+          await Promise.all([
+            ...(usingNativeAudio()
+              ? [playNativeBackgroundDeck(backgroundAudio.currentTime)]
+              : [backgroundAudio.play()])
+          ]);
           if (generation !== backgroundGeneration || stageMode !== 'lobby') return false;
           backgroundCurrentId = nextId;
           backgroundPendingId = '';
@@ -1088,20 +2675,22 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         } catch (error) {
           if (generation !== backgroundGeneration) return false;
           if (error?.name === 'NotAllowedError') {
-            backgroundStatusOverride = 'Pulsa Reproducir ambiente para autorizar el audio.';
+            backgroundStatusOverride = 'Pulsa Reproducir música de fondo para autorizar el audio.';
             return false;
           }
           backgroundFailedIds.add(nextId);
           backgroundPendingId = '';
           backgroundAudio.pause();
+          stopNativeDeck('background');
           backgroundAudio.removeAttribute('src');
           backgroundAudio.load();
         }
       }
       backgroundCurrentId = '';
       backgroundPendingId = '';
+      prepareBackgroundAnalysis(null);
       backgroundStatusOverride = backgroundFailedIds.size >= backgroundTracks().length
-        ? 'Ningún audio ambiental pudo reproducirse. Revisa el formato y pulsa Reintentar.'
+        ? 'Ningún audio de fondo pudo reproducirse. Revisa el formato y pulsa Reintentar.'
         : `${backgroundFailedIds.size} audios no pudieron abrirse. Pulsa Reintentar para probar los restantes.`;
       return false;
     })().finally(() => {
@@ -1117,11 +2706,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     if (!playerPreparationReady() || stageMode === 'karaoke' || !backgroundTracks().length) return;
     const pending = backgroundPending();
     if (!backgroundAudio.src || (!backgroundCurrent() && !pending)) return playNextBackground();
-    if (backgroundAudio.paused) {
+    // A hidden WebKit mirror may be paused while AVAudioEngine continues
+    // normally.  Do not restart, seek, or change the native ambient track.
+    if (backgroundTransportIsPlaying()) return;
+    if (backgroundAudio.paused || usingNativeAudio()) {
       try {
         await ensureAudioReady('background-resume');
-        backgroundAudio.volume = 0;
-        await backgroundAudio.play();
+        setBackgroundVolume(backgroundTargetVolume); setBackgroundFade(0);
+        if (usingNativeAudio() && !nativeDeckIsLoaded('background')) {
+          await loadNativeDeck('background', [{ slot: 'original', url: backgroundAudio.currentSrc || backgroundAudio.src, gain: 1 }], backgroundAudio.currentTime);
+        }
+        await Promise.all([
+          ...(usingNativeAudio()
+            ? [playNativeBackgroundDeck(backgroundAudio.currentTime)]
+            : [backgroundAudio.play()])
+        ]);
         if (pending) {
           backgroundCurrentId = pending.id;
           backgroundPendingId = '';
@@ -1130,62 +2729,101 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         }
         backgroundStatusOverride = '';
         await fadeVolume(backgroundAudio, backgroundTargetVolume, FADE_MS, () => stageMode === 'lobby');
-      } catch { backgroundStatusOverride = 'Pulsa Reproducir ambiente para activar el audio.'; renderBackground(); }
+      } catch { backgroundStatusOverride = 'Pulsa Reproducir música de fondo para activar el audio.'; renderBackground(); }
     }
   }
 
-  async function enterLobby({ startBackground = true, clearMedia = false } = {}) {
+  async function enterLobby({ startBackground = true, clearMedia = false, authorized = false } = {}) {
+    if (activePlaybackLocked() && !authorized) {
+      recordAudio('ACTIVE_PLAYBACK_MUTATION_BLOCKED', 'WARNING', { action: 'enterLobby', trackId: currentId });
+      return false;
+    }
     if (transitionBusy && scenePhase === 'to-lobby') return;
     const token = ++transitionToken;
     transitionBusy = true;
+    nativeVisualPlaybackExpected = false;
     setScene('lobby', 'to-lobby');
     render();
     const backgroundPromise = startBackground
       ? Promise.race([ensureBackgroundPlaying(), wait(FADE_MS)])
       : Promise.resolve();
     await Promise.all([
-      media.src && !media.paused ? fadeKaraokeVolume(0, FADE_MS, () => token === transitionToken) : Promise.resolve(true),
+      media.src && karaokeTransportIsPlaying() ? fadeKaraokeVolume(0, FADE_MS, () => token === transitionToken) : Promise.resolve(true),
       backgroundPromise
     ]);
     try {
       if (token !== transitionToken) return;
+      const pausePosition = karaokeClockPosition();
+      if (usingNativeAudio()) setNativeKaraokeTransportIntent(false, pausePosition);
       media.pause();
       instrumentalAudio.pause();
       vocalsAudio.pause();
+      if (usingNativeAudio()) await pauseNativeKaraokeDeck(pausePosition);
+      else pauseNativeDeck('karaoke');
+      nativeKaraokeWasPlaying = false;
       setScene('lobby');
       scheduleRuntimeSave(0);
       if (clearMedia) clearPlayerMedia();
     } finally {
       if (token === transitionToken) { transitionBusy = false; render(); }
     }
+    return true;
   }
 
   async function searchLibrary({ silent = false, append = false, browseAll = false } = {}) {
-    const query = $('#playerLibrarySearch').value.trim();
+    const query = $('#playerDirectSearch').value.trim();
+    const generation = ++libraryGeneration;
+    const requestKey = query;
+    if (append && requestKey !== libraryRequestKey) append = false;
+    const offset = append ? libraryOffset : 0;
     const list = $('#playerLibraryList');
     const previousScroll = list.scrollTop;
-    if (!append) {
-      libraryOffset = 0;
-      libraryTracks = [];
-      libraryBrowseAll = browseAll || !query;
-    }
-    if (!silent) list.innerHTML = '<p class="player-empty">Buscando en la biblioteca local…</p>';
+    libraryLoading = true;
+    libraryBrowseAll = browseAll || !query;
+    if (!silent && !append) list.innerHTML = '<p class="player-empty">Buscando en el índice local…</p>';
     try {
-      const data = await api(`/api/player/library?query=${encodeURIComponent(query)}&offset=${libraryOffset}&limit=60&all=${libraryBrowseAll ? '1' : '0'}`);
+      const data = await api(`/api/player/library?query=${encodeURIComponent(query)}&offset=${offset}&limit=60&all=1&sort=title`);
+      if (generation !== libraryGeneration) return;
       const tracks = data.tracks || [];
       libraryTracks = append ? [...libraryTracks, ...tracks] : tracks;
       libraryOffset = libraryTracks.length;
       libraryHasMore = data.hasMore === true;
-      const signature = libraryTracks.map((track) => track.id).join('|');
+      libraryRequestKey = requestKey;
+      libraryScanAt = String(state?.library?.lastScanAt || '');
+      $('#playerLibraryCount').textContent = `${libraryTracks.length} de ${data.total || 0} pistas`;
+      const signature = JSON.stringify(libraryTracks);
       if (silent && list.dataset.resultSignature === signature) { libraryLoaded = true; return; }
       list.innerHTML = libraryTracks.length
-        ? `${libraryTracks.map((track) => `<button class="player-library-row" data-library-track="${escapeHtml(track.id)}"><i class="player-library-icon">${String(track.mediaType).startsWith('video/') ? '▣' : '♫'}</i><span><strong>${escapeHtml(track.song || track.name)}</strong><small>${track.artist ? `${escapeHtml(track.artist)} · ` : ''}${escapeHtml(track.extension)} · asignar cantante</small></span></button>`).join('')}${libraryHasMore ? '<button class="button ghost player-library-more" id="playerLibraryMore" type="button">Cargar 60 más</button>' : ''}`
-        : '<p class="player-empty">No se encontraron archivos con esa búsqueda.</p>';
+        ? `${libraryTracks.map((track) => `<button type="button" class="player-library-row" data-library-track="${escapeHtml(track.id)}" title="${escapeHtml(track.name)}"><i class="player-library-icon">${String(track.mediaType).startsWith('video/') ? '▣' : '♫'}</i><span><strong>${escapeHtml(track.song || track.name)}</strong><small>${escapeHtml([track.artist, track.channel, track.provider, Number(track.durationSeconds) > 0 ? formatDuration(track.durationSeconds) : '', track.language, 'Local', track.extension].filter(Boolean).join(' · '))}</small></span><b aria-hidden="true">＋ Fila</b></button>`).join('')}${libraryHasMore ? '<button class="button ghost player-library-more" id="playerLibraryMore" type="button">Cargar 60 más</button>' : ''}`
+        : `<p class="player-empty">${query ? 'No hay coincidencias con esa búsqueda.' : 'La biblioteca está vacía. Usa «Escanear biblioteca» para actualizar el índice local.'}</p>`;
       list.dataset.tracks = JSON.stringify(libraryTracks);
       list.dataset.resultSignature = signature;
-      if (silent) list.scrollTop = previousScroll;
+      list.scrollTop = silent || append ? previousScroll : 0;
       libraryLoaded = true;
-    } catch (error) { if (!silent) list.innerHTML = `<p class="player-empty">${escapeHtml(error.message)}</p>`; }
+    } catch (error) { if (generation === libraryGeneration) { libraryLoaded = false; if (!silent) list.innerHTML = `<p class="player-empty">${escapeHtml(error.message)}</p>`; } }
+    finally { if (generation === libraryGeneration) libraryLoading = false; }
+  }
+
+  function openLocalLibrary() {
+    window.clearTimeout(directSearchTimer);
+    window.clearTimeout(librarySearchTimer);
+    ++directSearchGeneration;
+    $('#playerDirectSearch').value = '';
+    closeDirectSearch();
+    libraryOpened = true;
+    document.body.classList.add('player-library-open');
+    $('#playerLocalLibrary').classList.remove('hidden');
+    $('#playerLibraryBrowse').setAttribute('aria-expanded', 'true');
+    if (!libraryLoaded || libraryRequestKey || libraryScanAt !== String(state?.library?.lastScanAt || '')) void searchLibrary({ browseAll: true });
+    $('#playerDirectSearch').focus({ preventScroll: true });
+  }
+
+  function closeLocalLibrary() {
+    libraryOpened = false;
+    document.body.classList.remove('player-library-open');
+    $('#playerLocalLibrary').classList.add('hidden');
+    $('#playerLibraryBrowse').setAttribute('aria-expanded', 'false');
+    $('#playerLibraryBrowse').focus({ preventScroll: true });
   }
 
   function closeDirectSearch() {
@@ -1231,13 +2869,6 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     $('#playerAssignSong').textContent = track.song || track.name || 'Pista local';
     $('#playerAssignArtist').textContent = track.artist || `${track.extension || ''} · archivo local`;
     $('#playerAssignSinger').value = '';
-    const stemsOption = $('#playerAssignStemsOption');
-    stemsOption.classList.remove('hidden');
-    $('#playerAssignStems').disabled = state?.stemEngine?.available !== true;
-    $('small', stemsOption).textContent = state?.stemEngine?.available === true
-      ? 'Opcional: separa instrumental y voz antes de añadirla a Star Lineup.'
-      : 'El motor Stems IA no está instalado; la pista se agregará con su audio original.';
-    $('#playerAssignStems').checked = false;
     if (assignDialog.open) assignDialog.close();
     assignDialog.showModal();
     window.setTimeout(() => $('#playerAssignSinger').focus(), 30);
@@ -1253,22 +2884,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         method: 'POST',
         body: JSON.stringify({
           trackId: pendingTrack.id,
-          singer,
-          prepareStems: state?.stemEngine?.available === true && $('#playerAssignStems').checked,
-          stemEngine: stemEngineSelection
+          singer
         })
       });
       assignDialog.close();
       pendingTrack = null;
       sync(await api('/api/state'));
-      if (data.item.stem?.status && data.item.stem.ready !== true && data.item.stem.status !== 'ready') {
-        showNotice(`${singer} está en preparación IA y aparecerá en la fila solo cuando esté listo.`);
-      } else {
-        if (playerReady()) await loadRequest(data.item.id, false);
-        showNotice(playerReady()
-          ? `${singer} fue agregado a la fila. Star Lineup seguirá visible hasta que pulses Reproducir.`
-          : `${singer} fue agregado a la fila y estará listo cuando inicies la actividad.`);
-      }
+      showNotice(playerReady()
+        ? `${singer} fue agregado a la fila. La preparación IA continúa en segundo plano y no retiene la reproducción.`
+        : `${singer} fue agregado a la fila y estará listo cuando inicies la actividad.`);
     } catch (error) { showNotice(error.message, true); }
   }
 
@@ -1280,16 +2904,39 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     window.cancelAnimationFrame(waveformFrame);
     const canvas = $('#playerWaveform');
     const context = canvas?.getContext('2d');
-    if (!canvas || !context || !analyser) return;
+    if (!canvas || !context) return;
+    if (usingNativeAudio()) {
+      const drawNative = (now) => {
+        waveformFrame = requestAnimationFrame(drawNative);
+        const frameTime = Number(now) || performance.now();
+        if (!opened || document.hidden || frameTime - nativeWaveformPaintAt < 50) return;
+        nativeWaveformPaintAt = frameTime;
+        const values = nativeWaveformHistory;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
+        gradient.addColorStop(0, getComputedStyle(document.body).getPropertyValue('--gs-primary').trim()); gradient.addColorStop(1, getComputedStyle(document.body).getPropertyValue('--gs-secondary').trim());
+        context.fillStyle = gradient;
+        const width = canvas.width / Math.max(1, values.length || 64);
+        const visible = values.length ? values : [0];
+        visible.forEach((value, index) => {
+          const height = Math.max(2, Math.min(canvas.height, value * canvas.height));
+          context.fillRect(index * width, canvas.height - height, Math.max(1, width - 2), height);
+        });
+      };
+      drawNative();
+      return;
+    }
+    if (!analyser) return;
     const values = new Uint8Array(analyser.frequencyBinCount);
     const draw = () => {
       if (!analyser) return;
       waveformFrame = requestAnimationFrame(draw);
+      if (!opened || document.hidden) return;
       analyser.getByteFrequencyData(values);
       context.clearRect(0, 0, canvas.width, canvas.height);
       const width = canvas.width / values.length;
       const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
-      gradient.addColorStop(0, '#ff2da9'); gradient.addColorStop(1, '#7a5cff');
+      gradient.addColorStop(0, getComputedStyle(document.body).getPropertyValue('--gs-primary').trim()); gradient.addColorStop(1, getComputedStyle(document.body).getPropertyValue('--gs-secondary').trim());
       context.fillStyle = gradient;
       values.forEach((value, index) => {
         const height = Math.max(2, value / 255 * canvas.height);
@@ -1304,6 +2951,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function ensureAudioEngine() {
+    if (usingNativeAudio()) {
+      silenceWebKitAudio();
+      startWaveform();
+      return true;
+    }
     if (mediaAudioGraph && audioContext?.state !== 'closed') {
       applyAudioSettings();
       if (playerAudioRecoveryAction(audioContext.state) === 'resume') void recoverAudioEngine('ensure');
@@ -1326,8 +2978,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         normalGain: audioContext.createGain(),
         instrumentalGain: audioContext.createGain(),
         vocalsGain: audioContext.createGain(),
+        karaokeAutoGain: audioContext.createGain(),
+        backgroundAutoGain: audioContext.createGain(),
         backgroundGain: audioContext.createGain(),
+        backgroundFade: audioContext.createGain(),
+        pitch: audioContext.createGain(),
         master: audioContext.createGain(),
+        karaokeFade: audioContext.createGain(),
+        outputMix: audioContext.createGain(),
+        finalMaster: audioContext.createGain(),
+        outputAnalyser: audioContext.createAnalyser(),
         destination: audioContext.destination
       };
       graph.low = audioContext.createBiquadFilter();
@@ -1339,15 +2999,22 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       graph.analyser = audioContext.createAnalyser(); graph.analyser.fftSize = 256;
       mediaAudioGraph = reconnectPlayerAudioGraph(graph);
       analyser = graph.analyser;
-      graph.master.gain.value = karaokeMuted ? 0 : mediaTargetVolume;
-      graph.backgroundGain.gain.value = 1;
+      graph.master.gain.value = mediaTargetVolume;
+      graph.karaokeFade.gain.value = karaokeMuted ? 0 : 1;
+      graph.karaokeAutoGain.gain.value = dbToLinear(karaokeAutoGainDb);
+      graph.backgroundAutoGain.gain.value = dbToLinear(backgroundAutoGainDb);
+      graph.finalMaster.gain.value = masterVolumeGain(masterPercent);
+      graph.outputAnalyser.fftSize = 512;
+      graph.backgroundGain.gain.value = backgroundTargetVolume;
+      graph.backgroundFade.gain.value = backgroundAudio.paused ? 0 : 1;
       audioContext.addEventListener('statechange', () => {
         const contextState = audioContext?.state || 'closed';
         recordAudio('AUDIO_CONTEXT_STATE_CHANGED', ['closed', 'interrupted'].includes(contextState) ? 'WARNING' : 'INFO', { state: contextState });
         diagnostics?.setHealth?.('Audio', contextState === 'running' ? 'OK' : contextState === 'closed' ? 'ERROR' : 'RECOVERING', { state: contextState });
         if (playerAudioRecoveryAction(contextState) !== 'ready' && audioElements().some((element) => !element.paused)) void recoverAudioEngine('statechange');
       });
-      applyAudioSettings();
+      applyAudioSettings({ synchronizePlayback: true });
+      pitchWorkletPromise = initializePitchWorklets(audioContext, graph);
       startWaveform();
       recordAudio('AUDIO_GRAPH_CREATED', 'INFO', { sources: 4 });
       diagnostics?.setHealth?.('Audio', audioContext.state === 'running' ? 'OK' : 'RECOVERING', { state: audioContext.state });
@@ -1357,6 +3024,25 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       diagnostics?.setHealth?.('Audio', 'ERROR', { message: error.message });
       showNotice(`Guest Star no pudo activar el motor de audio: ${error.message}`, true);
       return false;
+    }
+  }
+
+  async function initializePitchWorklets(context, graph) {
+    if (!context.audioWorklet || typeof AudioWorkletNode !== 'function') {
+      pitchWorkletState = 'unsupported'; renderPlaybackProcessing(); return;
+    }
+    try {
+      await context.audioWorklet.addModule('/pitch-shifter-worklet.js');
+      if (audioContext !== context || mediaAudioGraph !== graph) return;
+      // Keep the gain-node bypass in place until the operator actually changes
+      // Key.  Constructing and reconnecting a worklet while tempo is live used
+      // to introduce an avoidable discontinuity in the karaoke bus.
+      pitchWorkletState = 'ready'; applyAudioSettings(); renderPlaybackProcessing();
+      recordAudio('PITCH_WORKLET_READY', 'INFO');
+    } catch (error) {
+      pitchWorkletState = 'unsupported';
+      recordAudio('PITCH_WORKLET_FAILED', 'ERROR', { message: error.message });
+      renderPlaybackProcessing();
     }
   }
 
@@ -1406,6 +3092,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function recoverAudioEngine(reason = 'unknown') {
+    if (usingNativeAudio()) {
+      try {
+        const result = await nativeAudioRequest('nativeAudioStatus');
+        const nativeState = result.state || {};
+        if (nativeState.running === false && (stageMode === 'karaoke' || backgroundTransportIsPlaying())) throw new Error('AVAudioEngine no está en ejecución.');
+        recordAudio('NATIVE_AUDIO_RECOVERY_CONFIRMED', 'INFO', { reason, engine: nativeState.engine || 'AVAudioEngine' });
+        diagnostics?.setHealth?.('Audio', 'OK', { recovered: true, reason, engine: 'AVAudioEngine' });
+        return true;
+      } catch (error) {
+        recordAudio('NATIVE_AUDIO_RECOVERY_FAILED', 'ERROR', { reason, message: error.message });
+        diagnostics?.setHealth?.('Audio', 'ERROR', { reason, message: error.message, engine: 'AVAudioEngine' });
+        return false;
+      }
+    }
     if (audioRecoveryPromise) return audioRecoveryPromise;
     audioRecoveryPromise = (async () => {
       recordAudio('AUDIO_RECOVERY_STARTED', 'WARNING', { reason, state: audioContext?.state || 'missing' });
@@ -1418,7 +3118,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
           if (mediaAudioGraph?.connected !== true) reconnectPlayerAudioGraph(mediaAudioGraph);
         }
         if (audioContext?.state !== 'running') throw new Error(`AudioContext quedó en estado ${audioContext?.state || 'desconocido'}.`);
-        applyAudioSettings();
+        applyAudioSettings({ synchronizePlayback: true });
         recordAudio('AUDIO_RECOVERY_SUCCEEDED', 'INFO', { reason, state: audioContext.state });
         diagnostics?.setHealth?.('Audio', 'OK', { recovered: true, reason });
         return true;
@@ -1432,25 +3132,34 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function ensureAudioReady(reason) {
+    if (usingNativeAudio()) return true;
     if (!ensureAudioEngine() || audioContext?.state !== 'running') {
       const recovered = await recoverAudioEngine(reason);
       if (!recovered) throw new Error('El motor de audio no respondió. Intenta reproducir nuevamente.');
     }
+    await pitchWorkletPromise;
     return true;
   }
 
   function audioOutputCapability() {
     const AudioEngine = window.AudioContext || window.webkitAudioContext;
-    const supported = playerAudioOutputSupported(AudioEngine, navigator.mediaDevices);
+    const webSupported = playerAudioOutputSupported(AudioEngine, navigator.mediaDevices);
+    const nativeSupported = nativeAudioBridge();
+    const supported = webSupported || nativeSupported;
     return Promise.resolve({
       supported,
-      reason: supported ? '' : 'Esta versión de WebKit no permite seleccionar una salida de audio por aplicación.'
+      mode: nativeSupported ? 'coreaudio' : webSupported ? 'webkit' : 'none',
+      reason: supported ? '' : 'Esta versión de WebKit no permite seleccionar una salida de audio y el bridge nativo no está disponible.'
     });
   }
 
   async function listAudioOutputs() {
     const capability = await audioOutputCapability();
     if (!capability.supported) return [];
+    if (capability.mode === 'coreaudio') {
+      const result = await nativeAudioRequest('listAudioOutputs');
+      return Array.isArray(result.devices) ? result.devices : [];
+    }
     const devices = await navigator.mediaDevices.enumerateDevices();
     return devices.filter((device) => device.kind === 'audiooutput').map((device, index) => ({
       deviceId: device.deviceId,
@@ -1465,6 +3174,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     if (!capability.supported) {
       audioOutputLost = Boolean(target);
       return { ok: target === '', supported: false, error: target ? capability.reason : '' };
+    }
+    if (capability.mode === 'coreaudio') {
+      try {
+        const result = await nativeAudioRequest('setAudioOutput', { deviceId: target });
+        currentAudioOutputId = target ? String(result.deviceId || target) : '';
+        audioOutputLost = false;
+        recordAudio('AUDIO_OUTPUT_CHANGED_NATIVE', 'INFO', { deviceId: currentAudioOutputId ? '[selected-device]' : 'default' });
+        diagnostics?.setHealth?.('Audio Output', 'OK', { selected: Boolean(target), engine: 'AVAudioEngine' });
+        return { ok: true, supported: true, deviceId: currentAudioOutputId, native: true };
+      } catch (error) {
+        audioOutputLost = Boolean(target);
+        recordAudio('AUDIO_OUTPUT_CHANGE_FAILED_NATIVE', 'ERROR', { message: error.message });
+        return { ok: false, supported: true, error: error.message };
+      }
     }
     if (!ensureAudioEngine()) await recoverAudioEngine('output-change');
     try {
@@ -1490,25 +3213,72 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function setKaraokeVolume(value) {
     const level = Math.max(0, Math.min(1, Number(value) || 0));
-    if (mediaAudioGraph) mediaAudioGraph.master.gain.value = level;
+    if (usingNativeAudio()) {
+      nativeKaraokeGain = level;
+      configureNativeDeck('karaoke', { volume: level });
+      return;
+    }
+    if (mediaAudioGraph) {
+      mediaAudioGraph.master.gain.value = mediaTargetVolume;
+      mediaAudioGraph.karaokeFade.gain.value = mediaTargetVolume > 0 ? Math.min(1, level / mediaTargetVolume) : 0;
+    }
     else media.volume = level;
   }
 
+  function setBackgroundVolume(value) {
+    const level = Math.max(0, Math.min(1, Number(value) || 0));
+    if (usingNativeAudio()) {
+      nativeBackgroundGain = level;
+      configureNativeDeck('background', { volume: level });
+      return;
+    }
+    backgroundAudio.volume = 1;
+    if (mediaAudioGraph?.backgroundGain) mediaAudioGraph.backgroundGain.gain.value = level;
+  }
+
+  function setBackgroundFade(value) {
+    if (usingNativeAudio()) {
+      nativeBackgroundGain = backgroundTargetVolume * Math.max(0, Math.min(1, Number(value) || 0));
+      configureNativeDeck('background', { volume: nativeBackgroundGain });
+      return;
+    }
+    if (mediaAudioGraph?.backgroundFade) mediaAudioGraph.backgroundFade.gain.value = Math.max(0, Math.min(1, Number(value) || 0));
+  }
+
   async function fadeKaraokeVolume(target, duration = FADE_MS, valid = () => true) {
+    const fadeGeneration = ++karaokeFadeGeneration;
+    const isValid = () => fadeGeneration === karaokeFadeGeneration && valid();
     ensureAudioEngine();
     const destination = Math.max(0, Math.min(1, Number(target) || 0));
-    const origin = mediaAudioGraph ? mediaAudioGraph.master.gain.value : media.volume;
-    if (duration <= 0 || Math.abs(origin - destination) < 0.002) {
-      if (valid()) setKaraokeVolume(destination);
-      return valid();
+    if (usingNativeAudio()) {
+      const origin = nativeKaraokeGain;
+      if (duration <= 0 || Math.abs(origin - destination) < 0.002) { if (isValid()) setKaraokeVolume(destination); return isValid(); }
+      const startedAt = performance.now();
+      return new Promise((resolve) => {
+        const frame = (now) => {
+          if (!isValid()) { resolve(false); return; }
+          const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
+          setKaraokeVolume(origin + (destination - origin) * (0.5 - Math.cos(Math.PI * progress) / 2));
+          if (progress < 1) requestAnimationFrame(frame); else resolve(true);
+        };
+        requestAnimationFrame(frame);
+      });
+    }
+    if (mediaAudioGraph) mediaAudioGraph.master.gain.value = mediaTargetVolume;
+    const destinationFade = mediaAudioGraph ? fadeGainForVolume(mediaTargetVolume, destination) : destination;
+    const origin = mediaAudioGraph ? mediaAudioGraph.karaokeFade.gain.value : media.volume;
+    if (duration <= 0 || Math.abs(origin - destinationFade) < 0.002) {
+      if (isValid()) setKaraokeVolume(destination);
+      return isValid();
     }
     const startedAt = performance.now();
     return new Promise((resolve) => {
       const frame = (now) => {
-        if (!valid()) { resolve(false); return; }
+        if (!isValid()) { resolve(false); return; }
         const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
-        setKaraokeVolume(origin + (destination - origin) * eased);
+        if (mediaAudioGraph) mediaAudioGraph.karaokeFade.gain.value = origin + (destinationFade - origin) * eased;
+        else media.volume = origin + (destinationFade - origin) * eased;
         if (progress < 1) requestAnimationFrame(frame);
         else resolve(true);
       };
@@ -1523,10 +3293,68 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       element.load();
     }
     lockedStemEngine = '';
+    lockedStemRequestId = '';
+  }
+
+  function readyStemEngine(item = current()) {
+    if (item?.stem?.ready !== true) return '';
+    return [item.stem.source, item.stem.readyEngine, item.stem.engine, item.stem.lockedSource]
+      .map(value => String(value || '').toLowerCase()).find(value => ['spleeter', 'demucs'].includes(value)) || '';
+  }
+
+  function stemSourcesForEngine(requestId, engine) {
+    if (current()?.stem?.format === 'gsx') return [{ slot: 'gsx', gain: 1,
+      url: absoluteMediaURL(`/api/player/stems/${encodeURIComponent(requestId)}/container?engine=${encodeURIComponent(engine)}`) }];
+    return ['instrumental', 'vocals'].map(slot => ({ slot, gain: 1, url: absoluteMediaURL(karaokeStemSource(requestId, slot, engine)) }));
+  }
+
+  async function integrateReadyStems() {
+    const engine = readyStemEngine();
+    if (!currentId || !engine || lockedStemEngine !== 'original' || stemIntegrationTask || transitionBusy) return;
+    const requestId = currentId;
+    const generation = karaokeMediaGeneration;
+    const isCurrent = () => requestId === currentId && generation === karaokeMediaGeneration;
+    const task = (async () => {
+      try {
+        if (usingNativeAudio()) {
+          if (nativeKaraokeDeckRequestId !== requestId || !nativeDeckIsLoaded('karaoke')) return;
+          await nativeAudioRequest('nativeAudioStems', { deck: 'karaoke', sources: stemSourcesForEngine(requestId, engine) });
+        } else {
+          // Prepare muted incoming sources in the existing graph while the
+          // original remains audible. Align and start before changing gains.
+          instrumentalAudio.src = karaokeStemSource(requestId, 'instrumental', engine);
+          vocalsAudio.src = karaokeStemSource(requestId, 'vocals', engine);
+          instrumentalAudio.load(); vocalsAudio.load();
+          await Promise.all([instrumentalAudio, vocalsAudio].map(element => waitUntilPlayable(element, generation, 8000, { isCurrent, expectedSource: element.src })));
+          if (!isCurrent()) return;
+          for (const element of [instrumentalAudio, vocalsAudio]) {
+            element.currentTime = media.currentTime;
+            setPreservedRate(element, tempoPercent / 100);
+          }
+          if (!media.paused) await Promise.all([instrumentalAudio.play(), vocalsAudio.play()]);
+        }
+        if (!isCurrent()) return;
+        lockedStemEngine = engine; lockedStemRequestId = requestId;
+        if (usingNativeAudio()) {
+          // Only URL identities are needed in native mode, no second decoder.
+          instrumentalAudio.setAttribute('src', karaokeStemSource(requestId, 'instrumental', engine));
+          vocalsAudio.setAttribute('src', karaokeStemSource(requestId, 'vocals', engine));
+        } else applyAudioSettings();
+        renderAudioSettings(); publish();
+        recordAudio('STEMS_INTEGRATED_DURING_PLAYBACK', 'INFO', { trackId: requestId, engine, position: karaokeClockPosition() });
+      } catch (error) {
+        recordAudio('STEMS_INTEGRATION_DEFERRED', 'WARNING', { trackId: requestId, message: error.message });
+      }
+    })();
+    stemIntegrationTask = task;
+    try { await task; } finally { if (stemIntegrationTask === task) stemIntegrationTask = null; }
   }
 
   function lockStemSourceForCurrent() {
-    if (lockedStemEngine) return lockedStemEngine;
+    const requestId = String(currentId || '');
+    if (!requestId) return 'original';
+    if (lockedStemEngine && lockedStemRequestId === requestId) return lockedStemEngine;
+    if (lockedStemRequestId && lockedStemRequestId !== requestId) clearStemMedia();
     const item = current();
     const candidates = [
       item?.stem?.lockedSource,
@@ -1539,27 +3367,32 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       ? candidates.find((value) => ['spleeter', 'demucs'].includes(value)) || ''
       : '';
     lockedStemEngine = engine || 'original';
-    if (engine) {
-      const engineQuery = `?engine=${encodeURIComponent(engine)}`;
-      instrumentalAudio.src = `/api/player/stems/${encodeURIComponent(currentId)}/instrumental${engineQuery}`;
-      vocalsAudio.src = `/api/player/stems/${encodeURIComponent(currentId)}/vocals${engineQuery}`;
+    lockedStemRequestId = requestId;
+    if (engine && !usingNativeAudio()) {
+      instrumentalAudio.src = karaokeStemSource(requestId, 'instrumental', engine);
+      vocalsAudio.src = karaokeStemSource(requestId, 'vocals', engine);
       instrumentalAudio.load();
       vocalsAudio.load();
     }
-    applyAudioSettings();
+    if (engine && usingNativeAudio()) {
+      instrumentalAudio.setAttribute('src', karaokeStemSource(requestId, 'instrumental', engine));
+      vocalsAudio.setAttribute('src', karaokeStemSource(requestId, 'vocals', engine));
+    }
+    applyAudioSettings({ synchronizePlayback: true });
     diagnostics?.record?.({
       module: 'Stems IA',
       event: 'STEM_SOURCE_LOCKED',
       summary: `Fuente ${lockedStemEngine} bloqueada al iniciar reproducción`,
       engine: lockedStemEngine,
-      context: { requestId: currentId }
+      context: { requestId }
     });
     return lockedStemEngine;
   }
 
-  function lockedStemSourceReady() {
+  function lockedStemSourceReady(requestId = currentId) {
     return Boolean(
       ['spleeter', 'demucs'].includes(lockedStemEngine) &&
+      lockedStemRequestId === String(requestId || '') &&
       instrumentalAudio.getAttribute('src') &&
       vocalsAudio.getAttribute('src')
     );
@@ -1571,6 +3404,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function resumeStemTracks() {
+    if (usingNativeAudio()) return;
     if (!lockedStemSourceReady() || media.paused || stageMode !== 'karaoke' || transitionBusy) return;
     try {
       await Promise.all([
@@ -1586,66 +3420,115 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function syncStemTimes(force = false) {
-    if (!lockedStemSourceReady()) return;
+    if (usingNativeAudio() || !lockedStemSourceReady()) return;
     const now = performance.now();
-    if (!force && now - lastStemSyncAt < 750) return;
+    if (!force && now - lastStemSyncAt < 100) return;
     lastStemSyncAt = now;
     for (const element of [instrumentalAudio, vocalsAudio]) {
       try {
         const drift = (media.currentTime || 0) - (element.currentTime || 0);
-        element.playbackRate = 1;
-        if (force || Math.abs(drift) > 0.45) {
+        if (force || Math.abs(drift) > 0.15) {
           element.currentTime = Math.max(0, media.currentTime || 0);
+        } else if (!element.seeking) {
+          setPreservedRate(element, tempoPercent / 100 * (1 + Math.max(-0.04, Math.min(0.04, drift * 0.5))));
         }
       } catch { /* Metadata will align both tracks as soon as it is available. */ }
     }
   }
 
   function clearPlayerMedia() {
+    if (activePlaybackLocked()) {
+      recordAudio('ACTIVE_PLAYBACK_MUTATION_BLOCKED', 'WARNING', { action: 'clearPlayerMedia', trackId: currentId });
+      return false;
+    }
+    analysisGeneration += 1;
+    karaokeMediaRequestId = '';
+    nativeKaraokeDeckRequestId = '';
+    karaokeNativeLoadPromise = null;
+    currentAnalysis = null;
+    window.clearTimeout(karaokeTempoTimer);
+    window.clearTimeout(nativeVisualSeekTimer);
+    karaokeTempoTimer = 0;
+    cancelPendingKaraokeSeek();
+    nativeVisualSeekPending = false;
+    nativeVisualSeekUntil = 0;
+    nativeVisualPlaybackExpected = false;
+    nativeVisualPlayPending = false;
+    nativeVisualPlayRetryAt = 0;
+    nativeKaraokeWasPlaying = false;
+    setNativeKaraokeTransportIntent(false, 0);
+    tempoPercent = 100;
+    karaokeTempoLocked = false;
+    keySemitones = 0;
     intentionalMediaReset = true;
     media.pause(); media.removeAttribute('src'); media.load();
+    stopNativeDeck('karaoke');
     clearStemMedia();
     lockedStemEngine = '';
     resetPlayerProgress();
     window.setTimeout(() => { intentionalMediaReset = false; }, 0);
+    return true;
   }
 
   function clearBackgroundMedia() {
+    backgroundAnalysisGeneration += 1;
+    backgroundAnalysis = null;
+    window.clearTimeout(backgroundTempoTimer);
+    backgroundTempoTimer = 0;
     intentionalBackgroundReset = true;
     backgroundAudio.pause(); backgroundAudio.removeAttribute('src'); backgroundAudio.load();
+    stopNativeDeck('background');
     window.setTimeout(() => { intentionalBackgroundReset = false; }, 0);
   }
 
   async function advance(outcome, requestedId = currentId || queue()[0]?.id) {
-    const item = requestsById().get(String(requestedId));
+    const item = requestsById().get(String(requestedId)) || (String(requestedId) === currentId ? current() : null);
     if (!item || !playerReady()) return;
     const wasCurrent = String(item.id) === currentId;
     if (wasCurrent && transitionBusy) return;
-    if (outcome === 'skipped' && !(await confirmAction({ title: 'Saltar canción', detail: `${guest(item)} — ${item.song} quedará marcada como omitida.`, confirmLabel: 'Saltar' }))) return;
-    if (outcome === 'removed' && !(await confirmAction({ title: 'Quitar de la fila', detail: `${guest(item)} — ${item.song} saldrá de esta fila. Podrás recuperarla con Deshacer.`, confirmLabel: 'Quitar' }))) return;
-    if (wasCurrent) await enterLobby();
+    const playingCurrent = wasCurrent && karaokeTransportIsPlaying();
+    const protectedAction = {
+      skipped: { detail: 'Esta canción está en reproducción. ¿Saltar al siguiente turno?', confirmLabel: 'Saltar' },
+      completed: { detail: 'Esta canción todavía está reproduciéndose. ¿Marcarla como completada?', confirmLabel: 'Ya cantó' },
+      removed: { detail: 'Esta canción está reproduciéndose. Quitarla interrumpirá el Player.', confirmLabel: 'Quitar de todas formas' }
+    }[outcome];
+    if (playingCurrent && protectedAction && !(await confirmAction({ title: 'Canción en reproducción', ...protectedAction }))) return;
+    if (wasCurrent) {
+      dedicationVisibleId = ''; dedicationVisibleText = '';
+      await enterLobby({ authorized: true });
+    }
     try {
       await api(`/api/player/requests/${encodeURIComponent(item.id)}/outcome`, { method: 'POST', body: JSON.stringify({ outcome }) });
       order = order.filter((id) => id !== String(item.id));
-      if (wasCurrent) { currentId = ''; clearPlayerMedia(); }
+      if (wasCurrent) { dedicationVisibleId = ''; releaseActivePlayback(item.id); currentId = ''; clearPlayerMedia(); }
       saveOrder({ remote: true });
       sync(await api('/api/state'));
       if (!wasCurrent) render();
+      showNotice(`${guest(item)} — ${item.song} · ${{ removed: 'quitada de la fila', skipped: 'omitida', completed: 'ya cantó' }[outcome] || outcome}`, false, { label: 'Deshacer', run: () => undoOutcome(item.id) });
     } catch (error) { showNotice(error.message, true); }
   }
 
   function moveQueueItem(id, direction) {
     const moved = movePlayerQueueOrder(queue().map((item) => String(item.id)), id, direction);
     if (!moved.moved) return;
-    order = moved.order; saveOrder({ remote: true }); renderQueue(); publish();
+    order = moved.order; saveOrder({ remote: true, queueOnly: true }); renderQueue(); publish();
   }
 
   async function returnToEnd() {
     if (!currentId || !playerReady()) return;
     const returned = currentId;
-    await enterLobby();
+    if (karaokeTransportIsPlaying() && !(await confirmAction({
+      title: 'Canción en reproducción',
+      detail: 'Esta canción está en reproducción. ¿Devolverla a la fila?',
+      confirmLabel: 'Devolver'
+    }))) return;
+    dedicationVisibleId = ''; dedicationVisibleText = '';
+    await enterLobby({ authorized: true });
+    releaseActivePlayback(returned);
+    dedicationVisibleId = '';
     order = [...order.filter((id) => id !== returned), returned]; currentId = ''; saveOrder({ remote: true });
     clearPlayerMedia(); render();
+    showNotice('La canción volvió al final de la fila.');
   }
 
   async function undoOutcome(id) {
@@ -1672,17 +3555,22 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     }
   }
 
-  async function preparePlayerStems(id) {
-    const item = requestsById().get(String(id));
-    if (!item) return;
+  async function queueStemsForAvailability(item) {
+    const id = String(item?.id || '');
+    // Local assignments are queued atomically by the server.  Public requests
+    // are scheduled here at selection time, still without waiting for them.
+    if (!id || item?.sourceType === 'player_local' || !item?.localAvailable || !state?.stemEngine?.available || item.stem || automaticStemRequestIds.has(id)) return;
+    automaticStemRequestIds.add(id);
     try {
-      await api(`/api/player/requests/${encodeURIComponent(id)}/stems`, {
-        method: 'POST',
-        body: JSON.stringify({ engine: stemEngineSelection })
+      const result = await api(`/api/player/requests/${encodeURIComponent(id)}/stems`, {
+        method: 'POST', body: JSON.stringify({ engine: 'auto' })
       });
-      sync(await api('/api/state'));
-      showNotice(`${guest(item)} quedó en preparación ${stemEngineSelection.toUpperCase()}. Entrará automáticamente cuando instrumental y voz estén validados.`);
-    } catch (error) { showNotice(error.message, true); }
+      if (result?.stem) item.stem = result.stem;
+      recordAudio('STEMS_AUTO_QUEUED', 'INFO', { requestId: id });
+      render();
+    } catch (error) {
+      recordAudio('STEMS_AUTO_QUEUE_FAILED', 'WARNING', { requestId: id, message: error.message });
+    }
   }
 
   async function copyPlayerYoutube(id, url) {
@@ -1723,6 +3611,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function open() {
+    if (!opened) document.querySelector('.player-plan-b-card')?.removeAttribute('open');
     opened = true; document.body.classList.add('player-mode'); $('#playerWorkspace').classList.remove('hidden');
     render(); void ensureBackgroundPlaying();
   }
@@ -1733,6 +3622,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       return false;
     }
     closeDrawers();
+    expandedRequestIds.clear(); renderQueue();
     opened = false; document.body.classList.remove('player-mode'); $('#playerWorkspace').classList.add('hidden'); publish();
     return true;
   }
@@ -1742,28 +3632,66 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     document.body.classList.remove('player-drawer-open');
   }
 
+  function setInlineSummaryExpanded(expanded) {
+    const panel = $('#playerSummaryInline');
+    const button = document.querySelector('[data-player-drawer="summary"]');
+    if (!panel || !button) return;
+    panel.classList.toggle('is-expanded', expanded);
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', expanded ? 'Ocultar resumen de la actividad' : 'Mostrar resumen de la actividad');
+    button.title = expanded ? 'Ocultar resumen de la actividad' : 'Mostrar resumen de la actividad';
+  }
+
   function openDrawer(name) {
+    if (name === 'summary') {
+      setInlineSummaryExpanded(!$('#playerSummaryInline')?.classList.contains('is-expanded'));
+      return;
+    }
     closeDrawers();
     const panel = document.querySelector(`[data-player-drawer-panel="${name}"]`);
     if (!panel) return;
     panel.classList.add('is-open');
     document.body.classList.add('player-drawer-open');
-    if (name === 'library') window.setTimeout(() => $('#playerLibrarySearch').focus(), 30);
+    if (name === 'library') window.setTimeout(() => $('#playerDirectSearch').focus(), 30);
   }
 
   function sync(next) {
     const previousActivity = activityId();
     const wasPreparationReady = playerPreparationReady();
+    const wasRunning = activityRunning();
     const previousLibraryScanAt = lastLibraryScanAt;
     state = next;
+    if (activityId() && activityRunning()) {
+      if (mode() === 'player') localStorage.setItem(playerSessionKey(), '1');
+      else localStorage.removeItem(playerSessionKey());
+    }
+    if (previousActivity !== activityId()) {
+      const savedLanguage = localStorage.getItem(starScreenLanguageKey());
+      starScreenLanguage = savedLanguage === 'en' || savedLanguage === 'es'
+        ? savedLanguage : operations.getHostLanguage?.() === 'en' ? 'en' : 'es';
+      if (!savedLanguage) localStorage.setItem(starScreenLanguageKey(), starScreenLanguage);
+      dedicationVisibleId = '';
+    }
+    const justFinished = wasRunning && finishedPlayerSession() && !activityRunning();
+    if (justFinished) {
+      releaseActivePlayback();
+      currentId = '';
+      setScene('lobby');
+      clearPlayerMedia();
+      dedicationVisibleId = '';
+    }
     lastLibraryScanAt = String(state?.library?.lastScanAt || '');
     if (previousActivity !== activityId()) {
-      transitionToken += 1; backgroundGeneration += 1; transitionBusy = false; backgroundTransition = null;
-      currentId = ''; setScene('lobby'); clearPlayerMedia(); clearBackgroundMedia();
-      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; planBItems = [];
-      pendingOrderSignature = ''; pendingVisibilitySignature = ''; stemEngineExplicitlyChanged = false;
+      document.querySelector('.player-plan-b-card')?.removeAttribute('open');
+      expandedRequestIds.clear();
+      setInlineSummaryExpanded(true);
+      if (!activePlaybackLocked()) {
+        transitionToken += 1; backgroundGeneration += 1; transitionBusy = false; backgroundTransition = null;
+        currentId = ''; setScene('lobby'); clearPlayerMedia(); clearBackgroundMedia();
+      }
+      backgroundCurrentId = ''; backgroundPendingId = ''; backgroundShuffle = []; backgroundFailedIds.clear(); backgroundStatusOverride = ''; libraryLoaded = false; planBItems = []; planBSelectionMade = false; activePlanBList = 'both';
+      pendingOrderSignature = ''; pendingVisibilitySignature = '';
       starScreenExpected = false; starScreenLastHeartbeatAt = 0; starScreenHeartbeatVisible = false;
-      stemEngineSelection = ['auto', 'spleeter', 'demucs'].includes(state?.config?.defaultStemEngine) ? state.config.defaultStemEngine : 'auto';
       loadOrder();
     } else {
       const remoteOrder = state?.playerRuntime?.queueOrder;
@@ -1783,7 +3711,6 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
           localStorage.setItem(visibilityStorageKey(), JSON.stringify(queueVisibility));
         }
       }
-      if (!stemEngineExplicitlyChanged) stemEngineSelection = ['auto', 'spleeter', 'demucs'].includes(state?.config?.defaultStemEngine) ? state.config.defaultStemEngine : 'auto';
     }
     const configuredOutput = String(state?.config?.audioOutputDeviceId || '');
     if (configuredOutput !== lastRequestedAudioOutputId) {
@@ -1791,11 +3718,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       window.setTimeout(() => void applyAudioOutput(configuredOutput, { silent: true }), 0);
     }
     if (state?.operatingMode?.locked && mode() === 'bridge' && opened) close({ force: true });
-    if (!playerReady()) {
+    if (!playerReady() && !activePlaybackLocked()) {
       setScene('lobby'); media.pause(); instrumentalAudio.pause(); vocalsAudio.pause();
     }
-    if (!playerPreparationReady()) backgroundAudio.pause();
+    if (!playerPreparationReady() && !activePlaybackLocked()) {
+      backgroundAudio.pause();
+      if (usingNativeAudio()) stopNativeDeck('background');
+    }
     render();
+    void integrateReadyStems();
     const runtimePlayback = state?.playerRuntime?.playback;
     if (playerReady() && activityId() && runtimeRestoreActivityId !== activityId()) {
       runtimeRestoreActivityId = activityId();
@@ -1810,42 +3741,62 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         }, 0);
       }
     }
-    if (opened && libraryLoaded && lastLibraryScanAt && lastLibraryScanAt !== previousLibraryScanAt) window.setTimeout(() => void searchLibrary({ silent: true, browseAll: libraryBrowseAll }), 0);
-    if ((!wasPreparationReady && playerPreparationReady()) || (playerPreparationReady() && stageMode === 'lobby' && !backgroundAudio.src)) window.setTimeout(() => void ensureBackgroundPlaying(), 0);
+    if (opened && libraryOpened && libraryLoaded && lastLibraryScanAt && lastLibraryScanAt !== previousLibraryScanAt) window.setTimeout(() => void searchLibrary({ silent: true, browseAll: libraryBrowseAll }), 0);
+    if (justFinished || (!wasPreparationReady && playerPreparationReady()) || (playerPreparationReady() && stageMode === 'lobby' && !backgroundAudio.src)) window.setTimeout(() => void ensureBackgroundPlaying(), 0);
   }
 
-  $('#playerQueue').addEventListener('click', (event) => {
+  function reorderQueueItem(id, beforeId) {
+    const moved = reorderPlayerQueue(queue().map(item => String(item.id)), id, beforeId);
+    if (!moved.moved) return;
+    order = moved.order;
+    saveOrder({ remote: true, queueOnly: true }); renderQueue(); publish();
+  }
+
+  const queueUI = attachPlayerQueueUI($('#playerQueue'), {
+    reorder: reorderQueueItem,
+    move: moveQueueItem,
+    closeOptions: () => { expandedRequestIds.clear(); renderQueue(); }
+  });
+
+  function handleQueueClick(event) {
     const expand = event.target.closest('[data-player-expand]');
     if (expand) {
       const id = String(expand.dataset.playerExpand || '');
       if (expandedRequestIds.has(id)) expandedRequestIds.delete(id);
-      else expandedRequestIds.add(id);
+      else { expandedRequestIds.clear(); expandedRequestIds.add(id); }
       renderQueue();
       return;
     }
-    const stemPrepare = event.target.closest('[data-player-stem-prepare]');
-    if (stemPrepare) { void preparePlayerStems(stemPrepare.dataset.playerStemPrepare); return; }
+    const dedication = event.target.closest('[data-player-dedication]');
+    if (dedication) {
+      toggleDedication(dedication.dataset.playerDedication);
+      expandedRequestIds.clear(); renderQueue();
+      return;
+    }
     const youtubeSearch = event.target.closest('[data-player-youtube-search]');
-    if (youtubeSearch) { void searchPlayerYoutube(youtubeSearch.dataset.playerYoutubeSearch); return; }
+    if (youtubeSearch) { expandedRequestIds.clear(); renderQueue(); void searchPlayerYoutube(youtubeSearch.dataset.playerYoutubeSearch); return; }
     const youtubeCopy = event.target.closest('[data-player-youtube-copy]');
-    if (youtubeCopy) { void copyPlayerYoutube(youtubeCopy.dataset.playerYoutubeCopy, youtubeCopy.dataset.playerYoutubeUrl); return; }
+    if (youtubeCopy) { expandedRequestIds.clear(); renderQueue(); void copyPlayerYoutube(youtubeCopy.dataset.playerYoutubeCopy, youtubeCopy.dataset.playerYoutubeUrl); return; }
     const youtubeOpen = event.target.closest('[data-player-youtube-open]');
-    if (youtubeOpen) { void openPlayerYoutube(youtubeOpen.dataset.playerYoutubeOpen); return; }
+    if (youtubeOpen) { expandedRequestIds.clear(); renderQueue(); void openPlayerYoutube(youtubeOpen.dataset.playerYoutubeOpen); return; }
     const move = event.target.closest('[data-player-move]');
-    if (move) { moveQueueItem(move.dataset.playerId, Number(move.dataset.playerMove)); return; }
+    if (move) { expandedRequestIds.clear(); moveQueueItem(move.dataset.playerId, Number(move.dataset.playerMove)); return; }
     const visibility = event.target.closest('[data-player-visibility]');
     if (visibility) {
       const id = String(visibility.dataset.playerVisibility || '');
+      expandedRequestIds.clear();
       queueVisibility[id] = !visibleOnStarScreen({ id });
       saveOrder({ remote: true }); renderQueue(); publish();
       diagnostics?.record?.({ module: 'Queue', event: 'STAR_SCREEN_VISIBILITY_CHANGED', summary: `${queueVisibility[id] ? 'Mostrada' : 'Oculta'} solo en Star Screen`, context: { requestId: id, visible: queueVisibility[id] } });
       return;
     }
     const outcome = event.target.closest('[data-player-row-outcome]');
-    if (outcome) { void advance(outcome.dataset.playerRowOutcome, outcome.dataset.playerId); return; }
+    if (outcome) { expandedRequestIds.clear(); renderQueue(); void advance(outcome.dataset.playerRowOutcome, outcome.dataset.playerId); return; }
     const id = event.target.closest('[data-player-request]')?.dataset.playerRequest;
     if (id) void loadRequest(id, false);
-  });
+  }
+  $('#playerQueue').addEventListener('click', handleQueueClick);
+  queueUI.options.addEventListener('click', handleQueueClick);
   document.querySelectorAll('[data-player-drawer]').forEach((button) => {
     button.addEventListener('click', () => openDrawer(button.dataset.playerDrawer));
   });
@@ -1872,7 +3823,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const open = event.target.closest('[data-player-plan-b-open]');
     if (open) void openPlayerYoutube(open.dataset.playerPlanBOpen);
   });
-  $('#playerQueue').addEventListener('toggle', (event) => {
+  queueUI.options.addEventListener('toggle', (event) => {
     const details = event.target.closest?.('[data-player-youtube-details]');
     if (!details) return;
     if (details.open) openYoutubeIds.add(details.dataset.playerYoutubeDetails);
@@ -1881,23 +3832,13 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   $('#playerCompleted').addEventListener('click', (event) => { const id = event.target.closest('[data-player-undo]')?.dataset.playerUndo; if (id) void undoOutcome(id); });
   $('#playerPlay').addEventListener('click', async () => {
     if (!playerReady()) return showNotice('Inicia la actividad en modo Player antes de reproducir.', true);
-    if (stageMode !== 'karaoke' || media.paused) await startKaraoke(); else await pauseKaraoke();
+    if (karaokeTransportIsPlaying()) await pauseKaraoke(); else await startKaraoke();
   });
   $('#playerRestart').addEventListener('click', () => void restartKaraoke());
   $('#playerReturn').addEventListener('click', () => void returnToEnd());
   $('#playerSkip').addEventListener('click', () => void advance('skipped'));
   $('#playerComplete').addEventListener('click', () => void advance('completed'));
   $('#playerRemove').addEventListener('click', () => void advance('removed'));
-  $('#playerClose').addEventListener('click', () => close());
-  $('#playerStemQuickAction').addEventListener('click', () => {
-    const item = current() || queue()[0];
-    if (item) void preparePlayerStems(item.id);
-  });
-  $('#playerStemEngine').addEventListener('change', (event) => {
-    stemEngineSelection = ['auto', 'spleeter', 'demucs'].includes(event.target.value) ? event.target.value : 'auto';
-    stemEngineExplicitlyChanged = true;
-    renderOperations();
-  });
   $('#playerOpenStarScreen').addEventListener('click', async () => {
     if (!playerPreparationReady()) return showNotice('Selecciona una actividad y el modo Player antes de abrir Star Screen.', true);
     starScreenExpected = true;
@@ -1906,7 +3847,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       nativeHandler.postMessage({
         action: 'openStarScreen',
         displayId: state?.config?.starScreenDisplayId || '',
-        url: '/star-screen.html?display=1',
+        url: '/star-screen.html?display=1&visual=canonical-canvas-7',
         preview: false
       });
       diagnostics?.record?.({ module: 'Star Screen', event: 'STAR_SCREEN_NATIVE_OPEN_REQUESTED', summary: 'Star Screen solicitada al host nativo', context: { configuredDisplay: Boolean(state?.config?.starScreenDisplayId) } });
@@ -1917,13 +3858,35 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       showNotice(result.reused ? 'La ventana de Star Screen volvió al frente.' : 'Star Screen se abrió en una ventana del navegador; dentro de Guest Star.app se usa el destino nativo configurado.');
     } catch (error) { showNotice(error.message, true); }
   });
+  $('#playerStarScreenLanguage').addEventListener('change', (event) => {
+    starScreenLanguage = event.target.value === 'en' ? 'en' : 'es';
+    localStorage.setItem(starScreenLanguageKey(), starScreenLanguage);
+    publish();
+  });
+  $('#playerDedicationToggle').addEventListener('click', () => {
+    toggleDedication($('#playerDedicationToggle').dataset.requestId || '');
+  });
   $('#playerDirectSearch').addEventListener('input', () => {
     window.clearTimeout(directSearchTimer);
-    directSearchTimer = window.setTimeout(() => void runDirectSearch(), 240);
+    window.clearTimeout(librarySearchTimer);
+    if (libraryOpened) {
+      ++directSearchGeneration;
+      closeDirectSearch();
+      ++libraryGeneration;
+      libraryLoading = false;
+      librarySearchTimer = window.setTimeout(() => void searchLibrary(), 180);
+    } else {
+      directSearchTimer = window.setTimeout(() => void runDirectSearch(), 240);
+    }
   });
   $('#playerDirectSearch').addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { closeDirectSearch(); event.currentTarget.blur(); }
-    else if (event.key === 'Enter') { event.preventDefault(); void runDirectSearch(); }
+    if (event.key === 'Escape') {
+      if (libraryOpened) closeLocalLibrary(); else { closeDirectSearch(); event.currentTarget.blur(); }
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (libraryOpened) { window.clearTimeout(librarySearchTimer); void searchLibrary(); }
+      else void runDirectSearch();
+    }
   });
   $('#playerDirectResults').addEventListener('click', (event) => {
     const raw = event.target.closest('[data-player-direct-track]')?.dataset.playerDirectTrack;
@@ -1936,10 +3899,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   document.addEventListener('pointerdown', (event) => {
     if (!event.target.closest('.player-direct-search')) closeDirectSearch();
   });
-  $('#playerLibraryRefresh').addEventListener('click', () => void searchLibrary({ browseAll: !$('#playerLibrarySearch').value.trim() }));
-  $('#playerLibrarySearch').addEventListener('keydown', (event) => { if (event.key === 'Enter') void searchLibrary({ browseAll: !event.currentTarget.value.trim() }); });
+  $('#playerLibraryBrowse').addEventListener('click', () => libraryOpened ? closeLocalLibrary() : openLocalLibrary());
+  $('#playerLibraryClose').addEventListener('click', closeLocalLibrary);
+  $('#playerLocalLibrary').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeLocalLibrary(); } });
   $('#playerLibraryList').addEventListener('click', (event) => {
-    if (event.target.closest('#playerLibraryMore')) { void searchLibrary({ append: true, browseAll: libraryBrowseAll }); return; }
+    if (event.target.closest('#playerLibraryMore')) { if (!libraryLoading) void searchLibrary({ append: true, browseAll: libraryBrowseAll }); return; }
     const id = event.target.closest('[data-library-track]')?.dataset.libraryTrack;
     if (!id) return;
     try { const tracks = JSON.parse($('#playerLibraryList').dataset.tracks || '[]'); const track = tracks.find((entry) => entry.id === id); if (track) openSingerAssignment(track); }
@@ -1949,7 +3913,6 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   const closeAssign = () => { pendingTrack = null; if (assignDialog.open) assignDialog.close(); };
   $('#playerAssignSingerClose').addEventListener('click', closeAssign);
   $('#playerAssignSingerCancel').addEventListener('click', closeAssign);
-  $('#playerShare').addEventListener('click', () => operations.openShare?.());
   $('#playerSettings').addEventListener('click', () => operations.openSettings?.());
   $('#playerScan').addEventListener('click', () => operations.scanLibrary?.());
   $('#playerSync').addEventListener('click', () => void syncPlayer());
@@ -1957,7 +3920,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   $('#playerRequestsToggle').addEventListener('change', (event) => operations.controlActivity?.(event.target.checked ? 'open' : 'close'));
   $('#playerMute').addEventListener('click', () => {
     karaokeMuted = !karaokeMuted;
-    if (!transitionBusy && !media.paused) setKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume);
+    if (!transitionBusy && karaokeTransportIsPlaying()) setKaraokeVolume(karaokeMuted ? 0 : mediaTargetVolume);
     $('#playerMute').textContent = karaokeMuted ? '🔇 Silenciado' : '🔊 Audio';
     publish();
   });
@@ -1968,6 +3931,22 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     $('#playerMute').textContent = karaokeMuted || mediaTargetVolume === 0 ? '🔇 Silenciado' : '🔊 Audio';
     renderKaraokeVolume();
     publish();
+  });
+  $('#playerMasterVolume')?.addEventListener('input', (event) => {
+    masterPercent = Math.round(masterVolumeGain(event.currentTarget.value) * 100);
+    autoGainSettings = normalizeAutoGainSettings({ ...autoGainSettings, masterDb: masterVolumeDb(masterPercent) });
+    persistAutoGainSettings();
+    applyMasterVolume();
+  });
+  $('#preferenceAutoGain')?.addEventListener('change', (event) => {
+    autoGainSettings = normalizeAutoGainSettings({ ...autoGainSettings, enabled: event.currentTarget.checked });
+    persistAutoGainSettings();
+    applyAutoGain();
+  });
+  $('#preferenceAutoGainTarget')?.addEventListener('change', (event) => {
+    autoGainSettings = normalizeAutoGainSettings({ ...autoGainSettings, targetOutputDb: Number(event.currentTarget.value) });
+    persistAutoGainSettings();
+    applyAutoGain();
   });
   for (const band of ['low', 'mid', 'high']) {
     const title = band[0].toUpperCase() + band.slice(1);
@@ -2027,7 +4006,13 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     renderAudioSettings();
   });
   $('#playerBackgroundToggle').addEventListener('click', async () => {
-    if (!backgroundAudio.paused) { await fadeVolume(backgroundAudio, 0, 420); backgroundAudio.pause(); }
+    if (backgroundTransportIsPlaying()) {
+      if (await fadeVolume(backgroundAudio, 0, 420)) {
+        backgroundAudio.pause();
+        if (usingNativeAudio()) await pauseNativeBackgroundDeck();
+        else pauseNativeDeck('background');
+      }
+    }
     else if (!backgroundAudio.src || !backgroundCurrent()) await playNextBackground({ resetFailures: backgroundFailedIds.size >= backgroundTracks().length });
     else await ensureBackgroundPlaying();
   });
@@ -2042,7 +4027,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   $('#playerBackgroundSources').addEventListener('click', (event) => { const raw = event.target.closest('[data-background-remove]')?.dataset.backgroundRemove; if (raw !== undefined) void removeBackgroundSource(Number(raw)); });
   $('#playerBackgroundVolume').addEventListener('input', (event) => {
     backgroundTargetVolume = Math.max(0, Math.min(1, Number(event.target.value)));
-    if (!backgroundTransition && !backgroundAudio.paused) backgroundAudio.volume = backgroundTargetVolume;
+    if (!backgroundTransition && backgroundTransportIsPlaying()) setBackgroundVolume(backgroundTargetVolume);
     $('#playerBackgroundVolumeValue').textContent = `${Math.round(backgroundTargetVolume * 100)}%`;
     paintRange(event.currentTarget);
     publish();
@@ -2051,13 +4036,80 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     try { state = await api('/api/player/background/config', { method: 'POST', body: JSON.stringify({ volume: backgroundTargetVolume }) }); renderBackground(); }
     catch (error) { showNotice(error.message, true); }
   });
-  $('#playerSeek').addEventListener('input', (event) => { media.currentTime = Number(event.target.value); paintRange(event.currentTarget); publish(); scheduleRuntimeSave(150); });
+  function setKaraokeTempo(nextValue, { immediate = false } = {}) {
+    tempoPercent = normalizeTempoPercent(nextValue);
+    // Keep the label immediate, but coalesce pointer events before asking
+    // WebKit to retune its time-stretcher.  Background and pitch are untouched.
+    scheduleKaraokeTempoApplication({ immediate });
+    renderPlaybackProcessing();
+  }
+  function setBackgroundTempo(nextValue, { immediate = false } = {}) {
+    backgroundTempoPercent = normalizeTempoPercent(nextValue);
+    audioSettings.backgroundTempoPercent = backgroundTempoPercent;
+    persistAudioSettings();
+    // The ambient deck has its own rate and never reconfigures karaoke/stems.
+    scheduleBackgroundTempoApplication({ immediate });
+    renderPlaybackProcessing();
+  }
+  $('#playerTempo').addEventListener('input', (event) => { if (!karaokeTempoLocked) setKaraokeTempo(event.target.value); });
+  $('#playerTempo').addEventListener('change', () => scheduleKaraokeTempoApplication({ immediate: true }));
+  $('#playerTempoDown').addEventListener('click', () => { if (!karaokeTempoLocked) setKaraokeTempo(nextTempoPercent(tempoPercent, -1)); });
+  $('#playerTempoReset').addEventListener('click', () => setKaraokeTempo(100, { immediate: true }));
+  $('#playerTempoUp').addEventListener('click', () => { if (!karaokeTempoLocked) setKaraokeTempo(nextTempoPercent(tempoPercent, 1)); });
+  $('#playerTempoLock').addEventListener('change', (event) => { karaokeTempoLocked = event.target.checked; renderPlaybackProcessing(); publish(); });
+  function changeKeySemitones(nextValue) {
+    keySemitones = Math.max(-6, Math.min(6, Math.round(Number(nextValue) || 0)));
+    applyPitchProcessing(); renderPlaybackProcessing(); publish();
+  }
+  $('#playerKeyDown').addEventListener('click', () => changeKeySemitones(nextSemitone(keySemitones, -1)));
+  $('#playerKeyReset').addEventListener('click', () => changeKeySemitones(0));
+  $('#playerKeyUp').addEventListener('click', () => changeKeySemitones(nextSemitone(keySemitones, 1)));
+  $('#playerKeyReanalyze').addEventListener('click', () => {
+    const item = current();
+    if (!item?.localAvailable) return;
+    const requestId = currentId;
+    const analysisKey = trackAnalysisKey(requestId, item);
+    analysisCache.delete(analysisKey);
+    analysisTasks.delete(analysisKey);
+    currentAnalysis = { pending: true };
+    renderPlaybackProcessing();
+    void analyzeCurrentTrack(requestId, karaokeMediaSource(requestId), analysisKey);
+  });
+  $('#playerBackgroundTempo').addEventListener('input', (event) => { if (!backgroundTempoLocked) setBackgroundTempo(event.target.value); });
+  $('#playerBackgroundTempo').addEventListener('change', () => scheduleBackgroundTempoApplication({ immediate: true }));
+  $('#playerBackgroundTempoDown').addEventListener('click', () => { if (!backgroundTempoLocked) setBackgroundTempo(nextTempoPercent(backgroundTempoPercent, -1)); });
+  $('#playerBackgroundTempoReset').addEventListener('click', () => setBackgroundTempo(100, { immediate: true }));
+  $('#playerBackgroundTempoUp').addEventListener('click', () => { if (!backgroundTempoLocked) setBackgroundTempo(nextTempoPercent(backgroundTempoPercent, 1)); });
+  $('#playerBackgroundTempoLock').addEventListener('change', (event) => {
+    backgroundTempoLocked = event.target.checked;
+    audioSettings.backgroundTempoLocked = backgroundTempoLocked;
+    persistAudioSettings(); renderPlaybackProcessing(); publish();
+  });
+  $('#playerSeek').addEventListener('input', (event) => {
+    const position = Number(event.target.value);
+    karaokeScrubPreview = position;
+    paintRange(event.currentTarget);
+    $('#playerCurrentTime').textContent = formatDuration(position, true);
+    void seekKaraokeTransport(position);
+  });
+  $('#playerSeek').addEventListener('pointerdown', () => { karaokeSeekPointerActive = true; });
+  $('#playerSeek').addEventListener('pointercancel', () => { karaokeSeekPointerActive = false; karaokeScrubPreview = null; renderNow(); });
+  $('#playerSeek').addEventListener('pointerup', () => { karaokeSeekPointerActive = false; });
+  $('#playerSeek').addEventListener('change', (event) => {
+    if (Math.abs(karaokePendingStartPosition - Number(event.currentTarget.value)) > 0.001) void seekKaraokeTransport(Number(event.currentTarget.value));
+  });
   function bindMediaEvents() {
     media.addEventListener('play', () => {
       void ensureAudioReady('media-play').catch((error) => showNotice(error.message, true));
       renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100);
     });
-    media.addEventListener('pause', () => { pauseStemTracks(); renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100); });
+    media.addEventListener('pause', () => {
+      pauseStemTracks();
+      // AVAudioEngine owns transport in native mode. WebKit can pause a muted
+      // visual follower while decoding or seeking; it must not stop audio.
+      if (!usingNativeAudio()) pauseNativeDeck('karaoke');
+      renderNow(); renderOperations(); publish(); scheduleRuntimeSave(100);
+    });
     for (const type of ['waiting', 'stalled']) {
       media.addEventListener(type, () => {
         pauseStemTracks();
@@ -2065,7 +4117,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         diagnostics?.setHealth?.('Player', 'WARNING', { event: type });
       });
     }
-    media.addEventListener('seeking', pauseStemTracks);
+    media.addEventListener('seeking', () => {
+      pauseStemTracks();
+      // In native mode this element is metadata-only.  All user seeks travel
+      // through seekKaraokeTransport(), which has a request/reply and a song
+      // generation.  Letting a late WebKit seeking event issue another command
+      // was the source of stale seeks after pause and song changes.
+      if (usingNativeAudio()) return;
+    });
     media.addEventListener('playing', () => {
       diagnostics?.setHealth?.('Player', 'OK', { playing: true });
       void resumeStemTracks();
@@ -2073,7 +4132,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     media.addEventListener('seeked', () => { syncStemTimes(true); void resumeStemTracks(); });
     const metadataChanged = () => {
       if (pendingResumeTime !== null) {
-        media.currentTime = Math.min(Math.max(0, pendingResumeTime), Math.max(0, Number(media.duration) || pendingResumeTime));
+        const restored = Math.min(Math.max(0, pendingResumeTime), Math.max(0, Number(media.duration) || pendingResumeTime));
+        karaokePendingStartPosition = restored;
+        setVisualClockPosition(media, restored);
         pendingResumeTime = null;
       }
       syncStemTimes(true);
@@ -2083,15 +4144,25 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     media.addEventListener('durationchange', metadataChanged);
     media.addEventListener('canplay', () => { $('#playerMediaStatus').textContent = 'Video listo'; publish(); });
     media.addEventListener('timeupdate', () => {
+      if (usingNativeAudio()) return;
       renderNow(); publish(); syncStemTimes(false);
       if (Date.now() - lastRuntimeCheckpoint >= 10000) { lastRuntimeCheckpoint = Date.now(); scheduleRuntimeSave(500); }
     });
-    media.addEventListener('ended', () => void advance('completed'));
+    media.addEventListener('ended', () => {
+      // The muted Player element is never the video renderer in native mode.
+      // A late end event from an old WebKit resource cannot be allowed to
+      // complete the current native song.
+      if (usingNativeAudio()) return;
+      nativeVisualPlaybackExpected = false;
+      stopNativeDeck('karaoke');
+      void advance('completed');
+    });
     media.addEventListener('error', () => {
       if (intentionalMediaReset || (!media.currentSrc && !media.getAttribute('src'))) return;
       const detail = { 1: 'reproducción cancelada', 2: 'archivo no disponible', 3: 'formato o códec no compatible', 4: 'formato no compatible' }[media.error?.code] || 'error desconocido';
       recordAudio('KARAOKE_MEDIA_ERROR', 'ERROR', { code: media.error?.code || 0, detail });
       diagnostics?.setHealth?.('Player', 'ERROR', { detail });
+      stopNativeDeck('karaoke');
       transitionToken += 1; transitionBusy = false; setScene('lobby'); $('#playerMediaStatus').textContent = `Error: ${detail}`; showNotice(`El video local no pudo reproducirse: ${detail}.`, true); publish(); void ensureBackgroundPlaying();
     });
     instrumentalAudio.addEventListener('loadedmetadata', () => syncStemTimes(true));
@@ -2099,12 +4170,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     instrumentalAudio.addEventListener('error', () => recordAudio('INSTRUMENTAL_MEDIA_ERROR', 'ERROR', { code: instrumentalAudio.error?.code || 0 }));
     vocalsAudio.addEventListener('error', () => recordAudio('VOCALS_MEDIA_ERROR', 'ERROR', { code: vocalsAudio.error?.code || 0 }));
     backgroundAudio.addEventListener('play', () => { renderBackground(); publish(); diagnostics?.setHealth?.('Background Audio', 'OK', { playing: true }); });
-    backgroundAudio.addEventListener('pause', () => { renderBackground(); publish(); });
+    backgroundAudio.addEventListener('pause', () => {
+      // WKWebView pauses hidden/occluded media on its own.  In native mode it
+      // is not an instruction to stop the ambient AVAudioEngine deck.
+      if (!usingNativeAudio()) pauseNativeDeck('background');
+      renderBackground(); publish();
+    });
     backgroundAudio.addEventListener('timeupdate', () => { renderBackground(); publish(); });
-    backgroundAudio.addEventListener('ended', () => { if (!backgroundTransition && stageMode === 'lobby') void playNextBackground(); });
+    backgroundAudio.addEventListener('ended', () => {
+      if (usingNativeAudio()) return;
+      stopNativeDeck('background');
+      if (!backgroundTransition && stageMode === 'lobby') void playNextBackground();
+    });
     backgroundAudio.addEventListener('error', () => {
       if (!backgroundTransition && !intentionalBackgroundReset && (backgroundAudio.currentSrc || backgroundAudio.getAttribute('src'))) {
-        backgroundStatusOverride = 'El audio ambiental actual no es compatible. Pulsa Siguiente o Reintentar.';
+        backgroundStatusOverride = 'El audio de fondo actual no es compatible. Pulsa Siguiente o Reintentar.';
         recordAudio('BACKGROUND_MEDIA_ERROR', 'ERROR', { code: backgroundAudio.error?.code || 0 });
         diagnostics?.setHealth?.('Background Audio', 'ERROR', { code: backgroundAudio.error?.code || 0 });
         renderBackground(); publish();
@@ -2112,8 +4192,21 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     });
   }
   bindMediaEvents();
+  renderAutoGainSettings();
+  applyAutoGain({ smooth: false });
+  outputMeterTimer = window.setInterval(() => {
+    if (opened && !document.hidden && (!usingNativeAudio() || performance.now() - outputMeterSource.receivedAt > 100)) paintOutputMeter();
+  }, 50);
+  window.addEventListener('pagehide', () => {
+    window.clearInterval(outputMeterTimer);
+    for (const controller of analysisControllers.values()) controller.abort();
+    window.cancelAnimationFrame(waveformFrame);
+    for (const pending of nativeAudioRequests.values()) window.clearTimeout(pending.timeout);
+    nativeAudioRequests.clear();
+    channel.close();
+  }, { once: true });
   document.addEventListener('keydown', (event) => {
-    if (opened && event.key === 'Escape' && !assignDialog.open) { closeDrawers(); return; }
+    if (opened && event.key === 'Escape' && !assignDialog.open) { if (libraryOpened) closeLocalLibrary(); closeDrawers(); return; }
     if (!opened || !event.shiftKey || event.repeat || assignDialog.open) return;
     const tag = String(event.target?.tagName || '').toLowerCase();
     if (['input', 'textarea', 'select'].includes(tag) || event.target?.isContentEditable) return;
@@ -2138,6 +4231,28 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       publish();
       return;
     }
+    if (event.data?.type === 'star-screen-video-health') {
+      const detail = event.data;
+      const sentAt = Math.max(0, Number(detail.sentAt) || Date.now());
+      const freshDisplayHealth = starScreenVideoHealth?.preview === false && Date.now() - Number(starScreenVideoHealth.sentAt || 0) < 6500;
+      if (freshDisplayHealth && detail.preview === true) return;
+      starScreenVideoHealth = {
+        preview: detail.preview === true,
+        sentAt,
+        totalFrames: Math.max(0, Number(detail.totalFrames) || 0),
+        droppedFrames: Math.max(0, Number(detail.droppedFrames) || 0),
+        corruptedFrames: Math.max(0, Number(detail.corruptedFrames) || 0),
+        frameRate: Math.max(0, Number(detail.frameRate) || 0),
+        hardResyncs: Math.max(0, Number(detail.hardResyncs) || 0),
+        rateWrites: Math.max(0, Number(detail.rateWrites) || 0),
+        maxDriftSeconds: Math.max(0, Number(detail.maxDriftSeconds) || 0),
+        lastSeekFrameLatencyMs: detail.lastSeekFrameLatencyMs != null && Number.isFinite(Number(detail.lastSeekFrameLatencyMs))
+          ? Math.max(0, Number(detail.lastSeekFrameLatencyMs)) : null,
+        readyState: Math.max(0, Math.min(4, Number(detail.readyState) || 0)),
+        paused: detail.paused === true
+      };
+      return;
+    }
     if (event.data?.type !== 'star-screen-heartbeat' || event.data.preview === true) return;
     starScreenLastHeartbeatAt = Date.now();
     starScreenHeartbeatVisible = event.data.visible !== false;
@@ -2148,7 +4263,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       acknowledgedAt: Date.now()
     });
   });
-  navigator.mediaDevices?.addEventListener?.('devicechange', async () => {
+  async function handleAudioDeviceChange() {
     recordAudio('AUDIO_DEVICE_CHANGE_DETECTED', 'WARNING');
     const configured = String(state?.config?.audioOutputDeviceId || '');
     if (!configured) return;
@@ -2166,7 +4281,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     } catch (error) {
       recordAudio('AUDIO_DEVICE_REFRESH_FAILED', 'ERROR', { message: error.message });
     }
-  });
+  }
+  navigator.mediaDevices?.addEventListener?.('devicechange', handleAudioDeviceChange);
+  window.addEventListener('gueststar:native-audio-devices-changed', handleAudioDeviceChange);
   window.addEventListener('gueststar:native-star-screen-result', (event) => {
     const result = event.detail || {};
     if (result.preview !== true) starScreenExpected = true;
@@ -2191,20 +4308,29 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       visible: starScreenHeartbeatVisible
     });
     void diagnostics?.reportPlayerHealth?.({
-      playing: stageMode === 'karaoke' && !media.paused,
-      karaokeActive: stageMode === 'karaoke' && !media.paused,
+      playing: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
+      karaokeActive: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
       videoActive: stageMode === 'karaoke' && current()?.localAvailable === true,
-      backgroundPlaying: stageMode === 'lobby' && !backgroundAudio.paused,
+      backgroundPlaying: stageMode === 'lobby' && backgroundTransportIsPlaying(),
       transitionBusy,
       audioContextState: audioContext?.state || 'missing',
       audioRecovering: Boolean(audioRecoveryPromise) || ['suspended', 'interrupted', 'closed'].includes(audioContext?.state),
       audioOutputLost,
       starScreenExpected: starScreen.expected,
       starScreenConnected: starScreen.connected,
-      mediaState: transitionBusy ? 'waiting' : media.error ? 'error' : !media.paused ? 'playing' : 'idle',
+      mediaState: transitionBusy ? 'waiting' : media.error ? 'error' : karaokeTransportIsPlaying() ? 'playing' : 'idle',
       queueLength: queue().length,
-      currentTime: Math.max(0, Number(media.currentTime) || 0),
-      duration: Number.isFinite(media.duration) ? media.duration : 0
+      currentTime: karaokeClockPosition(),
+      duration: karaokeClockDuration(),
+      videoFrames: starScreenVideoHealth?.totalFrames || 0,
+      videoDroppedFrames: starScreenVideoHealth?.droppedFrames || 0,
+      videoCorruptedFrames: starScreenVideoHealth?.corruptedFrames || 0,
+      videoFrameRate: starScreenVideoHealth?.frameRate || 0,
+      videoHardResyncs: starScreenVideoHealth?.hardResyncs || 0,
+      videoRateWrites: starScreenVideoHealth?.rateWrites || 0,
+      videoDriftSeconds: starScreenVideoHealth?.maxDriftSeconds || 0,
+      videoReadyState: starScreenVideoHealth?.readyState || 0,
+      videoPaused: starScreenVideoHealth?.paused === true
     });
   }, 5000);
 
@@ -2218,12 +4344,18 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         outputLost: audioOutputLost,
         mediaReadyState: media.readyState,
         mediaNetworkState: media.networkState,
-        currentTime: Math.max(0, Number(media.currentTime) || 0),
-        duration: Number.isFinite(media.duration) ? media.duration : 0,
-        backgroundReadyState: backgroundAudio.readyState
+        currentTime: karaokeClockPosition(),
+        duration: karaokeClockDuration(),
+        backgroundReadyState: backgroundAudio.readyState,
+        nativeEngine: usingNativeAudio() ? 'AVAudioEngine' : '',
+        nativeStateEvents: nativeVideoSyncMetrics.stateEvents,
+        videoHardResyncs: nativeVideoSyncMetrics.hardSeeks,
+        videoRateWrites: nativeVideoSyncMetrics.rateWrites,
+        maxVideoDriftSeconds: Number(nativeVideoSyncMetrics.maxDriftSeconds.toFixed(3)),
+        starScreenVideo: starScreenVideoHealth
       },
       stems: {
-        selectedEngine: stemEngineSelection,
+        selectedEngine: 'auto',
         lockedEngine: lockedStemEngine,
         ready: lockedStemSourceReady(),
         status: current()?.stem?.status || 'none'

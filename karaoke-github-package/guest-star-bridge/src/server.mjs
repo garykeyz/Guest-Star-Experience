@@ -1,5 +1,6 @@
-import { createReadStream, existsSync, watch } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createDiagnosticPreferences, verifyDiagnosticIdentity, testerRoles, diagnosticError, diagnosticServiceRequest } from './diagnostic-preferences.mjs';
+import { constants as fsConstants, createReadStream, existsSync, watch } from "node:fs";
+import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,10 +8,10 @@ import { createRequire } from "node:module";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { arch, availableParallelism, freemem, homedir, loadavg, platform, release, setPriority, totalmem, uptime } from "node:os";
+import { arch, availableParallelism, freemem, homedir, loadavg, platform, release, setPriority, tmpdir, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
 import {
-  appsScriptAction,
+  bridgeRealtimeConnection,
   completeBridgeCommand,
   controlActivity,
   fetchBridgeQueue,
@@ -20,7 +21,6 @@ import {
   pollBridgeCommands,
   searchKaraokeYouTube,
   selectBridgeActivity,
-  sendBridgeHeartbeat,
   signInBridge,
   signInBridgeWithGoogle,
   signOutBridge,
@@ -47,6 +47,7 @@ import {
 } from "./random-rotation.mjs";
 import { reconcileLocalAvailability } from "./local-availability.mjs";
 import { findMatches, normalizeText, scanLibrary } from "./matcher.mjs";
+import { queryIndexedLibrary } from "./local-library-view.mjs";
 import {
   queueMetadataMatches,
   reconcileTrackedQueue,
@@ -67,11 +68,19 @@ import {
   stemJobKey
 } from "./stem-auto.mjs";
 import {
-  completeStemManifest,
   fingerprintStemTrack,
-  inspectStemCache,
-  stemCachePaths
+  gsxStemCachePaths,
+  inspectStemCache
 } from "./stem-cache.mjs";
+import {
+  GSX_DEFAULT_PROFILE,
+  inspectGSXStems,
+  streamGSXStem,
+  writeGSXStems
+} from "./gsx-stems.mjs";
+import { inspectSongStorage, revealSongStorageLocation } from "./storage-usage.mjs";
+import { LoudnessAnalysisStore } from "./loudness-normalization.mjs";
+import { createVirtualDjOperations } from './virtualdj-operations.mjs';
 import { orderRequestViews } from "./request-order.mjs";
 import { isOnlineGuestRequest } from "./request-source.mjs";
 import {
@@ -79,6 +88,7 @@ import {
   executeVdj,
   insertKaraokeEntry,
   listKaraokeEntries,
+  moveKaraokeEntry,
   normalizeVdjPath,
   normalizeVdjSinger,
   queryVdj,
@@ -99,13 +109,19 @@ const STEM_DATA_ROOT = process.platform === "darwin"
   : resolve(ROOT, "data");
 const INSTALLED_STEM_ENGINE_ROOT = resolve(STEM_DATA_ROOT, "stem-engine");
 const BUNDLED_STEM_ENGINE_ROOT = resolve(ROOT, "stem-engine");
-const STEM_ENGINE_ROOT = existsSync(resolve(INSTALLED_STEM_ENGINE_ROOT, "package.json"))
-  ? INSTALLED_STEM_ENGINE_ROOT
-  : BUNDLED_STEM_ENGINE_ROOT;
+// The bundled engine is the only copy built, signed and tested with this app.
+// A legacy user-level copy remains a development/legacy fallback only when the
+// app has no bundled engine; it must never shadow a complete current release.
+const STEM_ENGINE_ROOT = existsSync(resolve(BUNDLED_STEM_ENGINE_ROOT, "package.json"))
+  ? BUNDLED_STEM_ENGINE_ROOT
+  : INSTALLED_STEM_ENGINE_ROOT;
+const STEM_ENGINE_SOURCE = STEM_ENGINE_ROOT === BUNDLED_STEM_ENGINE_ROOT ? "bundled" : "legacy";
+const STEM_ENGINE_SMOKE_SCRIPT = resolve(ROOT, "scripts", "stems-engine-smoke.mjs");
+const STEM_ENGINE_VERIFICATION_PATH = resolve(STEM_DATA_ROOT, "data", "stem-engine-verification.json");
 const DEMUCS_ENGINE_CLI = process.env.GUEST_STAR_DEMUCS_CLI ||
   resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
-const BRIDGE_VERSION = "4.4.1";
+const BRIDGE_VERSION = "4.5";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
@@ -129,7 +145,70 @@ const MIME = {
 };
 const BACKGROUND_AUDIO_EXTENSIONS = new Set([".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac"]);
 
+let diagnosticTesterFailure = "";
+
+async function verifyDiagnosticDelivery(session) {
+  const timestamp = new Date().toISOString();
+  await diagnosticServiceRequest(session, "submitDiagnosticReport", {
+    report: {
+      reportId: `GS-DIAGNOSTIC-CHECK-${randomUUID()}`,
+      automatic: false,
+      deliveryProbe: true,
+      createdAt: timestamp,
+      firstSeenAt: timestamp,
+      lastSeenAt: timestamp,
+      status: "Nuevo",
+      deliveryStatus: "queued",
+      severity: "INFO",
+      modules: ["Preferences"],
+      summary: "Validación de entrega de reportes técnicos",
+      description: "Comprobación autorizada al activar el envío automático.",
+      userAction: "Activación de Reportes y salud técnica",
+      version: BRIDGE_VERSION,
+      build: bundleBuild,
+      source: {},
+      stack: "",
+      lastError: "",
+      snapshot: {},
+      recentEvents: [],
+      health: {}
+    }
+  });
+}
+
 let config = await loadConfig();
+const diagnosticPreferences = await createDiagnosticPreferences({
+  path: resolve(ROOT, 'data', 'diagnostic-preferences.json'),
+  initial: config.diagnostics,
+  getConfig: () => config,
+  verify: async (session, tester) => {
+    const user = await verifyDiagnosticIdentity(session, tester);
+    if (!tester) await verifyDiagnosticDelivery(session);
+    if (tester) diagnosticTesterFailure = "";
+    if (session.authToken === config.authToken && session.deviceToken === config.deviceToken) {
+      identityState = { ...identityState, authenticated: true, user };
+    }
+    return user;
+  }
+});
+function diagnosticPreferencesView() {
+  const saved = diagnosticPreferences.view();
+  return { ...saved, testerMode: saved.testerMode && !diagnosticTesterFailure && identityState.authenticated && hasV4Session(config) && testerRoles.includes(identityState.user?.role), error: diagnosticTesterFailure };
+}
+async function requireDiagnosticTester() {
+  if (!diagnosticPreferences.view().testerMode) throw diagnosticError('Activa primero el Modo Tester.', 'TESTER_DISABLED', 403);
+  const session = config;
+  try {
+    await verifyDiagnosticIdentity(session, true);
+    if (session.authToken !== config.authToken || session.deviceToken !== config.deviceToken) {
+      throw diagnosticError('La sesión cambió durante la validación.', 'SESSION_CHANGED', 401);
+    }
+  } catch (error) {
+    diagnosticTesterFailure = `Modo Tester no disponible: ${errorMessage(error)}`;
+    broadcastState();
+    throw error;
+  }
+}
 const bundleBuild = await readFile(resolve(ROOT, ".bundle-build"), "utf8")
   .then((value) => String(value).trim().slice(0, 64))
   .catch(() => process.env.GUEST_STAR_BUILD || "development");
@@ -163,12 +242,18 @@ let tenantState = {
   branding: null,
   venue: null,
   activity: null,
+  kioskAccess: null,
+  schedules: [],
   permissions: {},
   share: null,
   upcomingActivities: []
 };
 const storedQueueState = await loadQueueState();
-let operatingMode = storedQueueState.operatingMode || "";
+let lastSelectedMode = storedQueueState.lastSelectedMode || "";
+const persistedActiveActivityState = { ...storedQueueState.activeActivityState };
+// A remembered screen/mode never proves that an activity is still active.
+// Startup remains neutral until resumeRunningActivity confirms in_progress.
+let operatingMode = "";
 let libraryFiles = [];
 let backgroundMusicFiles = [];
 let backgroundMusicError = "";
@@ -188,10 +273,19 @@ let playerRuntimeDirty = false;
 let stemEngineAvailable = false;
 let stemFfmpegPath = "";
 let stemFfprobePath = "";
+let loudnessAnalysisStore = null;
 let stemCapabilities = {
-  spleeter: { available: false, cli: "", vocalsModel: "", accompanimentModel: "" },
-  demucs: { available: false, cli: DEMUCS_ENGINE_CLI }
+  spleeter: { available: false, status: "not_installed", message: "", cli: "", vocalsModel: "", accompanimentModel: "" },
+  demucs: { available: false, status: "not_installed", message: "", cli: DEMUCS_ENGINE_CLI }
 };
+let stemEngineStatus = {
+  status: "checking",
+  message: "Verificando los motores IA incluidos…",
+  source: STEM_ENGINE_SOURCE
+};
+let stemEngineVerificationFingerprint = "";
+let stemEngineVerificationRunning = false;
+let activeStemVerificationChild = null;
 let activeStemChild = null;
 let activeStemJobId = "";
 let activeStemEngine = "";
@@ -210,7 +304,16 @@ let playerHealthState = {
   audioOutputLost: false,
   backgroundActive: false,
   starScreenConnected: false,
-  starScreenExpected: false
+  starScreenExpected: false,
+  videoFrames: 0,
+  videoDroppedFrames: 0,
+  videoCorruptedFrames: 0,
+  videoFrameRate: 0,
+  videoHardResyncs: 0,
+  videoRateWrites: 0,
+  videoDriftSeconds: 0,
+  videoReadyState: 0,
+  videoPaused: false
 };
 const stemResourceController = new StemResourceController();
 let stemResourceState = "IDLE";
@@ -234,9 +337,9 @@ let activityState = {
   transitionSeconds: 30,
   accumulatedSeconds: 0,
   remainingSeconds: 7200,
-  activityStartedAt: storedQueueState.activityStartedAt || "",
+  activityStartedAt: "",
   activityFinishedAt: "",
-  activityRunning: Boolean(storedQueueState.activityStartedAt),
+  activityRunning: false,
   stateRevision: 0,
   activityId: storedQueueState.activityId || "",
   updatedAt: "",
@@ -248,6 +351,9 @@ let activityState = {
 let queueActivityId = storedQueueState.activityId;
 const queuedEntries = new Map(
   storedQueueState.entries.map((entry) => [entry.id, entry])
+);
+const requestFileLinks = new Map(
+  storedQueueState.requestFileLinks.map((entry) => [entry.id, entry])
 );
 const queuedIds = new Set();
 const suppressedQueueIds = new Set(storedQueueState.suppressedIds);
@@ -272,6 +378,7 @@ const rotationStates = new Map();
 const reportedStatuses = new Map();
 const reportedDuplicateIds = new Set();
 const eventClients = new Set();
+let bridgeFeatures = {};
 let localAvailability = new Map();
 let libraryWatchers = [];
 let libraryWatchTimer = null;
@@ -303,7 +410,71 @@ function requireSignedInBridge() {
 
 function effectiveRequestOutcome(item) {
   const id = String(item?.id || "").trim();
-  return outcomeRecoveries.get(id)?.outcome || requestOutcome(item?.status);
+  return outcomeRecoveries.get(id)?.outcome || requestOutcome(item?.status) ||
+    (operatingMode === 'bridge' && normalizeText(item?.status) === 'eliminada' ? 'removed' : '');
+}
+
+const vdjOperations = createVirtualDjOperations({
+  getConfig: () => config.virtualDJ,
+  enabled: () => operatingMode === 'bridge',
+  changed: () => broadcastState(),
+  identify: (filePath) => {
+    if (vdjQueueEntries.filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(filePath)).length > 1) return null;
+    const matches = [...queuedEntries.values()].filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(filePath));
+    if (matches.length !== 1) return null;
+    const item = requests.find(entry => entry.id === matches[0].id);
+    if (!item || effectiveRequestOutcome(item) || suppressedQueueIds.has(item.id)) return null;
+    return { id: item.id, version: Number(item.stateRevision) || 0 };
+  },
+  played: async event => {
+    const item = requests.find(entry => entry.id === event.requestId);
+    if (!item || effectiveRequestOutcome(item) || queueLocks.has(item.id)) return;
+    // Old services without request revisions cannot guarantee remote manual
+    // precedence: automation stays off instead of guessing.
+    if (bridgeFeatures.playedCompareAndSet !== true || !Number.isInteger(item.stateRevision) || item.stateRevision <= 0) return;
+    await setRequestOutcome(item.id, 'completed', { origin: 'VDJ_EVENT', version: event.version, removeVDJ: false });
+  }
+});
+
+let vdjQueueOperationBusy = false;
+const vdjQueueCommands = new Map();
+const administrativeCommands = new Map();
+const outcomeOperations = new Map();
+async function runAdministrativeCommand(body, operation) {
+  const id = String(body.commandId || '');
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('A stable command ID is required.');
+  const signature = JSON.stringify(body);
+  const prior = administrativeCommands.get(id);
+  if (prior) {
+    if (prior.signature !== signature) throw new Error('Command ID was reused.');
+    return prior.promise;
+  }
+  if (administrativeCommands.size >= 256) administrativeCommands.delete(administrativeCommands.keys().next().value);
+  const promise = Promise.resolve().then(operation);
+  administrativeCommands.set(id, { signature, promise });
+  promise.catch(() => {});
+  return promise;
+}
+async function runVdjQueueOperation(body, operation) {
+  const id = String(body.commandId || '');
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('A stable command ID is required.');
+  const signature = JSON.stringify(body);
+  const prior = vdjQueueCommands.get(id);
+  if (prior) {
+    if (prior.signature !== signature) throw new Error('Command ID was reused.');
+    return prior.promise;
+  }
+  if (vdjQueueOperationBusy || queueLocks.size) throw new Error('The queue is already being updated.');
+  vdjQueueOperationBusy = true;
+  if (vdjQueueCommands.size >= 256) vdjQueueCommands.delete(vdjQueueCommands.keys().next().value);
+  const promise = Promise.resolve().then(operation).finally(async () => {
+    vdjQueueOperationBusy = false;
+    await reconcileVirtualDjQueue(true);
+    broadcastState();
+  });
+  vdjQueueCommands.set(id, { signature, promise });
+  promise.catch(() => {});
+  return promise;
 }
 
 function sheetMarksOutsideVirtualDj(item) {
@@ -315,6 +486,91 @@ function requireLocalSuperhost() {
   requireSignedInBridge();
   if (identityState.user?.role !== "superhost") {
     throw new Error("Only the Superhost can use this option.");
+  }
+}
+
+function requireLocalManagement() {
+  requireSignedInBridge();
+  if (!["host", "superhost"].includes(String(identityState.user?.role || ""))) {
+    throw new Error("This account cannot manage activities.");
+  }
+  if (identityState.user?.role === "host") {
+    const assigned = (identityState.selection?.hotels || []).some((item) =>
+      String(item.hotelId || "") === String(config.lastHotelId || "")
+    );
+    if (!assigned) throw new Error("Select an assigned hotel before opening Host management.");
+  }
+}
+
+function scopedManagementState(data = {}) {
+  if (identityState.user?.role === "superhost") return { ...data, scope: "superhost" };
+  const selection = identityState.selection || {};
+  const hotelIds = new Set([String(config.lastHotelId || "")]);
+  const venueIds = new Set((selection.venues || [])
+    .filter((item) => hotelIds.has(String(item.hotelId || "")))
+    .map((item) => String(item.venueId || "")));
+  const activityIds = new Set((selection.activities || [])
+    .filter((item) => hotelIds.has(String(item.hotelId || "")) && venueIds.has(String(item.venueId || "")))
+    .map((item) => String(item.activityId || "")));
+  const sourceHotels = Array.isArray(data.hotels) && data.hotels.length ? data.hotels : selection.hotels || [];
+  const sourceVenues = Array.isArray(data.venues) && data.venues.length ? data.venues : selection.venues || [];
+  const sourceActivities = Array.isArray(data.activities) && data.activities.length ? data.activities : selection.activities || [];
+  const sourceSchedules = Array.isArray(data.schedules) && data.schedules.length ? data.schedules : tenantState.schedules || [];
+  const sourceBranding = Array.isArray(data.branding) && data.branding.length
+    ? data.branding
+    : tenantState.branding && config.lastHotelId
+      ? [{ ...tenantState.branding, hotelId: config.lastHotelId }]
+      : [];
+  return {
+    ...data,
+    scope: "host",
+    permissions: tenantState.permissions || {},
+    hotels: sourceHotels.filter((item) => hotelIds.has(String(item.hotelId || ""))),
+    venues: sourceVenues.filter((item) => venueIds.has(String(item.venueId || ""))),
+    activities: sourceActivities.filter((item) => activityIds.has(String(item.activityId || ""))),
+    schedules: sourceSchedules.filter((item) =>
+      hotelIds.has(String(item.hotelId || "")) &&
+      venueIds.has(String(item.venueId || "")) &&
+      activityIds.has(String(item.activityId || ""))
+    ),
+    branding: sourceBranding.filter((item) => hotelIds.has(String(item.hotelId || ""))),
+    users: [], assignments: [], devices: [], auditLog: []
+  };
+}
+
+function assertHostManagementScope(action, body, admin) {
+  if (identityState.user?.role === "superhost") return;
+  const scoped = scopedManagementState(admin);
+  const permissions = tenantState.permissions || {};
+  const can = (key) => permissions.all === true || permissions[key] === true;
+  const scheduling = ["scheduleActivity", "updateSchedule", "cancelSchedule"].includes(action);
+  if (scheduling && !can("canChangeSchedule") && !can("canScheduleNextActivity")) {
+    throw new Error("This Host cannot manage schedules.");
+  }
+  if (action === "listReviews" && !can("canViewReviews")) {
+    throw new Error("This Host cannot view reviews.");
+  }
+  if (action === "updateHotelBranding" && !can("canCustomizeGuestMessages") && !can("canManageHotelBranding")) {
+    throw new Error("This Host cannot edit guest messages.");
+  }
+  const hotels = new Set((scoped.hotels || []).map((item) => String(item.hotelId || "")));
+  const venues = new Set((scoped.venues || []).map((item) => String(item.venueId || "")));
+  const activities = new Set((scoped.activities || []).map((item) => String(item.activityId || "")));
+  const schedules = new Set((scoped.schedules || []).map((item) => String(item.scheduleId || "")));
+  if (body.hotelId && !hotels.has(String(body.hotelId))) throw new Error("Hotel outside this Host's scope.");
+  if (body.venueId && !venues.has(String(body.venueId))) throw new Error("Venue outside this Host's scope.");
+  if (body.activityId && !activities.has(String(body.activityId))) throw new Error("Activity outside this Host's scope.");
+  if (body.activityId) {
+    const activity = (scoped.activities || []).find((item) => String(item.activityId || "") === String(body.activityId));
+    if (body.hotelId && String(activity?.hotelId || "") !== String(body.hotelId)) {
+      throw new Error("Activity does not belong to this hotel.");
+    }
+    if (body.venueId && String(activity?.venueId || "") !== String(body.venueId)) {
+      throw new Error("Activity does not belong to this venue.");
+    }
+  }
+  if (["updateSchedule", "cancelSchedule"].includes(action) && !schedules.has(String(body.scheduleId || ""))) {
+    throw new Error("Schedule outside this Host's scope.");
   }
 }
 
@@ -559,12 +815,13 @@ async function deliverDiagnosticReport(report, { force = false } = {}) {
       });
       return false;
     }
+    await verifyDiagnosticIdentity(config);
     const safeReport = sanitizeDiagnosticValue({
       ...report,
       recentEvents: (report.recentEvents || []).slice(-50),
       snapshot: report.snapshot || serverDiagnosticSnapshot()
     });
-    const result = await v4AppsScriptAction(config, "submitDiagnosticReport", {
+    const result = await diagnosticServiceRequest(config, "submitDiagnosticReport", {
       report: safeReport
     });
     if (result?.ok === false) throw new Error(result.code || "Superhost did not accept the report.");
@@ -665,9 +922,9 @@ function playerStemJobView(id) {
   const byEngine = Object.fromEntries(jobs.map((entry) => [entry.engine, entry]));
   const cache = {
     spleeter: byEngine.spleeter?.status === "ready" &&
-      Boolean(byEngine.spleeter.instrumentalPath && byEngine.spleeter.vocalsPath),
+      Boolean(byEngine.spleeter.gsxPath || (byEngine.spleeter.instrumentalPath && byEngine.spleeter.vocalsPath)),
     demucs: byEngine.demucs?.status === "ready" &&
-      Boolean(byEngine.demucs.instrumentalPath && byEngine.demucs.vocalsPath)
+      Boolean(byEngine.demucs.gsxPath || (byEngine.demucs.instrumentalPath && byEngine.demucs.vocalsPath))
   };
   const source = stemSourceForIntent({ intent, cache });
   const selectedJob = source === "original" ? null : byEngine[source];
@@ -696,6 +953,7 @@ function playerStemJobView(id) {
     source,
     lockedSource,
     engine: lockedSource || source,
+    format: selectedJob?.cacheFormat || "legacy",
     status: ready ? "ready" : failed ? "failed" : working ? requiredJob.status : "queued",
     progress: ready && !improving
       ? 100
@@ -724,18 +982,63 @@ function playerStemJobView(id) {
   };
 }
 
-function requestView(item) {
-  const matches = findMatches(
+function matchesForRequest(item, youtubeResults = youtubeCache.get(item.id) || [], limit = 3) {
+  return findMatches(
     libraryFiles,
     item.song,
     item.artist,
-    item.languageCode || item.language
+    item.languageCode || item.language,
+    limit,
+    {
+      youtubeResults,
+      durationSeconds: item.durationSeconds
+    }
   );
+}
+
+function youtubeOptionsForRequest(item, matches) {
+  return (youtubeCache.get(item.id) || []).map((option) => {
+    const related = findMatches(
+      libraryFiles,
+      item.song,
+      item.artist,
+      item.languageCode || item.language,
+      1,
+      { youtubeResults: [option], durationSeconds: option.durationSeconds || item.durationSeconds }
+    )[0];
+    return {
+      ...option,
+      cleanedMetadata: {
+        song: String(item.song || "").trim(),
+        artist: String(item.artist || "").trim(),
+        durationSeconds: Math.max(0, Number(option.durationSeconds) || 0)
+      },
+      localMatch: related && related.score >= 0.62
+        ? {
+            filePath: related.filePath,
+            fileName: related.fileName,
+            confidencePercent: related.confidencePercent,
+            confidenceTier: related.confidenceTier,
+            reasons: related.reasons
+          }
+        : null
+    };
+  });
+}
+
+function requestView(item) {
+  const matches = matchesForRequest(item);
   const top = matches[0];
   const queuedEntry = queuedEntries.get(item.id);
+  const fileLink = requestFileLinks.get(item.id);
+  const linkedFilePath = fileLink?.filePath || "";
+  const linkedFileAvailable = Boolean(linkedFilePath && libraryFiles.some((candidate) =>
+    normalizeVdjPath(candidate) === normalizeVdjPath(linkedFilePath)
+  ));
   const verifiedQueuePath =
     vdjRequestFilePaths.get(item.id) || queuedEntry?.filePath || "";
   const localAvailable = Boolean(
+    linkedFileAvailable ||
     top?.exact ||
     (verifiedQueuePath &&
       vdjAvailablePaths.has(normalizeVdjPath(verifiedQueuePath)))
@@ -765,18 +1068,23 @@ function requestView(item) {
       removedExternally: false,
       queueUnverified: false,
       localAvailable,
-      manualLink: recoveryEntry?.manualLink === true,
+      manualLink: fileLink?.source === "manual",
+      linkedFilePath,
+      linkedFileName: linkedFilePath ? basename(linkedFilePath) : "",
+      linkedFileAvailable,
+      linkSource: fileLink?.source || "",
       localState: outcome,
       matches,
       queuedFilePath:
         recoveryEntry?.filePath || verifiedQueuePath || queuedEntry?.filePath || "",
       queuePosition: null,
       canUndo: true,
+      outcomeMarkedAt: recovery?.markedAt || '',
       canRestoreToQueue: Boolean(recoveryEntry || localAvailable),
       undoOriginalPosition: Number.isInteger(recovery?.originalPosition)
         ? recovery.originalPosition + 1
         : null,
-      youtube: youtubeCache.get(item.id) || [],
+      youtube: youtubeOptionsForRequest(item, matches),
       youtubeSearched: youtubeCache.has(item.id),
       youtubeSearching: youtubeSearches.has(item.id),
       queueSyncState: "",
@@ -791,7 +1099,11 @@ function requestView(item) {
     removedExternally,
     queueUnverified,
     localAvailable,
-    manualLink: queuedEntry?.manualLink === true,
+    manualLink: fileLink?.source === "manual",
+    linkedFilePath,
+    linkedFileName: linkedFilePath ? basename(linkedFilePath) : "",
+    linkedFileAvailable,
+    linkSource: fileLink?.source || "",
     queueSyncState: pendingInsertion?.phase || (transientMissing ? "confirming" : ""),
     localState: pendingInsertion
       ? pendingInsertion.phase === "adding"
@@ -816,7 +1128,7 @@ function requestView(item) {
     queuedFilePath:
       verifiedQueuePath || (isQueued && top?.exact ? top.filePath : ""),
     queuePosition: Number.isInteger(queueIndex) ? queueIndex + 1 : null,
-    youtube: youtubeCache.get(item.id) || [],
+    youtube: youtubeOptionsForRequest(item, matches),
     youtubeSearched: youtubeCache.has(item.id),
     youtubeSearching: youtubeSearches.has(item.id),
     stem: playerStemJobView(item.id),
@@ -995,15 +1307,23 @@ function clearTransientCaches() {
 }
 
 function applyActivityState(data) {
+  const wasRunning = activityState.activityRunning;
   const next = normalizedActivity(data);
   if (data?.activity?.showStarScreenQueueCount !== undefined) {
     next.showStarScreenQueueCount = data.activity.showStarScreenQueueCount !== false;
   }
   activityState = next;
   if (activityState.activityRunning) {
-    // The remote activity owns the locked mode. Older activities without an
-    // explicit mode keep a valid local selection, then fall back to Bridge.
-    operatingMode = activityState.playbackMode || operatingMode || "bridge";
+    const persistedMode =
+      String(persistedActiveActivityState.activityId || "") === String(activityState.activityId || "")
+        ? String(persistedActiveActivityState.playbackMode || "")
+        : "";
+    // The remote activity is authoritative. A persisted active-session mode
+    // may fill an older remote record, but lastSelectedMode never may.
+    operatingMode = activityState.playbackMode || persistedMode || operatingMode || "";
+    activityState.playbackMode = operatingMode;
+  } else if (wasRunning) {
+    operatingMode = "";
   }
   if (data && typeof data === "object") {
     if (data.playerRuntime && typeof data.playerRuntime === "object" && !playerRuntimeDirty) {
@@ -1039,6 +1359,8 @@ function applyActivityState(data) {
       branding: data.branding || tenantState.branding,
       venue: data.venue || tenantState.venue,
       activity: data.activity || tenantState.activity,
+      kioskAccess: data.kioskAccess || null,
+      schedules: Array.isArray(data.schedules) ? data.schedules : tenantState.schedules,
       permissions: data.permissions || tenantState.permissions || {},
       share: data.share || tenantState.share,
       upcomingActivities: Array.isArray(data.upcomingActivities)
@@ -1049,12 +1371,14 @@ function applyActivityState(data) {
 }
 
 function bridgeRequests(data = {}) {
+  if (data.bridgeFeatures) bridgeFeatures = data.bridgeFeatures;
   const mapped = (Array.isArray(data.requests) ? data.requests : [])
     .map((item) => ({
       id: String(item.id || ""),
       sheetRow: Math.max(0, Math.floor(numberOr(item.sheetRow, 0))),
       timestamp: item.timestamp || "",
       singer: String(item.singer || item.name || "").trim(),
+      stateRevision: Number.isInteger(Number(item.stateRevision)) ? Number(item.stateRevision) : null,
       song: String(item.song || "").trim(),
       artist: String(item.artist || "").trim(),
       comment: String(item.comment || "").trim(),
@@ -1063,6 +1387,7 @@ function bridgeRequests(data = {}) {
       sourceUrl: String(item.sourceUrl || "").trim(),
       sourceType: String(item.sourceType || "").trim(),
       playerQueuePosition: Math.max(0, Math.floor(numberOr(item.queuePosition, 0))),
+      administrativePosition: Math.max(0, numberOr(item.queuePosition, 0)),
       guestIdentity: String(item.guestIdentity || "").trim(),
       guestCode: String(item.guestCode || "").trim(),
       status: String(item.status || "Pendiente"),
@@ -1077,7 +1402,8 @@ function bridgeRequests(data = {}) {
     .filter((item) =>
       item.id && item.singer && item.song &&
       isOnlineGuestRequest(item) &&
-      !["eliminada", "cancelada"].includes(normalizeText(item.status))
+      (!['eliminada', 'cancelada'].includes(normalizeText(item.status)) ||
+        ((operatingMode === 'bridge' || data.state?.playbackMode === 'bridge') && normalizeText(item.status) === 'eliminada'))
     );
   const canonicalByIdentity = new Map();
   return assignGuestAliases(mapped).map((item) => {
@@ -1152,7 +1478,7 @@ function queuedEntryFromRequest(item, preferredPath = "", actualEntry = null) {
       Math.max(0, Number(item.durationSeconds) || 0),
     virtualDJItemId: String(actualEntry?.virtualDJItemId || ""),
     fingerprint: String(actualEntry?.fingerprint || ""),
-    manualLink: Boolean(actualEntry),
+    manualLink: requestFileLinks.get(item.id)?.source === "manual",
     insertedAt:
       String(queuedEntries.get(item.id)?.insertedAt || "") ||
       new Date().toISOString(),
@@ -1189,7 +1515,16 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
     playerOrder,
     playerPlayback,
     playerStemJobs.values(),
-    Object.fromEntries(playerQueueVisibility)
+    Object.fromEntries(playerQueueVisibility),
+    requestFileLinks.values(),
+    lastSelectedMode,
+    activityState.activityRunning && operatingMode
+      ? {
+          activityId: activityState.activityId,
+          activityStartedAt: activityState.activityStartedAt,
+          playbackMode: operatingMode
+        }
+      : {}
   );
 }
 
@@ -1288,6 +1623,7 @@ async function updatePlayerRuntime(body = {}) {
 async function resetLocalActivity(activityId) {
   requests = [];
   queuedEntries.clear();
+  requestFileLinks.clear();
   queuedIds.clear();
   suppressedQueueIds.clear();
   removedExternallyIds.clear();
@@ -1363,6 +1699,12 @@ async function reconcileDeletedRequests(
   }
   for (const id of [...youtubeSearchAt.keys()]) {
     if (!activeIds.has(id)) youtubeSearchAt.delete(id);
+  }
+  for (const id of [...requestFileLinks.keys()]) {
+    if (!activityChanged && activeIds.has(id)) continue;
+    if (!shouldDiscardMissing) continue;
+    requestFileLinks.delete(id);
+    changed = true;
   }
 
   for (const id of trackedIds) {
@@ -1537,6 +1879,7 @@ function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
 
 async function reconcileVirtualDjQueue(force = false) {
   if (operatingMode !== "bridge") return;
+  if (vdjQueueOperationBusy) return;
   if (vdjQueueCheckPromise) return vdjQueueCheckPromise;
   if (queueLocks.size) return;
 
@@ -1887,8 +2230,7 @@ function stateView() {
   const activePlayerIds = requestViews
     .filter((item) =>
       !item.outcome &&
-      !["Ya cantó", "Saltado", "Retirada del Player"].includes(String(item.status || "")) &&
-      (!item.stem || item.stem.status === "ready")
+      !["Ya cantó", "Saltado", "Retirada del Player"].includes(String(item.status || ""))
     )
     .sort((left, right) => {
       const leftPosition = Number(left.playerQueuePosition) || Number.MAX_SAFE_INTEGER;
@@ -1924,7 +2266,8 @@ function stateView() {
     activityState,
     requestViews,
     Date.now(),
-    verifiedQueue
+    verifiedQueue,
+    { currentPlayback: playerPlayback }
   );
   if (vdjQueueCount > 0) activitySummary.suggestHits = false;
   const hitSuggestions = activitySummary.suggestHits
@@ -1943,7 +2286,7 @@ function stateView() {
     ok: true,
     version: BRIDGE_VERSION,
     build: bundleBuild,
-    config: publicConfig(config),
+    config: { ...publicConfig(config), diagnostics: diagnosticPreferencesView() },
     account: {
       authenticated: identityState.authenticated && hasV4Session(config),
       user: identityState.user,
@@ -1958,8 +2301,12 @@ function stateView() {
     activity: activityState,
     operatingMode: {
       selected: operatingMode,
-      locked: Boolean(activityState.activityRunning),
-      canChange: !activityState.activityRunning
+      lastSelected: lastSelectedMode,
+      // Auto Start may create a real running occurrence before this Mac has
+      // chosen its renderer. The first selection completes recovery; once a
+      // mode exists it remains locked until the occurrence finishes.
+      locked: Boolean(activityState.activityRunning && operatingMode),
+      canChange: !activityState.activityRunning || !operatingMode
     },
     playerRuntime: {
       ...(remotePlayerRuntime && typeof remotePlayerRuntime === "object"
@@ -1971,15 +2318,22 @@ function stateView() {
     },
     stemEngine: {
       available: stemEngineAvailable,
+      status: stemEngineStatus.status,
+      message: stemEngineStatus.message,
+      source: stemEngineStatus.source,
       defaultEngine: normalizeStemEngine(config.defaultStemEngine, "auto"),
       engines: {
         spleeter: {
           available: stemCapabilities.spleeter.available,
+          status: stemCapabilities.spleeter.status,
+          message: stemCapabilities.spleeter.message,
           modelVersion: STEM_MODEL_VERSIONS.spleeter,
           actualThreads: spleeterExecutionBudget(availableParallelism(), stemResourceState).numThreads
         },
         demucs: {
           available: stemCapabilities.demucs.available,
+          status: stemCapabilities.demucs.status,
+          message: stemCapabilities.demucs.message,
           modelVersion: STEM_MODEL_VERSIONS.demucs,
           maxHeavyJobs: 1,
           internalThreads: null
@@ -2032,6 +2386,7 @@ function stateView() {
       error: sheetError
     },
     virtualDJ: {
+      playback: vdjOperations.view(),
       error: vdjError,
       queueCount: vdjQueueCount,
       lastQueueCheckAt: lastVdjQueueAt,
@@ -2072,6 +2427,13 @@ function stateView() {
     ],
     requests: requestViews
   };
+}
+
+function broadcastInterfacePreferences() {
+  const message = "event: interface-preferences\ndata: " + JSON.stringify(config.interfacePreferences) + "\n\n";
+  for (const response of [...eventClients]) {
+    try { response.write(message); } catch { eventClients.delete(response); }
+  }
 }
 
 function broadcastState() {
@@ -2210,6 +2572,7 @@ async function scanNow() {
   broadcastState();
   await reportLocalStates();
   await prepareMissingYoutube();
+  await autoLinkSafeMatches();
   if (operatingMode === "bridge") await autoQueueExactMatches();
   broadcastState();
   if (scanAgain) {
@@ -2251,7 +2614,9 @@ async function syncNow() {
   let refreshed = false;
   broadcastState();
   try {
+    const previousRealtimeMode = operatingMode;
     const data = await fetchBridgeQueue(config);
+    scheduleCloudScheduleWake(data);
     const nextActivity = normalizedActivity(data);
     const receivedRequests = bridgeRequests(data);
     const duplicateRequests = receivedRequests.filter((item) => item.duplicateOf);
@@ -2275,6 +2640,9 @@ async function syncNow() {
     }
     refreshLocalAvailability();
     applyActivityState(data);
+    if (cloudRealtimeSocket && previousRealtimeMode !== operatingMode) {
+      restartCloudRealtime();
+    }
     await reconcileTerminalRequests(nextRequests);
     lastSyncAt = new Date().toISOString();
     broadcastState();
@@ -2434,26 +2802,123 @@ function firstExistingPath(candidates = []) {
   ) || "";
 }
 
+function stemCapability(status, message, details = {}) {
+  return { available: status === "ready", status, message, ...details };
+}
+
+function stemStatusMessage(status, engine = "") {
+  const name = engine === "spleeter" ? "Spleeter" : engine === "demucs" ? "Demucs" : "Motores IA";
+  if (status === "not_installed") return `${name} no está instalado. Actualiza o reinstala Guest Star Universal.`;
+  if (status === "not_executable") return `${name} está instalado pero no se puede ejecutar. Reinstala Guest Star Universal.`;
+  if (status === "model_missing") return `Falta el modelo de ${name}. Reinstala Guest Star Universal.`;
+  if (status === "temporary_error") return `${name} no superó la prueba de ejecución. Cierra otras apps intensivas y vuelve a intentarlo.`;
+  if (status === "checking") return `Verificando ${name} con una prueba real…`;
+  return `${name} está listo.`;
+}
+
+async function canAccessStemPath(filePath, executable = false) {
+  if (!filePath) return false;
+  try {
+    await access(filePath, executable ? fsConstants.X_OK : fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stemEngineFingerprint() {
+  const entries = [
+    resolve(STEM_ENGINE_ROOT, "package.json"),
+    stemFfmpegPath,
+    stemFfprobePath,
+    resolve(STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation"),
+    resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16", "vocals.fp16.onnx"),
+    resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16", "accompaniment.fp16.onnx"),
+    DEMUCS_ENGINE_CLI,
+    resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "htdemucs.onnx")
+  ];
+  const fingerprint = createHash("sha256");
+  fingerprint.update(`${bundleBuild}|${process.arch}|${STEM_ENGINE_SOURCE}|`);
+  for (const filePath of entries) {
+    try {
+      const info = await stat(filePath);
+      fingerprint.update(`${filePath}|${info.size}|${info.mtimeMs}|`);
+    } catch {
+      fingerprint.update(`${filePath}|missing|`);
+    }
+  }
+  return fingerprint.digest("hex");
+}
+
+async function loadStemEngineVerification() {
+  try {
+    const saved = JSON.parse(await readFile(STEM_ENGINE_VERIFICATION_PATH, "utf8"));
+    return saved?.fingerprint === stemEngineVerificationFingerprint && saved?.engines &&
+      typeof saved.engines === "object" ? saved.engines : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveStemEngineVerification(engines) {
+  const directory = dirname(STEM_ENGINE_VERIFICATION_PATH);
+  const staged = `${STEM_ENGINE_VERIFICATION_PATH}.${process.pid}.tmp`;
+  await mkdir(directory, { recursive: true });
+  await writeFile(staged, `${JSON.stringify({
+    fingerprint: stemEngineVerificationFingerprint,
+    source: STEM_ENGINE_SOURCE,
+    verifiedAt: new Date().toISOString(),
+    engines
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await rename(staged, STEM_ENGINE_VERIFICATION_PATH);
+}
+
+function updateStemEngineSummary() {
+  const engines = [stemCapabilities.spleeter, stemCapabilities.demucs];
+  stemEngineAvailable = engines.some((engine) => engine.available);
+  const status = stemEngineAvailable ? "ready" : [
+    "model_missing", "not_executable", "not_installed", "temporary_error", "checking"
+  ].find((candidate) => engines.some((engine) => engine.status === candidate)) || "not_installed";
+  stemEngineStatus = {
+    status,
+    message: stemEngineAvailable
+      ? "Motores IA verificados y listos."
+      : stemStatusMessage(status),
+    source: STEM_ENGINE_SOURCE
+  };
+  diagnostics.setHealth("Spleeter", stemCapabilities.spleeter.available ? "IDLE" : "OFFLINE");
+  diagnostics.setHealth("Demucs", stemCapabilities.demucs.available ? stemResourceState : "OFFLINE");
+  diagnostics.setHealth("Stem Cache", engines.some((engine) => engine.status !== "not_executable") ? "OK" : "WARNING");
+}
+
 async function refreshStemEngineCapability() {
+  const packagePath = resolve(STEM_ENGINE_ROOT, "package.json");
+  if (!(await canAccessStemPath(packagePath))) {
+    stemCapabilities = {
+      spleeter: stemCapability("not_installed", stemStatusMessage("not_installed", "spleeter")),
+      demucs: stemCapability("not_installed", stemStatusMessage("not_installed", "demucs"), { cli: DEMUCS_ENGINE_CLI })
+    };
+    updateStemEngineSummary();
+    return false;
+  }
   try { stemFfmpegPath = String(process.env.GUEST_STAR_FFMPEG || stemEngineRequire("ffmpeg-static") || ""); }
   catch { stemFfmpegPath = String(process.env.GUEST_STAR_FFMPEG || ""); }
   try { stemFfprobePath = String(process.env.GUEST_STAR_FFPROBE || stemEngineRequire("@ffprobe-installer/ffprobe")?.path || ""); }
   catch { stemFfprobePath = String(process.env.GUEST_STAR_FFPROBE || ""); }
-  const toolsAvailable = Boolean(
-    stemFfmpegPath && stemFfprobePath &&
-    existsSync(stemFfmpegPath) && existsSync(stemFfprobePath)
-  );
+  const toolsAvailable = (await Promise.all([
+    canAccessStemPath(stemFfmpegPath, true),
+    canAccessStemPath(stemFfprobePath, true),
+    canAccessStemPath(STEM_ENGINE_SMOKE_SCRIPT)
+  ])).every(Boolean);
   const spleeterCli = firstExistingPath([
     process.env.GUEST_STAR_SPLEETER_CLI,
     resolve(STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation"),
-    resolve(STEM_ENGINE_ROOT, "sherpa-onnx-offline-source-separation"),
-    resolve(BUNDLED_STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation")
+    resolve(STEM_ENGINE_ROOT, "sherpa-onnx-offline-source-separation")
   ]);
   const modelDirectories = [
     process.env.GUEST_STAR_SPLEETER_MODEL_DIR,
     resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16"),
-    resolve(STEM_ENGINE_ROOT, "models", "spleeter-2stems"),
-    resolve(BUNDLED_STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16")
+    resolve(STEM_ENGINE_ROOT, "models", "spleeter-2stems")
   ].filter(Boolean);
   const vocalsModel = firstExistingPath([
     process.env.GUEST_STAR_SPLEETER_VOCALS_MODEL,
@@ -2463,23 +2928,114 @@ async function refreshStemEngineCapability() {
     process.env.GUEST_STAR_SPLEETER_ACCOMPANIMENT_MODEL,
     ...modelDirectories.map((directory) => resolve(directory, "accompaniment.fp16.onnx"))
   ]);
+  const [spleeterExecutable, demucsExecutable, demucsModel] = await Promise.all([
+    canAccessStemPath(spleeterCli, true),
+    canAccessStemPath(DEMUCS_ENGINE_CLI),
+    canAccessStemPath(resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "htdemucs.onnx"))
+  ]);
+  stemEngineVerificationFingerprint = await stemEngineFingerprint();
+  const verified = await loadStemEngineVerification();
+  const statusFor = (engine, structurallyReady) => {
+    if (!toolsAvailable) return "not_executable";
+    if (engine === "spleeter" && !(vocalsModel && accompanimentModel)) return "model_missing";
+    if (engine === "demucs" && !demucsModel) return "model_missing";
+    if (!structurallyReady) return "not_installed";
+    return verified[engine]?.status === "ready" ? "ready" : "checking";
+  };
+  const spleeterStatus = statusFor("spleeter", spleeterExecutable);
+  const demucsStatus = statusFor("demucs", demucsExecutable);
   stemCapabilities = {
-    spleeter: {
-      available: toolsAvailable && Boolean(spleeterCli && vocalsModel && accompanimentModel),
+    spleeter: stemCapability(spleeterStatus, stemStatusMessage(spleeterStatus, "spleeter"), {
       cli: spleeterCli,
       vocalsModel,
       accompanimentModel
-    },
-    demucs: {
-      available: toolsAvailable && existsSync(DEMUCS_ENGINE_CLI),
+    }),
+    demucs: stemCapability(demucsStatus, stemStatusMessage(demucsStatus, "demucs"), {
       cli: DEMUCS_ENGINE_CLI
-    }
+    })
   };
-  stemEngineAvailable = stemCapabilities.spleeter.available || stemCapabilities.demucs.available;
-  diagnostics.setHealth("Spleeter", stemCapabilities.spleeter.available ? "IDLE" : "OFFLINE");
-  diagnostics.setHealth("Demucs", stemCapabilities.demucs.available ? stemResourceState : "OFFLINE");
-  diagnostics.setHealth("Stem Cache", toolsAvailable ? "OK" : "WARNING");
+  updateStemEngineSummary();
   return stemEngineAvailable;
+}
+
+async function verifyStemEngineCapability() {
+  if (stemEngineVerificationRunning || stemResourceState !== "IDLE" || !["checking", "ready"].includes(stemEngineStatus.status)) return;
+  const engines = Object.entries(stemCapabilities)
+    .filter(([, capability]) => capability.status === "checking")
+    .map(([engine]) => engine);
+  if (!engines.length) return;
+  stemEngineVerificationRunning = true;
+  const verification = await loadStemEngineVerification();
+  try {
+    for (const engine of engines) {
+      if (stemWorkerPaused) break;
+      const result = await new Promise((resolveVerification) => {
+        const child = spawn(process.execPath, [
+          STEM_ENGINE_SMOKE_SCRIPT, STEM_ENGINE_ROOT, `--engine=${engine}`
+        ], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            OMP_NUM_THREADS: "1",
+            MKL_NUM_THREADS: "1",
+            OPENBLAS_NUM_THREADS: "1",
+            VECLIB_MAXIMUM_THREADS: "1",
+            UV_THREADPOOL_SIZE: "1"
+          }
+        });
+        activeStemVerificationChild = child;
+        try { setPriority(child.pid, 19); } catch { /* Best effort on supported systems. */ }
+        let output = "";
+        const capture = (chunk) => { output = `${output}${String(chunk || "")}`.slice(-1600); };
+        child.stdout?.on("data", capture);
+        child.stderr?.on("data", capture);
+        child.once("error", (error) => resolveVerification({ ok: false, error: errorMessage(error) }));
+        child.once("close", (code, signal) => resolveVerification({
+          ok: Number(code) === 0,
+          error: output.trim() || `code ${code}${signal ? ` (${signal})` : ""}`
+        }));
+      });
+      activeStemVerificationChild = null;
+      if (result.ok) {
+        stemCapabilities[engine] = {
+          ...stemCapabilities[engine],
+          available: true,
+          status: "ready",
+          message: stemStatusMessage("ready", engine)
+        };
+        verification[engine] = { status: "ready", verifiedAt: new Date().toISOString() };
+      } else {
+        stemCapabilities[engine] = {
+          ...stemCapabilities[engine],
+          available: false,
+          status: "temporary_error",
+          message: stemStatusMessage("temporary_error", engine)
+        };
+        verification[engine] = { status: "temporary_error", error: String(result.error || "").slice(-800) };
+        recordStemBreadcrumb("STEM_ENGINE_SMOKE_FAILED", {
+          engine,
+          summary: String(result.error || "Stems smoke test failed.").slice(-800)
+        }, { severity: "WARNING" });
+      }
+      updateStemEngineSummary();
+      broadcastState();
+    }
+    await saveStemEngineVerification(verification);
+  } catch (error) {
+    stemEngineStatus = {
+      status: "temporary_error",
+      message: stemStatusMessage("temporary_error"),
+      source: STEM_ENGINE_SOURCE
+    };
+    recordStemBreadcrumb("STEM_ENGINE_VERIFICATION_FAILED", {
+      summary: errorMessage(error)
+    }, { severity: "WARNING" });
+    broadcastState();
+  } finally {
+    activeStemVerificationChild = null;
+    stemEngineVerificationRunning = false;
+    void processStemQueue();
+  }
 }
 
 function recordStemBreadcrumb(event, details = {}, { severity = "INFO", createIncident = false } = {}) {
@@ -2547,6 +3103,21 @@ async function refreshSystemMemoryPressure() {
 
 function applyActiveStemResourceBudget(previousState = stemResourceState) {
   stemWorkerPaused = stemResourceState === "PRESSURE";
+  const verificationPaused = stemResourceState !== "IDLE";
+  if (activeStemVerificationChild?.pid) {
+    try { setPriority(activeStemVerificationChild.pid, 19); } catch { /* Best effort on supported systems. */ }
+    if (verificationPaused && !activeStemVerificationChild.guestStarStopped) {
+      try {
+        activeStemVerificationChild.kill("SIGSTOP");
+        activeStemVerificationChild.guestStarStopped = true;
+      } catch { /* The verification may have completed between state updates. */ }
+    } else if (!verificationPaused && activeStemVerificationChild.guestStarStopped) {
+      try {
+        activeStemVerificationChild.kill("SIGCONT");
+        activeStemVerificationChild.guestStarStopped = false;
+      } catch { /* The verification may have completed while it was stopped. */ }
+    }
+  }
   const job = playerStemJobs.get(activeStemJobId);
   if (!activeStemChild?.pid || !job) return;
   const budget = job.engine === "spleeter"
@@ -2610,6 +3181,7 @@ function updateStemResourceState() {
     });
   } else {
     void processStemQueue();
+    if (stemResourceState === "IDLE") void verifyStemEngineCapability();
   }
   void persistQueuedEntries().catch(() => {});
   broadcastState();
@@ -2683,6 +3255,27 @@ async function probeDuration(filePath) {
     "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", filePath
   ], { timeout: 30000 });
   return Math.max(0, Number(String(stdout).trim()) || 0);
+}
+
+async function probeAudioStream(filePath) {
+  const { stdout } = await execFileAsync(stemFfprobePath, [
+    "-v", "error", "-select_streams", "a:0",
+    "-show_entries", "stream=codec_name,profile,sample_rate,channels,bit_rate,duration,duration_ts,time_base",
+    "-of", "json", filePath
+  ], { timeout: 30000, maxBuffer: 256 * 1024 });
+  const stream = JSON.parse(String(stdout || "{}")).streams?.[0] || {};
+  const sampleRate = Math.max(1, Number(stream.sample_rate) || 44_100);
+  const durationSeconds = Math.max(0, Number(stream.duration) || await probeDuration(filePath));
+  return {
+    codec: String(stream.codec_name || "").toLowerCase() === "aac" ? "aac-lc" : String(stream.codec_name || ""),
+    profile: String(stream.profile || ""),
+    bitrate: Math.max(1, Number(stream.bit_rate) || 0),
+    sampleRate,
+    channels: Math.max(1, Number(stream.channels) || 0),
+    durationSeconds,
+    frameCount: Math.max(1, Math.round(durationSeconds * sampleRate)),
+    packetFrames: 1024
+  };
 }
 
 function requestStemJobs(requestId) {
@@ -2798,6 +3391,12 @@ function upsertStemJob({ requestId, filePath, engine, intent, context, cache = n
   const existing = playerStemJobs.get(id);
   const stamp = new Date().toISOString();
   const cached = cache?.valid === true;
+  const plannedGSX = gsxStemCachePaths(
+    context.cacheRoot,
+    context.fingerprint,
+    engine,
+    STEM_MODEL_VERSIONS[engine]
+  );
   const job = {
     ...existing,
     id,
@@ -2817,16 +3416,13 @@ function upsertStemJob({ requestId, filePath, engine, intent, context, cache = n
         ? intent === "auto" ? "AUTO · Preparando rápido…" : "Rápido · en cola"
         : intent === "auto" ? "AUTO · Mejora en cola" : "Alta calidad · en cola",
     fingerprint: context.fingerprint,
-    cacheKey: cache?.cacheKey || stemCachePaths(
-      context.cacheRoot,
-      context.fingerprint,
-      engine,
-      STEM_MODEL_VERSIONS[engine]
-    ).cacheKey,
+    cacheKey: cache?.cacheKey || plannedGSX.cacheKey,
     modelVersion: STEM_MODEL_VERSIONS[engine],
     manifestPath: cached ? cache.manifestPath : "",
     instrumentalPath: cached ? cache.instrumentalPath : "",
     vocalsPath: cached ? cache.vocalsPath : "",
+    gsxPath: cached ? cache.gsxPath || "" : "",
+    cacheFormat: cached ? cache.format || "legacy" : "",
     error: "",
     cacheHit: cached,
     estimatedTurnSeconds: estimatedTurnForRequest(requestId),
@@ -2862,6 +3458,38 @@ async function queueAutoDemucsUpgrade(requestId, filePath, context) {
   return job;
 }
 
+async function acquireGSXGenerationClaim(paths, expected) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(paths.lockPath, "wx", 0o600);
+      await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
+      await handle.sync();
+      return { handle, existing: null };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const lock = JSON.parse(await readFile(paths.lockPath, "utf8"));
+        process.kill(Number(lock.pid), 0);
+      } catch (lockError) {
+        if (lockError?.code === "EPERM") {
+          // A live process owned by another user still owns the claim.
+        } else {
+          await rm(paths.lockPath, { force: true });
+          continue;
+        }
+      }
+      for (let second = 0; second < 600; second += 1) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+        const existing = await inspectGSXStems(paths.gsxPath, expected);
+        if (existing.valid) return { handle: null, existing };
+        try { await stat(paths.lockPath); } catch { break; }
+      }
+      throw new Error("Another Guest Star process is still generating this GSX stem set.");
+    }
+  }
+  throw new Error("The GSX generation claim could not be acquired.");
+}
+
 async function prepareStemJob(job) {
   const context = await trackStemContext(job.filePath);
   if (job.fingerprint && job.fingerprint !== context.fingerprint) {
@@ -2870,18 +3498,28 @@ async function prepareStemJob(job) {
   const cached = await lookupStemCache(context, job.engine, job.requestId);
   if (cached.valid) return { ...cached, cacheHit: true };
   const modelVersion = STEM_MODEL_VERSIONS[job.engine];
-  const finalPaths = stemCachePaths(context.cacheRoot, context.fingerprint, job.engine, modelVersion);
-  const finalParent = dirname(finalPaths.directory);
-  await mkdir(finalParent, { recursive: true });
-  if (!finalPaths.directory.startsWith(`${context.cacheRoot}${sep}`)) {
+  const finalPaths = gsxStemCachePaths(context.cacheRoot, context.fingerprint, job.engine, modelVersion);
+  await mkdir(finalPaths.directory, { recursive: true });
+  if (!finalPaths.gsxPath.startsWith(`${context.cacheRoot}${sep}`)) {
     throw new Error("The Stems cache entry is outside Guest Star storage.");
   }
-  const workDir = await mkdtemp(resolve(context.cacheRoot, ".work-"));
+  const expectedGSX = {
+    sourceHash: context.fingerprint,
+    separationModel: job.engine,
+    separationModelVersion: modelVersion,
+    encodingProfile: finalPaths.encodingProfile
+  };
+  const claim = await acquireGSXGenerationClaim(finalPaths, expectedGSX);
+  if (claim.existing) {
+    return { ...finalPaths, format: "gsx", manifest: claim.existing.manifest, cacheHit: true };
+  }
+  let workDir = "";
   try {
+    await rm(finalPaths.tempPath, { force: true });
+    workDir = await mkdtemp(resolve(context.cacheRoot, ".work-"));
     const wavPath = resolve(workDir, "input.wav");
     const separatedDir = resolve(workDir, "separated");
-    const entryDir = resolve(workDir, "entry");
-    await Promise.all([mkdir(separatedDir, { recursive: true }), mkdir(entryDir, { recursive: true })]);
+    await mkdir(separatedDir, { recursive: true });
     const sourceDuration = await probeDuration(job.filePath);
     const spleeterBudget = spleeterExecutionBudget(availableParallelism(), stemResourceState);
     const ffmpegThreads = job.engine === "spleeter"
@@ -2936,57 +3574,66 @@ async function prepareStemJob(job) {
         "-map", "[a]", "-c:a", "pcm_s16le", instrumentalWav
       ], job, "Demucs · mezclando instrumental");
     }
-    const instrumentalPath = resolve(entryDir, "instrumental.m4a");
-    const vocalsPath = resolve(entryDir, "vocals.m4a");
+    const instrumentalPath = resolve(workDir, "instrumental.m4a");
+    const vocalsPath = resolve(workDir, "vocals.m4a");
     job.progress = 86;
     await runStemCommand(stemFfmpegPath, [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-fflags", "+genpts", "-y",
       "-i", instrumentalWav, "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0,alimiter=limit=0.95",
-      "-c:a", "aac", "-b:a", "256k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", instrumentalPath
+      "-c:a", "aac", "-profile:a", "aac_low", "-b:a", String(GSX_DEFAULT_PROFILE.instrumentalBitrate), "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", instrumentalPath
     ], job, "Generando instrumental");
     job.progress = 93;
     await runStemCommand(stemFfmpegPath, [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", String(ffmpegThreads), "-fflags", "+genpts", "-y",
       "-i", vocalsWav, "-af", "asetpts=PTS-STARTPTS,aresample=44100:first_pts=0",
-      "-c:a", "aac", "-b:a", "128k", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", vocalsPath
+      "-c:a", "aac", "-profile:a", "aac_low", "-b:a", String(GSX_DEFAULT_PROFILE.vocalsBitrate), "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", vocalsPath
     ], job, "Preparando control de voz");
-    const [instrumentalDuration, vocalsDuration, instrumentalInfo, vocalsInfo] = await Promise.all([
-      probeDuration(instrumentalPath),
-      probeDuration(vocalsPath),
+    const [instrumentalAudio, vocalsAudio, instrumentalInfo, vocalsInfo] = await Promise.all([
+      probeAudioStream(instrumentalPath),
+      probeAudioStream(vocalsPath),
       stat(instrumentalPath),
       stat(vocalsPath)
     ]);
     if (
       instrumentalInfo.size < 1024 || vocalsInfo.size < 1024 ||
-      instrumentalDuration <= 1 || vocalsDuration <= 1 ||
-      Math.abs(instrumentalDuration - vocalsDuration) >= 1.5 ||
-      (sourceDuration > 1 && Math.abs(sourceDuration - instrumentalDuration) >= 2)
+      instrumentalAudio.codec !== "aac-lc" || vocalsAudio.codec !== "aac-lc" ||
+      instrumentalAudio.channels !== 2 || vocalsAudio.channels !== 2 ||
+      instrumentalAudio.durationSeconds <= 1 || vocalsAudio.durationSeconds <= 1 ||
+      Math.abs(instrumentalAudio.durationSeconds - vocalsAudio.durationSeconds) >= 1.5 ||
+      (sourceDuration > 1 && Math.abs(sourceDuration - instrumentalAudio.durationSeconds) >= 2)
     ) {
       throw new Error("The generated stems did not pass size and synchronization validation.");
     }
-    const manifest = completeStemManifest({
-      fingerprint: context.fingerprint,
-      engine: job.engine,
-      modelVersion,
-      source: { size: context.size, durationSeconds: sourceDuration },
-      instrumental: { size: instrumentalInfo.size, durationSeconds: instrumentalDuration },
-      vocals: { size: vocalsInfo.size, durationSeconds: vocalsDuration }
+    job.progress = 97;
+    await writeGSXStems({
+      destination: finalPaths.tempPath,
+      sourceHash: context.fingerprint,
+      sourceSize: context.size,
+      sourceDurationSeconds: sourceDuration,
+      separationModel: job.engine,
+      separationModelVersion: modelVersion,
+      encodingProfile: finalPaths.encodingProfile,
+      instrumentalPath,
+      vocalsPath,
+      instrumental: instrumentalAudio,
+      vocals: vocalsAudio
     });
-    await writeFile(resolve(entryDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600
-    });
-    await rm(finalPaths.directory, { recursive: true, force: true });
-    await rename(entryDir, finalPaths.directory);
-    return { ...finalPaths, manifest, cacheHit: false };
+    const validated = await inspectGSXStems(finalPaths.tempPath, expectedGSX);
+    if (!validated.valid) throw new Error(`GSX validation failed: ${validated.reason}`);
+    await rename(finalPaths.tempPath, finalPaths.gsxPath);
+    const finalRead = await inspectGSXStems(finalPaths.gsxPath, expectedGSX);
+    if (!finalRead.valid) throw new Error(`GSX atomic publish failed validation: ${finalRead.reason}`);
+    return { ...finalPaths, format: "gsx", manifest: finalRead.manifest, cacheHit: false };
   } finally {
-    await rm(workDir, { recursive: true, force: true });
+    if (workDir) await rm(workDir, { recursive: true, force: true });
+    await claim.handle?.close().catch(() => {});
+    await rm(finalPaths.lockPath, { force: true });
   }
 }
 
 function readyStemJobsForRequest(requestId) {
   return requestStemJobs(requestId).filter((job) =>
-    job.status === "ready" && job.instrumentalPath && job.vocalsPath
+    job.status === "ready" && (job.gsxPath || (job.instrumentalPath && job.vocalsPath))
   );
 }
 
@@ -3074,6 +3721,8 @@ async function processStemQueue() {
         job.manifestPath = output.manifestPath;
         job.instrumentalPath = output.instrumentalPath;
         job.vocalsPath = output.vocalsPath;
+        job.gsxPath = output.gsxPath || "";
+        job.cacheFormat = output.format || (job.gsxPath ? "gsx" : "legacy");
         job.cacheKey = output.cacheKey || job.cacheKey;
         job.cacheHit = output.cacheHit === true;
         job.completedAt = new Date().toISOString();
@@ -3083,7 +3732,12 @@ async function processStemQueue() {
           engine: job.engine,
           jobId: job.jobId,
           elapsedMs: Math.max(0, Date.now() - Date.parse(job.startedAt)),
-          context: { cacheHit: job.cacheHit, modelVersion: job.modelVersion }
+          context: {
+            cacheHit: job.cacheHit,
+            cacheFormat: job.cacheFormat,
+            gsxBytes: job.gsxPath ? (await stat(job.gsxPath)).size : 0,
+            modelVersion: job.modelVersion
+          }
         });
         if (
           activeStemPlaybackLock?.requestId === job.requestId &&
@@ -3167,9 +3821,10 @@ async function enqueueStemRequest(id, requestedEngine = config.defaultStemEngine
     if (intent === "spleeter") deferAutoDemucs(requestId);
   }
   setRequestStemIntent(requestId, intent);
-  const view = playerStemJobView(requestId);
-  if (view?.ready) addReadyRequestToPlayerOrder(requestId);
-  else playerOrder = playerOrder.filter((entryId) => entryId !== requestId);
+  // Stems are an enhancement, never admission control for the live queue.
+  // A fast or HQ job can continue in the background, but it cannot make the
+  // Host wait or silently remove a selected song from the Player.
+  addReadyRequestToPlayerOrder(requestId);
   playerRuntimeDirty = true;
   await persistQueuedEntries();
   broadcastState();
@@ -3190,14 +3845,62 @@ async function servePlayerStem(request, response, id, kind, requestedEngine = ""
   const requestId = String(id || "");
   const preferred = ["spleeter", "demucs"].includes(requestedEngine) ? requestedEngine : "";
   const lock = lockStemSourceForPlayback(requestId, "media-request", preferred);
-  if (!lock || lock.source === "original") throw new Error("The requested stems are not ready.");
-  const job = playerStemJobs.get(stemJobKey(requestId, lock.source));
+  // A prepared incoming source is fetched before the Player crossfades it.
+  // Keep the transport lock; honour only an explicitly requested ready job.
+  const source = preferred && readyStemJobsForRequest(requestId).some(job => job.engine === preferred) ? preferred : lock?.source;
+  if (!source || source === "original") throw new Error("The requested stems are not ready.");
+  const job = playerStemJobs.get(stemJobKey(requestId, source));
   if (!job || job.status !== "ready") throw new Error("The locked stems are not ready.");
+  const root = await realpath(await stemCacheRootForFile(job.filePath));
+  if (job.gsxPath) {
+    const target = await realpath(job.gsxPath);
+    if (!target.startsWith(`${root}${sep}`)) throw new Error("The GSX stem file is outside Guest Star storage.");
+    await streamGSXStem(request, response, target, kind);
+    return;
+  }
   const candidate = kind === "vocals" ? job.vocalsPath : job.instrumentalPath;
   const target = await realpath(candidate);
-  const root = await realpath(await stemCacheRootForFile(job.filePath));
   if (!target.startsWith(`${root}${sep}`)) throw new Error("The stem file is outside Guest Star storage.");
   await streamPlayerMedia(request, response, target);
+}
+
+async function servePlayerGSXDescriptor(response, id, requestedEngine = "") {
+  const requestId = String(id || "");
+  const preferred = ["spleeter", "demucs"].includes(requestedEngine) ? requestedEngine : "";
+  const lock = lockStemSourceForPlayback(requestId, "gsx-descriptor", preferred);
+  // A prepared incoming source is fetched before the Player crossfades it.
+  // Keep the transport lock; honour only an explicitly requested ready job.
+  const source = preferred && readyStemJobsForRequest(requestId).some(job => job.engine === preferred) ? preferred : lock?.source;
+  if (!source || source === "original") throw new Error("The requested stems are not ready.");
+  const job = playerStemJobs.get(stemJobKey(requestId, source));
+  if (!job?.gsxPath || job.status !== "ready") throw new Error("A GSX stem set is not ready for this song.");
+  const target = await realpath(job.gsxPath);
+  const root = await realpath(await stemCacheRootForFile(job.filePath));
+  if (!target.startsWith(`${root}${sep}`)) throw new Error("The GSX stem file is outside Guest Star storage.");
+  const inspected = await inspectGSXStems(target, {
+    sourceHash: job.fingerprint,
+    separationModel: job.engine,
+    separationModelVersion: job.modelVersion,
+    encodingProfile: GSX_DEFAULT_PROFILE.id
+  });
+  if (!inspected.valid) throw new Error(`The GSX stem set is invalid: ${inspected.reason}`);
+  json(response, 200, {
+    ok: true,
+    format: "gsx",
+    formatVersion: inspected.manifest.formatVersion,
+    path: target,
+    sourceHash: inspected.manifest.sourceHash,
+    durationSeconds: inspected.manifest.durationSeconds,
+    streams: Object.fromEntries(Object.entries(inspected.manifest.streams).map(([kind, stream]) => [kind, {
+      codec: stream.codec,
+      sampleRate: stream.sampleRate,
+      channels: stream.channels,
+      durationSeconds: stream.durationSeconds,
+      offset: stream.offset,
+      length: stream.length,
+      checksum: stream.checksum
+    }]))
+  });
 }
 
 function decodeMediaToken(token) {
@@ -3226,38 +3929,38 @@ async function servePlayerMedia(request, response, id) {
   await streamPlayerMedia(request, response, filePath);
 }
 
-function playerLibrarySearch(query = "", { offset = 0, limit = 60, includeAll = false } = {}) {
-  const needle = normalizeText(query);
-  if (!needle && !includeAll) {
-    return {
-      tracks: [],
-      total: libraryFiles.length,
-      offset: 0,
-      hasMore: libraryFiles.length > 0,
-      deferred: true
-    };
-  }
-  const matches = libraryFiles
-    .filter((filePath) => !needle || normalizeText(basename(filePath)).includes(needle));
-  const tracks = matches
-    .slice(offset, offset + limit)
-    .map((filePath) => {
-      const metadata = mediaMetadata(filePath);
-      return {
-        id: Buffer.from(filePath).toString("base64url"),
-        name: basename(filePath, extname(filePath)),
-        ...metadata,
-        extension: extname(filePath).replace(/^\./, "").toUpperCase(),
-        mediaType: MIME[extname(filePath).toLowerCase()] || "application/octet-stream"
-      };
+function playerLibrarySearch(query = "", options = {}) {
+  const requestsById = new Map(requests.map(item => [item.id, item]));
+  const metadataByPath = new Map();
+  for (const entry of [...playerLocalRequests.values(), ...queuedEntries.values()]) {
+    if (!entry.filePath) continue;
+    const request = requestsById.get(entry.id) || {};
+    const source = (youtubeCache.get(entry.id) || []).find(item => item.url && item.url === request.sourceUrl) || {};
+    const previous = metadataByPath.get(entry.filePath) || {};
+    const known = { ...request, ...entry };
+    metadataByPath.set(entry.filePath, {
+      song: known.song || previous.song,
+      artist: known.artist || previous.artist,
+      durationSeconds: Number(known.durationSeconds) || Number(request.durationSeconds) || previous.durationSeconds || 0,
+      language: request.language || request.languageCode || known.language || previous.language || '',
+      channel: source.channel || source.channelTitle || known.channel || previous.channel || '',
+      provider: known.provider || previous.provider || '',
+      sourceUrl: request.sourceUrl || previous.sourceUrl || ''
     });
-  return {
-    tracks,
-    total: matches.length,
-    offset,
-    hasMore: offset + tracks.length < matches.length,
-    deferred: false
-  };
+  }
+  return queryIndexedLibrary(libraryFiles, (filePath) => {
+    const fallback = mediaMetadata(filePath);
+    const known = metadataByPath.get(filePath) || {};
+    return {
+      id: Buffer.from(filePath).toString("base64url"),
+      name: basename(filePath, extname(filePath)),
+      ...known,
+      song: known.song || fallback.song,
+      artist: known.artist || fallback.artist,
+      extension: extname(filePath).replace(/^\./, "").toUpperCase(),
+      mediaType: MIME[extname(filePath).toLowerCase()] || "application/octet-stream"
+    };
+  }, query, options);
 }
 
 async function servePlayerLibraryMedia(request, response, token) {
@@ -3290,16 +3993,33 @@ async function serveBackgroundMusic(request, response, token) {
   await streamPlayerMedia(request, response, filePath);
 }
 
+function loudnessStore() {
+  if (!loudnessAnalysisStore) {
+    loudnessAnalysisStore = new LoudnessAnalysisStore({
+      cachePath: resolve(STEM_DATA_ROOT, "data", "loudness-analysis.json"),
+      ffmpegPath: stemFfmpegPath
+    });
+  }
+  // The bundled FFmpeg path is resolved during capability refresh. Keep the
+  // long-lived local cache while allowing a repaired installation to recover.
+  loudnessAnalysisStore.ffmpegPath = stemFfmpegPath;
+  return loudnessAnalysisStore;
+}
+
+async function analyzePlayerLoudness(kind, id, { force = false } = {}) {
+  const filePath = kind === "background"
+    ? await assertAllowedBackgroundFile(decodeMediaToken(id))
+    : await playerFileForRequest(id);
+  const analysis = await loudnessStore().analyze(filePath, { force });
+  return { ok: true, kind, trackId: id, ...analysis };
+}
+
 async function createPlayerLocalRequest(body = {}) {
   if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
     throw new Error("Select an activity and Player mode before adding a local singer.");
   }
   const singer = String(body.singer || "").trim().slice(0, 100);
   if (!singer) throw new Error("Enter the singer's name.");
-  const prepareStems = body.prepareStems === true;
-  if (prepareStems && !stemEngineAvailable) {
-    throw new Error("Install the real AI Stems engine before requesting an instrumental version.");
-  }
   const filePath = await assertAllowedFile(decodeMediaToken(body.trackId));
   const metadata = mediaMetadata(filePath);
   const item = {
@@ -3315,9 +4035,20 @@ async function createPlayerLocalRequest(body = {}) {
     markedAt: ""
   };
   playerLocalRequests.set(item.id, item);
-  if (!prepareStems) playerOrder = [...playerOrder.filter((id) => id !== item.id), item.id];
+  playerOrder = [...playerOrder.filter((id) => id !== item.id), item.id];
   await persistQueuedEntries();
-  if (prepareStems) await enqueueStemRequest(item.id, body.stemEngine);
+  // Queue the existing cache/Spleeter/Demucs plan automatically.  This work is
+  // explicitly detached from adding the singer: an unavailable engine or a
+  // long job must not delay either the queue or playback.
+  if (stemEngineAvailable) {
+    void enqueueStemRequest(item.id, "auto").catch((error) => {
+      recordStemBreadcrumb("STEMS_AUTO_QUEUE_FAILED", {
+        summary: errorMessage(error),
+        context: { requestId: item.id }
+      }, { severity: "WARNING" });
+      broadcastState();
+    });
+  }
   broadcastState();
   return { ok: true, item: playerLocalRequestView(item) };
 }
@@ -3376,6 +4107,72 @@ function appendQueuePosition(id) {
   vdjQueueCount = knownEnd + 1;
 }
 
+async function linkRequestFile(id, requestedPath, source = "manual") {
+  if (operatingMode !== "bridge") {
+    throw new Error("This activity is not operating in Bridge mode.");
+  }
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  if (effectiveRequestOutcome(item)) {
+    throw new Error("This request was already marked completed or skipped.");
+  }
+  const filePath = await firstAllowedFile([requestedPath]);
+  requestFileLinks.set(id, {
+    id,
+    filePath,
+    source: source === "automatic" ? "automatic" : "manual",
+    updatedAt: new Date().toISOString()
+  });
+  const tracked = queuedEntries.get(id);
+  if (tracked) queuedEntries.set(id, { ...tracked, manualLink: source !== "automatic" });
+  item.fileName = basename(filePath);
+  item.sourceUrl = "";
+  await persistQueuedEntries();
+  let warning = "";
+  try {
+    const updated = await updateBridgeRequest(config, id, item.status, basename(filePath), {
+      durationSeconds: item.durationSeconds,
+      sourceUrl: ""
+    });
+    if (updated?.state) applyActivityState(updated);
+  } catch (error) {
+    warning = `The local link is safe on this Mac, but cloud confirmation is pending: ${errorMessage(error)}`;
+  }
+  return {
+    ok: true,
+    linked: true,
+    filePath,
+    fileName: basename(filePath),
+    source: source === "automatic" ? "automatic" : "manual",
+    warning
+  };
+}
+
+async function unlinkRequestFile(id) {
+  if (operatingMode !== "bridge") {
+    throw new Error("This activity is not operating in Bridge mode.");
+  }
+  const item = requests.find((entry) => entry.id === id);
+  if (!item) throw new Error("The request is no longer available.");
+  requestFileLinks.delete(id);
+  const tracked = queuedEntries.get(id);
+  if (tracked) queuedEntries.set(id, { ...tracked, manualLink: false });
+  await persistQueuedEntries();
+  const physicalFileName = queuedIds.has(id) ? basename(tracked?.filePath || "") : "";
+  let warning = queuedIds.has(id)
+    ? "The manual link was cleared. The confirmed VirtualDJ row was left untouched to protect playback."
+    : "";
+  try {
+    const updated = await updateBridgeRequest(config, id, item.status, physicalFileName, {
+      durationSeconds: item.durationSeconds
+    });
+    if (updated?.state) applyActivityState(updated);
+  } catch (error) {
+    warning = warning || `The link was cleared on this Mac, but cloud confirmation is pending: ${errorMessage(error)}`;
+  }
+  return { ok: true, unlinked: true, physicalRowPreserved: queuedIds.has(id), warning };
+}
+
 async function queueRequest(id, requestedPath) {
   if (operatingMode !== "bridge") {
     throw new Error("This activity is not operating in Bridge mode.");
@@ -3414,18 +4211,21 @@ async function queueRequest(id, requestedPath) {
   });
   broadcastState();
   try {
-    const exact = findMatches(
-      libraryFiles,
-      item.song,
-      item.artist,
-      item.languageCode || item.language,
-      1
-    )[0];
+    const exact = matchesForRequest(item, youtubeCache.get(item.id) || [], 1)[0];
     const filePath = await firstAllowedFile([
       requestedPath,
+      requestFileLinks.get(id)?.filePath,
       exact?.exact ? exact.filePath : "",
       queuedEntries.get(id)?.filePath
     ]);
+    if (requestedPath) {
+      requestFileLinks.set(id, {
+        id,
+        filePath,
+        source: "manual",
+        updatedAt: new Date().toISOString()
+      });
+    }
     pendingInsertions.set(id, {
       phase: "confirming",
       startedAt: pendingInsertions.get(id)?.startedAt || Date.now()
@@ -3537,6 +4337,19 @@ async function replaceQueuedRequest(id, requestedPath) {
   if (normalizeVdjPath(nextFilePath) === normalizeVdjPath(current.filePath)) {
     return { ok: true, alreadyQueued: true, linked: true };
   }
+  const activeDeck = vdjOperations.view().decks.find((deck) =>
+    deck.playing === true &&
+    normalizeVdjPath(deck.filePath) === normalizeVdjPath(current.filePath)
+  );
+  if (activeDeck) {
+    const link = await linkRequestFile(id, nextFilePath, "manual");
+    return {
+      ...link,
+      replaced: false,
+      requiresSafeReplace: true,
+      warning: `The request now points to ${basename(nextFilePath)}, but deck ${activeDeck.deck} is playing the previous file. The live VirtualDJ row was not interrupted; replace it after playback stops.`
+    };
+  }
 
   queueLocks.add(id);
   try {
@@ -3584,6 +4397,12 @@ async function replaceQueuedRequest(id, requestedPath) {
       [{ ...result.entry, index: result.index }],
       vdjQueueEntries
     )[0];
+    requestFileLinks.set(id, {
+      id,
+      filePath: nextFilePath,
+      source: "manual",
+      updatedAt: new Date().toISOString()
+    });
     const linkedEntry = queuedEntryFromRequest(
       item,
       nextFilePath,
@@ -3717,42 +4536,51 @@ async function dismissRequeue(id) {
   return { ok: true, warning };
 }
 
-async function setRequestOutcome(id, outcome) {
+async function setRequestOutcome(id, outcome, options = {}) {
+  if (options.origin !== 'VDJ_EVENT') vdjOperations.invalidate(id);
+  const previous = outcomeOperations.get(id);
+  const promise = (async () => {
+    if (previous) await previous.catch(() => {});
+    return commitRequestOutcome(id, outcome, options);
+  })();
+  outcomeOperations.set(id, promise);
+  try { return await promise; }
+  finally { if (outcomeOperations.get(id) === promise) outcomeOperations.delete(id); }
+}
+
+async function commitRequestOutcome(id, outcome, { origin = 'USER_ACTION', version, removeVDJ = true } = {}) {
   if (operatingMode !== "bridge") {
     throw new Error("Use the internal Player controls for this activity.");
   }
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
-  if (!["completed", "skipped"].includes(outcome)) {
+  if (!["completed", "skipped", "removed"].includes(outcome)) {
     throw new Error("Song outcome is not allowed.");
   }
   if (queueLocks.has(id)) throw new Error("This request is already being processed.");
+  if (origin === 'VDJ_EVENT' && (effectiveRequestOutcome(item) || item.stateRevision !== version)) return { ok: true, ignored: true };
+  if (effectiveRequestOutcome(item) === outcome) return { ok: true, alreadyMarked: true, outcome, status: item.status };
   queueLocks.add(id);
-  const status = outcome === "completed" ? "Ya cantó" : "Saltado";
+  const status = outcome === "completed" ? "Ya cantó" : outcome === 'skipped' ? "Saltado" : 'Eliminada';
   try {
-    const previousStatus = item.status || "Pendiente";
-    const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
-    let originalPosition = vdjQueuePositions.get(id);
+    const priorRecovery = outcomeRecoveries.get(id);
+    const previousStatus = priorRecovery?.previousStatus || item.status || 'Pendiente';
+    const entry = queuedEntries.get(id) || priorRecovery?.entry || queuedEntryFromRequest(item);
+    let originalPosition = vdjQueuePositions.get(id) ?? priorRecovery?.originalPosition;
     let warning = "";
     let removedFromVirtualDJ = false;
 
-    if (entry) {
-      try {
-        const result = await removeKaraokeEntry(config.virtualDJ, entry);
-        if (result.reason === "ambiguous") {
-          throw new Error(
-            "VirtualDJ has more than one identical copy. Remove the correct one manually before marking the outcome."
-          );
-        }
-        if (Number.isInteger(result.index)) originalPosition = result.index;
-        removedFromVirtualDJ =
-          result.removed === true || result.reason === "not-found";
-      } catch (error) {
-        throw new Error(
-          `The live VirtualDJ queue could not be updated: ${errorMessage(error)}`
-        );
-      }
+    let remoteResult = null;
+    if (origin === 'VDJ_EVENT') {
+      // CAS at the existing service prevents an older automatic Played edge
+      // from overwriting a remote/manual terminal decision.
+      remoteResult = await updateBridgeRequest(config, id, status,
+        basename(entry?.filePath || item.fileName || ''),
+        { durationSeconds: item.durationSeconds, expectedRevision: version, eventOrigin: origin });
+      if (!remoteResult?.request || remoteResult.request.status !== status ||
+          Number(remoteResult.request.stateRevision) <= version) return { ok: true, ignored: true };
     }
+    vdjOperations.invalidate(id);
 
     outcomeRecoveries.set(id, {
       id,
@@ -3772,21 +4600,32 @@ async function setRequestOutcome(id, outcome) {
     pendingInsertions.delete(id);
     queuePresenceMisses.delete(id);
     transientQueueMissingIds.delete(id);
-    await persistQueuedEntries();
     item.status = status;
+    await persistQueuedEntries();
+    broadcastState();
 
     try {
-      const data = await updateBridgeRequest(
+      const data = remoteResult || await updateBridgeRequest(
         config,
         id,
         status,
         basename(entry?.filePath || item.fileName || ""),
-        { durationSeconds: item.durationSeconds }
+        { durationSeconds: item.durationSeconds, eventOrigin: origin }
       );
       if (data?.state) applyActivityState(data);
+      if (data?.request?.stateRevision) item.stateRevision = Number(data.request.stateRevision);
     } catch (error) {
       warning =
         `The outcome is visible in Bridge, but Guest Star did not confirm the update: ${errorMessage(error)}`;
+    }
+    if (entry && removeVDJ) {
+      try {
+        const result = await removeKaraokeEntry(config.virtualDJ, entry);
+        if (result.reason === 'ambiguous') throw new Error('VDJ has ambiguous copies; no physical row was removed.');
+        removedFromVirtualDJ = result.removed === true || result.reason === 'not-found';
+      } catch (error) {
+        warning = [warning, `The administrative decision was saved; VDJ could not remove its row: ${errorMessage(error)}`].filter(Boolean).join(' ');
+      }
     }
     return {
       ok: true,
@@ -3807,8 +4646,8 @@ async function setRequestOutcome(id, outcome) {
 }
 
 async function setPlayerRequestOutcome(id, outcome) {
-  if (operatingMode !== "player" || !activityState.activityRunning) {
-    throw new Error("Start this activity in Player mode before changing its queue.");
+  if (operatingMode !== "player" || (!activityState.activityRunning && outcome !== "removed")) {
+    throw new Error("Start this activity in Player mode before completing or skipping a song.");
   }
   const localItem = playerLocalRequests.get(id);
   if (localItem) {
@@ -3953,6 +4792,7 @@ async function undoRequestOutcome(id, placement) {
   }
   if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   queueLocks.add(id);
+  vdjOperations.invalidate(id);
 
   try {
     const recovery = outcomeRecoveries.get(id);
@@ -4167,6 +5007,7 @@ async function queueHitSuggestion(body = {}) {
 }
 
 async function autoQueueExactMatches() {
+  if (vdjQueueOperationBusy) return;
   if (!config.autoQueueExact) return;
   for (const item of requests) {
     if (effectiveRequestOutcome(item)) continue;
@@ -4179,20 +5020,35 @@ async function autoQueueExactMatches() {
     ) {
       continue;
     }
-    const top = findMatches(
-      libraryFiles,
-      item.song,
-      item.artist,
-      item.languageCode || item.language,
-      1
-    )[0];
-    if (!top?.exact) continue;
+    const top = matchesForRequest(item, youtubeCache.get(item.id) || [], 2)[0];
+    if (!top?.autoLinkEligible) continue;
     try {
-      await queueRequest(item.id, top.filePath);
+      await queueRequest(item.id, "");
     } catch {
       // The error is exposed in the local panel and the host can retry manually.
     }
   }
+}
+
+async function autoLinkSafeMatches() {
+  let changed = false;
+  for (const item of requests) {
+    if (effectiveRequestOutcome(item)) continue;
+    const existing = requestFileLinks.get(item.id);
+    if (existing?.source === "manual") continue;
+    if (existing?.source === "automatic" && libraryFiles.includes(existing.filePath)) continue;
+    const top = matchesForRequest(item, youtubeCache.get(item.id) || [], 2)[0];
+    if (!top?.autoLinkEligible) continue;
+    requestFileLinks.set(item.id, {
+      id: item.id,
+      filePath: top.filePath,
+      source: "automatic",
+      updatedAt: new Date().toISOString()
+    });
+    changed = true;
+  }
+  if (changed) await persistQueuedEntries();
+  return changed;
 }
 
 async function findYoutube(id) {
@@ -4356,14 +5212,80 @@ async function serveStatic(pathname, response) {
   }
 }
 
+function songStorageOptions() {
+  return {
+    libraryFolders: config.libraryFolders,
+    temporaryRoot: tmpdir(),
+    home: homedir()
+  };
+}
+
+let songStorageScan = null;
+let songStorageScanKey = "";
+async function songStorageView() {
+  const options = songStorageOptions();
+  const key = JSON.stringify(options);
+  if (!songStorageScan || key !== songStorageScanKey) {
+    songStorageScanKey = key;
+    const scan = inspectSongStorage(options).then((usage) => ({
+      ok: true,
+      ...usage,
+      locations: usage.locations.map(({ fallbackPath, ...location }) => location)
+    })).finally(() => { if (songStorageScan === scan) songStorageScan = null; });
+    songStorageScan = scan;
+  }
+  return songStorageScan;
+}
+
 async function api(request, response, url) {
   const { pathname } = url;
+  const bridgeMutation = request.method === 'POST' && (
+    pathname.startsWith('/api/virtualdj/') || /\/api\/requests\/[^/]+\/(metadata|move)$/.test(pathname));
+  if (bridgeMutation && request.headers.origin && request.headers.origin !== `http://${String(request.headers.host || '')}`) {
+    json(response, 403, { ok: false, error: 'Cross-origin Bridge commands are not allowed.' }); return;
+  }
+  if (request.method === 'POST' && pathname === '/api/virtualdj/control') {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    const data = body.action === 'skip'
+      ? await runVdjQueueOperation(body, () => skipVdjTrack(body))
+      : await vdjOperations.command(body);
+    json(response, 200, data);
+    return;
+  }
+  if (request.method === 'POST' && pathname === '/api/virtualdj/queue/move') {
+    requireSignedInBridge();
+    if (operatingMode !== 'bridge') throw new Error('Reorder here belongs to Bridge mode.');
+    const body = await readJson(request);
+    const data = await runVdjQueueOperation(body, async () => {
+      const source = bridgeQueueEntry(String(body.sourceId || ''));
+      const target = body.beforeId === null ? null : bridgeQueueEntry(String(body.beforeId || ''));
+      if (!source || (body.beforeId !== null && !target)) throw new Error('The queue source/destination disappeared.');
+      const result = await moveKaraokeEntry(config.virtualDJ, source, target);
+      return { ok: true, moved: result.moved };
+    });
+    json(response, 200, data);
+    return;
+  }
+  const metadataMatch = pathname.match(/^\/api\/requests\/([^/]+)\/metadata$/);
+  if (request.method === 'POST' && metadataMatch) {
+    requireSignedInBridge();
+    json(response, 200, await editBridgeMetadata(decodeURIComponent(metadataMatch[1]), await readJson(request)));
+    return;
+  }
+  const moveRequestMatch = pathname.match(/^\/api\/requests\/([^/]+)\/move$/);
+  if (request.method === 'POST' && moveRequestMatch) {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    json(response, 200, await runVdjQueueOperation(body, () => moveBridgeRequest(decodeURIComponent(moveRequestMatch[1]), body)));
+    return;
+  }
   if (request.method === "GET" && pathname === "/api/player/library") {
     const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset")) || 0));
     const limit = Math.max(1, Math.min(100, Math.floor(Number(url.searchParams.get("limit")) || 60)));
     const result = playerLibrarySearch(
       url.searchParams.get("query") || "",
-      { offset, limit, includeAll: url.searchParams.get("all") === "1" }
+      { offset, limit, includeAll: url.searchParams.get("all") === "1", sort: url.searchParams.get("sort") || "title", language: url.searchParams.get("language") || "" }
     );
     json(response, 200, { ok: true, ...result });
     return;
@@ -4376,6 +5298,16 @@ async function api(request, response, url) {
   if (request.method === "POST" && pathname === "/api/player/local-requests") {
     requireSignedInBridge();
     json(response, 200, await createPlayerLocalRequest(await readJson(request)));
+    return;
+  }
+  const loudnessMatch = pathname.match(/^\/api\/player\/loudness\/(karaoke|background)\/([^/]+)$/);
+  if ((request.method === "GET" || request.method === "POST") && loudnessMatch) {
+    const body = request.method === "POST" ? await readJson(request) : {};
+    json(response, 200, await analyzePlayerLoudness(
+      loudnessMatch[1],
+      decodeURIComponent(loudnessMatch[2]),
+      { force: body.force === true }
+    ));
     return;
   }
   const backgroundMediaMatch = pathname.match(/^\/api\/player\/background\/media\/([^/]+)$/);
@@ -4437,6 +5369,15 @@ async function api(request, response, url) {
     );
     return;
   }
+  const playerGSXDescriptorMatch = pathname.match(/^\/api\/player\/stems\/([^/]+)\/container$/);
+  if (request.method === "GET" && playerGSXDescriptorMatch) {
+    await servePlayerGSXDescriptor(
+      response,
+      decodeURIComponent(playerGSXDescriptorMatch[1]),
+      String(url.searchParams.get("engine") || "").toLowerCase()
+    );
+    return;
+  }
   const playerStemRequestMatch = pathname.match(/^\/api\/player\/requests\/([^/]+)\/stems$/);
   if (request.method === "POST" && playerStemRequestMatch) {
     requireSignedInBridge();
@@ -4475,6 +5416,35 @@ async function api(request, response, url) {
     json(response, 200, stateView());
     return;
   }
+  if (request.method === "GET" && pathname === "/api/storage/usage") {
+    json(response, 200, await songStorageView());
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/storage/reveal") {
+    const origin = String(request.headers.origin || "");
+    if (origin && origin !== `http://${String(request.headers.host || "")}`) {
+      json(response, 403, { ok: false, error: "Origen no permitido.", code: "INVALID_ORIGIN" });
+      return;
+    }
+    const body = await readJson(request);
+    json(response, 200, await revealSongStorageLocation(body.id, songStorageOptions()));
+    return;
+  }
+  if (pathname === "/api/diagnostics/preferences") {
+    try {
+      if (request.method === "POST") {
+        await diagnosticPreferences.update(await readJson(request));
+        if (!diagnosticPreferences.view().testerMode) diagnosticTesterFailure = "";
+        broadcastState();
+      } else if (request.method !== "GET") {
+        throw diagnosticError('Método no permitido.', 'METHOD_NOT_ALLOWED', 405);
+      }
+      json(response, 200, { ok: true, preferences: diagnosticPreferencesView() });
+    } catch (error) {
+      json(response, error.status || 500, { ok: false, code: error.code || 'PREFERENCE_SAVE_FAILED', error: errorMessage(error), preferences: diagnosticPreferencesView() });
+    }
+    return;
+  }
   if (request.method === "GET" && pathname === "/api/diagnostics/state") {
     json(response, 200, diagnostics.view());
     return;
@@ -4483,7 +5453,7 @@ async function api(request, response, url) {
     const body = await readJson(request);
     const batch = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
     const recorded = batch.map((event) => diagnostics.record(event));
-    if (body.autoSend === true && config.diagnostics?.autoSendTechnicalErrors === true) {
+    if (body.autoSend === true && diagnosticPreferences.view().autoSendTechnicalErrors === true) {
       const reportIds = new Set(recorded
         .filter((event) => ["ERROR", "CRITICAL"].includes(event.severity))
         .map((event) => diagnostics.reports.find((report) => report.fingerprint === event.fingerprint)?.reportId)
@@ -4497,6 +5467,7 @@ async function api(request, response, url) {
     return;
   }
   if (request.method === "POST" && pathname === "/api/diagnostics/mark") {
+    await requireDiagnosticTester();
     const body = await readJson(request);
     const snapshot = serverDiagnosticSnapshot(body.snapshot || {});
     const capture = diagnostics.markFailure(snapshot);
@@ -4537,6 +5508,7 @@ async function api(request, response, url) {
     return;
   }
   if (request.method === "GET" && pathname === "/api/diagnostics/export") {
+    await requireDiagnosticTester();
     const body = JSON.stringify(sanitizeDiagnosticValue({
       exportedAt: new Date().toISOString(),
       version: BRIDGE_VERSION,
@@ -4561,6 +5533,7 @@ async function api(request, response, url) {
       .includes(body.audioContextState) ? body.audioContextState : "unknown";
     const mediaState = ["idle", "waiting", "playing", "paused", "ended", "error"]
       .includes(body.mediaState) ? body.mediaState : body.transitionBusy ? "waiting" : body.playing ? "playing" : "idle";
+    const videoMetric = (value, maximum = 1_000_000_000) => Math.max(0, Math.min(maximum, Number(value) || 0));
     playerHealthState = {
       updatedAt: new Date().toISOString(),
       karaokeActive: body.karaokeActive === true || body.playing === true,
@@ -4571,7 +5544,16 @@ async function api(request, response, url) {
       audioOutputLost: body.audioOutputLost === true,
       backgroundActive: body.backgroundPlaying === true,
       starScreenConnected: body.starScreenConnected === true,
-      starScreenExpected: body.starScreenExpected === true
+      starScreenExpected: body.starScreenExpected === true,
+      videoFrames: videoMetric(body.videoFrames),
+      videoDroppedFrames: videoMetric(body.videoDroppedFrames),
+      videoCorruptedFrames: videoMetric(body.videoCorruptedFrames),
+      videoFrameRate: videoMetric(body.videoFrameRate, 240),
+      videoHardResyncs: videoMetric(body.videoHardResyncs),
+      videoRateWrites: videoMetric(body.videoRateWrites),
+      videoDriftSeconds: videoMetric(body.videoDriftSeconds, 86_400),
+      videoReadyState: Math.round(videoMetric(body.videoReadyState, 4)),
+      videoPaused: body.videoPaused === true
     };
     const resource = updateStemResourceState();
     if (resource.state !== "PRESSURE") void processStemQueue();
@@ -4608,28 +5590,69 @@ async function api(request, response, url) {
     return;
   }
   if (request.method === "GET" && pathname === "/api/superhost/state") {
-    requireLocalSuperhost();
-    const data = await v4AppsScriptAction(config, "adminState");
+    requireLocalManagement();
+    const isSuperhost = identityState.user?.role === "superhost";
+    const data = isSuperhost ? await v4AppsScriptAction(config, "adminState") : {};
     json(response, 200, {
-      ...data,
-      localFavoritesByHotel: config.favoriteSongsByHotel || {}
+      ...scopedManagementState(data),
+      localFavoritesByHotel: isSuperhost ? config.favoriteSongsByHotel || {} : {}
     });
     return;
   }
   if (request.method === "POST" && pathname === "/api/superhost/action") {
-    requireLocalSuperhost();
+    requireLocalManagement();
     const body = await readJson(request);
     const action = String(body.action || "");
-    const allowed = new Set([
+    const superhostAllowed = new Set([
       "adminState", "createHotel", "updateHotel", "createVenue", "updateVenue",
-      "createActivity", "updateActivity", "setDefaultPublicExperience", "createHost", "updateHost", "assignUser",
+      "createActivity", "updateActivity", "createHost", "updateHost", "assignUser",
       "setHostPassword", "updateActivityLanguages",
       "revokeAssignment", "revokeDevice", "updateHotelBranding",
       "scheduleActivity", "updateSchedule", "cancelSchedule", "listReviews", "updateReview",
       "regenerateHotelQr", "hotelShare"
     ]);
-    if (!allowed.has(action)) throw new Error("Superhost action not allowed.");
+    const hostAllowed = new Set([
+      "scheduleActivity", "updateSchedule", "cancelSchedule", "listReviews", "updateHotelBranding"
+    ]);
+    const allowed = identityState.user?.role === "superhost" ? superhostAllowed : hostAllowed;
+    if (!allowed.has(action)) throw new Error("Management action not allowed for this account.");
+    if (identityState.user?.role === "host") {
+      assertHostManagementScope(action, body, {});
+      if (action === "updateHotelBranding") {
+        const permittedFields = [
+          "activityEndingMessage", "activityFinishedTitle", "activityFinishedMessage",
+          "upcomingActivityMessage", "messageSourceLanguage", "translationMode",
+          "localizedMessagesJson"
+        ];
+        const incoming = body.branding && typeof body.branding === "object" ? body.branding : {};
+        body.branding = { ...(tenantState.branding || {}) };
+        for (const field of permittedFields) {
+          if (Object.prototype.hasOwnProperty.call(incoming, field)) body.branding[field] = incoming[field];
+        }
+        if (Object.prototype.hasOwnProperty.call(incoming, "localizedMessagesJson")) {
+          const parseMessages = (value) => {
+            if (value && typeof value === "object") return value;
+            try { return JSON.parse(String(value || "{}")); } catch { return {}; }
+          };
+          const existingMessages = parseMessages(tenantState.branding?.localizedMessagesJson);
+          const submittedMessages = parseMessages(incoming.localizedMessagesJson);
+          body.branding.localizedMessagesJson = Object.fromEntries(
+            [...new Set([...Object.keys(existingMessages), ...Object.keys(submittedMessages)])]
+              .map((language) => [language, { ...(existingMessages[language] || {}), ...(submittedMessages[language] || {}) }])
+          );
+        }
+      }
+    }
     const data = await v4AppsScriptAction(config, action, body);
+    if (identityState.user?.role === "host" && action === "listReviews") {
+      const reviews = Array.isArray(data?.reviews) ? data.reviews.filter((review) =>
+        (!review.hotelId || String(review.hotelId) === String(body.hotelId)) &&
+        (!review.venueId || String(review.venueId) === String(body.venueId)) &&
+        (!review.activityId || String(review.activityId) === String(body.activityId))
+      ) : [];
+      json(response, 200, { ...data, reviews });
+      return;
+    }
     if ([
       "createHotel", "updateHotel", "createVenue", "updateVenue", "createActivity", "updateActivity",
       "assignUser", "revokeAssignment"
@@ -4657,6 +5680,7 @@ async function api(request, response, url) {
         branding: null,
         venue: null,
         activity: null,
+        kioskAccess: null,
         permissions: {},
         share: null,
         upcomingActivities: []
@@ -4689,6 +5713,7 @@ async function api(request, response, url) {
       selection: data.selection || { hotels: [], venues: [], activities: [] }
     };
     await resumeRunningActivity();
+    restartCloudRealtime();
     sheetError = "";
     broadcastState();
     json(response, 200, {
@@ -4733,6 +5758,7 @@ async function api(request, response, url) {
       selection: data.selection || { hotels: [], venues: [], activities: [] }
     };
     await resumeRunningActivity();
+    restartCloudRealtime();
     sheetError = "";
     broadcastState();
     json(response, 200, {
@@ -4745,6 +5771,7 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && pathname === "/api/auth/logout") {
     const previousDeviceId = config.deviceId;
+    stopCloudRealtime();
     try {
       if (hasV4Session(config)) await signOutBridge(config);
     } finally {
@@ -4767,6 +5794,7 @@ async function api(request, response, url) {
         branding: null,
         venue: null,
         activity: null,
+        kioskAccess: null,
         permissions: {},
         share: null,
         upcomingActivities: []
@@ -4827,10 +5855,7 @@ async function api(request, response, url) {
     sheetError = "";
     json(response, 200, stateView());
     broadcastState();
-    void syncNow().catch((error) => {
-      sheetError = errorMessage(error);
-      broadcastState();
-    });
+    restartCloudRealtime();
     return;
   }
   if (request.method === "POST" && pathname === "/api/config/language") {
@@ -4846,24 +5871,32 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && pathname === "/api/config") {
     const body = await readJson(request);
+    // Host presentation-only updates must not restart any runtime or connection.
+    if (Object.keys(body).length === 1 && body.interfacePreferences &&
+        typeof body.interfacePreferences === "object" && !Array.isArray(body.interfacePreferences)) {
+      config = await saveConfig(sanitizeConfig(body, config));
+      json(response, 200, { ok: true, config: { ...publicConfig(config), diagnostics: diagnosticPreferencesView() } });
+      broadcastInterfacePreferences();
+      return;
+    }
     let baseConfig = config;
-    if (body.clearHostPin) baseConfig = { ...baseConfig, hostPin: "" };
     if (body.clearVdjPassword) {
       baseConfig = {
         ...baseConfig,
         virtualDJ: { ...baseConfig.virtualDJ, password: "" }
       };
     }
-    const nextConfig = sanitizeConfig(body, baseConfig);
+    const nextConfig = sanitizeConfig({ ...body, diagnostics: baseConfig.diagnostics }, baseConfig);
     if (body.sheetConfig && typeof body.sheetConfig === "object") {
       const data = await updateBridgeConfig(nextConfig, body.sheetConfig);
       if (data?.state) applyActivityState(data);
     }
     config = await saveConfig(nextConfig);
+    restartCloudRealtime();
     startLibraryWatchers();
     await scanNow();
     await syncNow();
-    json(response, 200, { ok: true, config: publicConfig(config) });
+    json(response, 200, { ok: true, config: { ...publicConfig(config), diagnostics: diagnosticPreferencesView() } });
     return;
   }
   if (request.method === "POST" && pathname === "/api/activity/settings") {
@@ -4926,11 +5959,13 @@ async function api(request, response, url) {
     if (!["player", "bridge"].includes(nextMode)) {
       throw new Error("Choose Player or Bridge before starting the activity.");
     }
-    if (activityState.activityRunning) {
+    if (activityState.activityRunning && operatingMode) {
       throw new Error("The playback mode is locked until this activity finishes.");
     }
     operatingMode = nextMode;
+    lastSelectedMode = nextMode;
     await persistQueuedEntries(config.lastActivityId || activityState.activityId);
+    restartCloudRealtime();
     json(response, 200, stateView());
     broadcastState();
     return;
@@ -4970,6 +6005,7 @@ async function api(request, response, url) {
     await syncNow();
     await reconcileVirtualDjQueue(true);
     await persistQueuedEntries(activityState.activityId);
+    if (["finish", "reset", "archive"].includes(action)) restartCloudRealtime();
     json(response, 200, stateView());
     return;
   }
@@ -5001,28 +6037,44 @@ async function api(request, response, url) {
   const queueMatch = pathname.match(/^\/api\/requests\/([^/]+)\/queue$/);
   if (request.method === "POST" && queueMatch) {
     const body = await readJson(request);
-    const data = await queueRequest(
+    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => queueRequest(
       decodeURIComponent(queueMatch[1]),
       body.filePath
-    );
+    ));
     broadcastState();
     json(response, 200, data);
     return;
   }
   const removeMatch = pathname.match(/^\/api\/requests\/([^/]+)\/remove$/);
   const replaceMatch = pathname.match(/^\/api\/requests\/([^/]+)\/replace$/);
+  const linkMatch = pathname.match(/^\/api\/requests\/([^/]+)\/link$/);
+  const unlinkMatch = pathname.match(/^\/api\/requests\/([^/]+)\/unlink$/);
+  if (request.method === "POST" && linkMatch) {
+    const body = await readJson(request);
+    const data = await linkRequestFile(decodeURIComponent(linkMatch[1]), body.filePath, "manual");
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
+  if (request.method === "POST" && unlinkMatch) {
+    const data = await unlinkRequestFile(decodeURIComponent(unlinkMatch[1]));
+    broadcastState();
+    json(response, 200, data);
+    return;
+  }
   if (request.method === "POST" && replaceMatch) {
     const body = await readJson(request);
-    const data = await replaceQueuedRequest(
+    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => replaceQueuedRequest(
       decodeURIComponent(replaceMatch[1]),
       body.filePath
-    );
+    ));
     broadcastState();
     json(response, 200, data);
     return;
   }
   if (request.method === "POST" && removeMatch) {
-    const data = await removeQueuedRequest(decodeURIComponent(removeMatch[1]));
+    const body = await readJson(request);
+    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => removeQueuedRequest(decodeURIComponent(removeMatch[1])));
     broadcastState();
     json(response, 200, data);
     return;
@@ -5041,10 +6093,10 @@ async function api(request, response, url) {
     pathname.match(/^\/api\/requests\/([^/]+)\/outcome$/);
   if (request.method === "POST" && outcomeMatch) {
     const body = await readJson(request);
-    const data = await setRequestOutcome(
+    const data = await runAdministrativeCommand({ ...body, requestId: decodeURIComponent(outcomeMatch[1]), commandId: body.commandId || randomUUID() }, () => setRequestOutcome(
       decodeURIComponent(outcomeMatch[1]),
-      String(body.outcome || "")
-    );
+      String(body.outcome || ""), { removeVDJ: !vdjQueueOperationBusy }
+    ));
     broadcastState();
     json(response, 200, data);
     return;
@@ -5053,10 +6105,10 @@ async function api(request, response, url) {
     pathname.match(/^\/api\/requests\/([^/]+)\/undo-outcome$/);
   if (request.method === "POST" && undoOutcomeMatch) {
     const body = await readJson(request);
-    const data = await undoRequestOutcome(
+    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => undoRequestOutcome(
       decodeURIComponent(undoOutcomeMatch[1]),
       String(body.placement || "")
-    );
+    ));
     broadcastState();
     json(response, 200, data);
     return;
@@ -5091,7 +6143,7 @@ async function api(request, response, url) {
           config,
           id,
           item.status,
-          basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
+          basename(queuedEntries.get(id)?.filePath || ""),
           {
             durationSeconds:
               Number(selected.durationSeconds) || item.durationSeconds,
@@ -5103,6 +6155,10 @@ async function api(request, response, url) {
         if (Number(selected.durationSeconds) > 0) {
           item.durationSeconds = Number(selected.durationSeconds);
         }
+        requestFileLinks.delete(id);
+        const tracked = queuedEntries.get(id);
+        if (tracked) queuedEntries.set(id, { ...tracked, manualLink: false });
+        await persistQueuedEntries();
       }
       clipboardHandledIds.add(id);
       clipboardState = {
@@ -5192,7 +6248,7 @@ const server = createServer(async (request, response) => {
         context: { method: request.method, pathname }
       });
     }
-    json(response, 400, { ok: false, error: errorMessage(error) });
+    json(response, error.status || 400, { ok: false, error: errorMessage(error), ...(error.code ? { code: error.code } : {}) });
   }
 });
 
@@ -5230,7 +6286,17 @@ async function resumeRunningActivity() {
   const running = activities.filter((item) => String(item.status || "") === "in_progress");
   const remembered = running.find((item) => String(item.activityId || "") === String(config.lastActivityId || ""));
   const activity = remembered || (running.length === 1 ? running[0] : null);
-  if (!activity) return false;
+  if (!activity) {
+    operatingMode = "";
+    activityState = {
+      ...activityState,
+      activityStartedAt: "",
+      activityFinishedAt: "",
+      activityRunning: false,
+      playbackMode: ""
+    };
+    return false;
+  }
   const hotelId = String(activity.hotelId || config.lastHotelId || "");
   const venueId = String(activity.venueId || config.lastVenueId || "");
   const activityId = String(activity.activityId || "");
@@ -5249,14 +6315,122 @@ async function resumeRunningActivity() {
     rememberSelection: true
   }, config));
   applyActivityState(data);
+  if (!activityState.activityRunning) {
+    operatingMode = "";
+    activityState = {
+      ...activityState,
+      activityStartedAt: "",
+      activityFinishedAt: "",
+      activityRunning: false,
+      playbackMode: ""
+    };
+    return false;
+  }
   if (Array.isArray(data.requests)) requests = bridgeRequests(data);
   refreshLocalAvailability();
   await persistQueuedEntries(activityId);
   return true;
 }
 
+async function editBridgeMetadata(id, body) {
+  if (operatingMode !== 'bridge') throw new Error('Metadata editing here belongs to Bridge mode.');
+  const item = requests.find(value => value.id === id);
+  if (!item || queueLocks.has(id)) throw new Error('The request is unavailable or being updated.');
+  const metadata = {};
+  for (const [key, maximum] of [['singer', 120], ['song', 180], ['artist', 180]]) {
+    metadata[key] = String(body[key] ?? item[key] ?? '').replace(/[\r\n\0]/g, ' ').trim();
+    if (metadata[key].length > maximum || (key !== 'artist' && !metadata[key])) throw new Error('Invalid visible request metadata.');
+  }
+  if (bridgeFeatures.versionedMetadata !== true || !Number.isInteger(item.stateRevision) || item.stateRevision <= 0) throw new Error('The connected Guest Star service must support versioned metadata edits.');
+  if (Number(body.expectedRevision) !== item.stateRevision) throw new Error('This request changed while editing. Review it and save again.');
+  queueLocks.add(id);
+  try {
+    const result = await updateBridgeRequest(config, id, item.status, item.fileName || '', {
+      ...metadata, expectedRevision: item.stateRevision, eventOrigin: 'USER_ACTION'
+    });
+    const updated = result?.request;
+    if (!updated || String(updated.name || updated.singer || '') !== metadata.singer ||
+        updated.song !== metadata.song || updated.artist !== metadata.artist) {
+      throw new Error('The remote service did not confirm these fields. No local-only metadata was substituted.');
+    }
+    const current = requests.find(value => value.id === id);
+    if (!current) throw new Error('Metadata was saved remotely; the request is no longer in this activity.');
+    Object.assign(current, metadata, { stateRevision: Number(updated.stateRevision) });
+    // Preserve physical VDJ identity: visible Guest Star metadata is not a
+    // physical rename/re-tag and must not sever a previously verified link.
+    const entry = queuedEntries.get(id);
+    if (entry) queuedEntries.set(id, { ...entry, manualLink: true });
+    vdjOperations.invalidate(id);
+    await persistQueuedEntries();
+    broadcastState();
+    return { ok: true, request: requestView(current) };
+  } finally { queueLocks.delete(id); }
+}
+
+function bridgeQueueEntry(id) {
+  return vdjQueueEntries.find(entry => `vdj:${entry.virtualDJItemId}` === id ||
+    (entry.linkedRequestId && `request:${entry.linkedRequestId}` === id));
+}
+
+async function moveBridgeRequest(id, body) {
+  if (operatingMode !== 'bridge' || bridgeFeatures.administrativeReorder !== true) throw new Error('The service must support Bridge administrative reorder.');
+  const item = requests.find(value => value.id === id);
+  if (!item || effectiveRequestOutcome(item) || item.sourceType === 'player_local') throw new Error('The active request is no longer available.');
+  if (Number(body.expectedRevision) !== item.stateRevision) throw new Error('The request changed before reorder. Review its current position.');
+  const beforeId = body.beforeId === null ? null : String(body.beforeId || '');
+  if (beforeId !== null && !requests.some(value => value.id === beforeId && !effectiveRequestOutcome(value))) throw new Error('The reorder destination disappeared.');
+  vdjOperations.invalidate(id);
+  await updateBridgeRequest(config, id, item.status, item.fileName || '', {
+    beforeRequestId: beforeId, expectedRevision: item.stateRevision, eventOrigin: 'USER_ACTION'
+  });
+  await syncNow();
+  // Administrative order is stored on the same Guest Star records. VDJ's
+  // physical rows remain a projection: never replay a move on reconnect.
+  const source = bridgeQueueEntry(`request:${id}`);
+  const target = beforeId === null ? null : bridgeQueueEntry(`request:${beforeId}`);
+  let warning = '';
+  if (vdjOperations.view().connected && source && (beforeId === null || target)) {
+    try { await moveKaraokeEntry(config.virtualDJ, source, target); }
+    catch (error) { warning = `Guest Star order saved; VDJ order was not confirmed: ${errorMessage(error)}`; }
+  } else warning = 'Guest Star order saved. VDJ physical order is unchanged; no move will be replayed on reconnect.';
+  return { ok: true, warning };
+}
+
+async function skipVdjTrack(body) {
+  if (operatingMode !== 'bridge') throw new Error('Select Bridge mode before Skip.');
+  await vdjOperations.refresh();
+  const playback = vdjOperations.view();
+  const deck = playback.decks.find(value => value.deck === Number(body.deck));
+  if (!playback.connected || !deck?.filePath || normalizeVdjPath(deck.filePath) !== normalizeVdjPath(body.filePath)) {
+    throw new Error('The current VDJ deck/song is not confirmed.');
+  }
+  const matches = vdjQueueEntries.filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(deck.filePath));
+  if (matches.length > 1) throw new Error('Multiple singers share this source. Select the request and mark it manually; Skip will not guess.');
+  const current = matches[0];
+  const tracked = [...queuedEntries.values()].filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(deck.filePath));
+  if (tracked.length > 1 || (tracked.length === 1 && current?.linkedRequestId && tracked[0].id !== current.linkedRequestId)) {
+    throw new Error('The loaded source belongs to multiple requests. Skip will not choose a participant by filename.');
+  }
+  const next = vdjQueueEntries.find(entry => entry !== current && entry.filePath &&
+    (!current || entry.index > current.index) &&
+    (!entry.linkedRequestId || !effectiveRequestOutcome(requests.find(item => item.id === entry.linkedRequestId))));
+  await vdjOperations.command({ action: 'pause', deck: deck.deck, filePath: deck.filePath, commandId: `${body.commandId}_pause` });
+  let outcome = null;
+  const currentId = current?.linkedRequestId || (tracked.length === 1 ? tracked[0].id : '');
+  if (currentId) outcome = await setRequestOutcome(currentId, 'skipped');
+  if (next) {
+    if (/["`\r\n\0]/.test(next.filePath)) throw new Error('VDJ cannot safely load this source using the current script quoting mechanism.');
+    const pathNow = await queryVdj(config.virtualDJ, `deck ${deck.deck} get_filepath`);
+    if (normalizeVdjPath(pathNow) === normalizeVdjPath(next.filePath)) return { ok: true, alreadyAdvanced: true, outcome };
+    if (normalizeVdjPath(pathNow) !== normalizeVdjPath(deck.filePath)) throw new Error('VDJ advanced independently; no second Next command was sent.');
+    if (operatingMode !== 'bridge') throw new Error('Bridge mode changed before Next.');
+    await executeVdj(config.virtualDJ, `deck ${deck.deck} load "${next.filePath}"${deck.playing ? ` & deck ${deck.deck} play` : ''}`);
+  }
+  await vdjOperations.refresh();
+  return { ok: true, outcome, nextLoaded: Boolean(next), playback: vdjOperations.view() };
+}
+
 let cloudLoopRunning = false;
-let lastHeartbeatSentAt = 0;
 
 async function executeCloudCommand(command) {
   if (operatingMode !== "bridge") {
@@ -5269,25 +6443,25 @@ async function executeCloudCommand(command) {
     return { synchronized: true };
   }
   if (command.commandType === "addRequest") {
-    return queueRequest(String(payload.requestId || ""), payload.filePath || "");
+    return runVdjQueueOperation(command, () => queueRequest(String(payload.requestId || ''), payload.filePath || ''));
   }
   if (command.commandType === "removeRequest") {
-    return removeQueuedRequest(String(payload.requestId || ""));
+    return runVdjQueueOperation(command, () => removeQueuedRequest(String(payload.requestId || '')));
   }
   if (command.commandType === "markSang") {
-    return setRequestOutcome(String(payload.requestId || ""), "completed");
+    return runAdministrativeCommand(command, () => setRequestOutcome(String(payload.requestId || ''), 'completed', { removeVDJ: !vdjQueueOperationBusy }));
   }
   if (command.commandType === "markSkipped") {
-    return setRequestOutcome(String(payload.requestId || ""), "skipped");
+    return runAdministrativeCommand(command, () => setRequestOutcome(String(payload.requestId || ''), 'skipped', { removeVDJ: !vdjQueueOperationBusy }));
   }
   if (command.commandType === "undo") {
-    return undoRequestOutcome(
+    return runVdjQueueOperation(command, () => undoRequestOutcome(
       String(payload.requestId || ""),
       String(payload.placement || "pending")
-    );
+    ));
   }
   if (command.commandType === "moveRequest") {
-    return queueRequest(String(payload.requestId || ""), payload.filePath || "");
+    return runVdjQueueOperation(command, () => queueRequest(String(payload.requestId || ''), payload.filePath || ''));
   }
   throw new Error("Unsupported Bridge command.");
 }
@@ -5297,12 +6471,6 @@ async function bridgeCloudLoop() {
   if (cloudLoopRunning || !hasV4Session(config) || !config.lastActivityId) return;
   cloudLoopRunning = true;
   try {
-    if (Date.now() - lastHeartbeatSentAt >= 5000) {
-      await sendBridgeHeartbeat(config, {
-        virtualDJConnected: !vdjError && Boolean(lastVdjQueueAt)
-      });
-      lastHeartbeatSentAt = Date.now();
-    }
     const data = await pollBridgeCommands(config);
     for (const command of data.commands || []) {
       try {
@@ -5326,6 +6494,269 @@ async function bridgeCloudLoop() {
   }
 }
 
+let cloudRealtimeSocket = null;
+let cloudRealtimeReconnectTimer = null;
+let cloudRealtimeFallbackTimer = null;
+let cloudRealtimeAuthTimer = null;
+let cloudRealtimeScheduleTimer = null;
+let cloudRealtimeAttempt = 0;
+let cloudRealtimeFallbackAttempt = 0;
+let cloudRealtimeGeneration = 0;
+let cloudRealtimeRefresh = null;
+let cloudRealtimeRefreshGeneration = -1;
+let cloudRealtimeReady = false;
+let cloudRealtimePendingSync = false;
+let cloudRealtimePendingCommands = false;
+
+function cloudRealtimeEligible() {
+  return hasV4Session(config) && Boolean(
+    config.lastHotelId && config.lastActivityId && config.deviceId
+  );
+}
+
+function clearCloudRealtimeTimers() {
+  if (cloudRealtimeReconnectTimer) clearTimeout(cloudRealtimeReconnectTimer);
+  if (cloudRealtimeFallbackTimer) clearTimeout(cloudRealtimeFallbackTimer);
+  if (cloudRealtimeAuthTimer) clearTimeout(cloudRealtimeAuthTimer);
+  if (cloudRealtimeScheduleTimer) clearTimeout(cloudRealtimeScheduleTimer);
+  cloudRealtimeReconnectTimer = null;
+  cloudRealtimeFallbackTimer = null;
+  cloudRealtimeAuthTimer = null;
+  cloudRealtimeScheduleTimer = null;
+}
+
+function terminalRealtimeError(error) {
+  return /UNAUTHORIZED|session expired|revoked|sign in/i.test(errorMessage(error));
+}
+
+function scheduleCloudScheduleWake(data) {
+  if (cloudRealtimeScheduleTimer) clearTimeout(cloudRealtimeScheduleTimer);
+  cloudRealtimeScheduleTimer = null;
+  if (!cloudRealtimeEligible()) return;
+  const now = Date.now();
+  const candidates = (Array.isArray(data?.schedules) ? data.schedules : [])
+    .filter((schedule) => String(schedule?.status || "") === "active")
+    .flatMap((schedule) => [schedule?.requestOpeningAt, schedule?.scheduledStartAt])
+    .map((value) => Date.parse(String(value || "")))
+    .filter((value) => Number.isFinite(value) && value > now + 250)
+    .sort((left, right) => left - right);
+  if (!candidates.length) return;
+  const target = candidates[0];
+  const delay = Math.min(2_000_000_000, Math.max(250, target - now + Math.floor(Math.random() * 750)));
+  cloudRealtimeScheduleTimer = setTimeout(() => {
+    cloudRealtimeScheduleTimer = null;
+    if (target - Date.now() > 1000) {
+      scheduleCloudScheduleWake(data);
+      return;
+    }
+    void refreshCloudAfterSignal("schedule").catch((error) => {
+      sheetError = errorMessage(error);
+      broadcastState();
+    });
+  }, delay);
+  cloudRealtimeScheduleTimer.unref();
+}
+
+function queueCloudRefresh(eventType) {
+  if (eventType === "bridge.command.queued") {
+    cloudRealtimePendingCommands = true;
+    return;
+  }
+  if ([
+    "public.request.created", "request.changed", "activity.changed",
+    "experience.changed", "schedule"
+  ].includes(eventType)) {
+    cloudRealtimePendingSync = true;
+    return;
+  }
+  cloudRealtimePendingSync = true;
+  cloudRealtimePendingCommands = true;
+}
+
+async function refreshCloudAfterSignal(eventType = "bootstrap") {
+  queueCloudRefresh(eventType);
+  const generation = cloudRealtimeGeneration;
+  if (cloudRealtimeRefresh && cloudRealtimeRefreshGeneration === generation) {
+    return cloudRealtimeRefresh;
+  }
+  const operation = (async () => {
+    while (
+      generation === cloudRealtimeGeneration &&
+      (cloudRealtimePendingSync || cloudRealtimePendingCommands)
+    ) {
+      const refreshState = cloudRealtimePendingSync;
+      const refreshCommands = cloudRealtimePendingCommands;
+      cloudRealtimePendingSync = false;
+      cloudRealtimePendingCommands = false;
+      if (refreshState) await syncNow();
+      if (generation !== cloudRealtimeGeneration) return;
+      if (terminalRealtimeError(sheetError)) {
+        stopCloudRealtime();
+        return;
+      }
+      if (refreshCommands) await bridgeCloudLoop();
+      if (generation !== cloudRealtimeGeneration) return;
+      if (terminalRealtimeError(sheetError)) {
+        stopCloudRealtime();
+        return;
+      }
+      if (sheetError) {
+        scheduleCloudFallback(generation, true);
+        return;
+      }
+      if (cloudRealtimeReady) cloudRealtimeFallbackAttempt = 0;
+    }
+  })();
+  cloudRealtimeRefresh = operation;
+  cloudRealtimeRefreshGeneration = generation;
+  try {
+    await operation;
+  } finally {
+    if (cloudRealtimeRefresh === operation) {
+      cloudRealtimeRefresh = null;
+      cloudRealtimeRefreshGeneration = -1;
+    }
+  }
+}
+
+function scheduleCloudFallback(generation, force = false) {
+  if (
+    generation !== cloudRealtimeGeneration || !cloudRealtimeEligible() ||
+    (!force && cloudRealtimeReady) || cloudRealtimeFallbackTimer
+  ) return;
+  const base = Math.min(30_000, 5_000 * (2 ** Math.min(cloudRealtimeFallbackAttempt, 3)));
+  cloudRealtimeFallbackAttempt += 1;
+  const delay = base + Math.floor(Math.random() * Math.max(250, base * 0.2));
+  cloudRealtimeFallbackTimer = setTimeout(async () => {
+    cloudRealtimeFallbackTimer = null;
+    if (generation !== cloudRealtimeGeneration || (!force && cloudRealtimeReady)) return;
+    try {
+      await refreshCloudAfterSignal();
+    } catch (error) {
+      sheetError = errorMessage(error);
+      broadcastState();
+      if (terminalRealtimeError(error)) {
+        stopCloudRealtime();
+        return;
+      }
+    }
+    scheduleCloudFallback(generation, Boolean(sheetError));
+  }, delay);
+  cloudRealtimeFallbackTimer.unref();
+}
+
+function scheduleCloudReconnect(generation) {
+  if (
+    generation !== cloudRealtimeGeneration || !cloudRealtimeEligible() ||
+    cloudRealtimeReconnectTimer
+  ) return;
+  const base = Math.min(30_000, 1_000 * (2 ** Math.min(cloudRealtimeAttempt, 5)));
+  const delay = base + Math.floor(Math.random() * Math.max(100, base * 0.25));
+  cloudRealtimeAttempt += 1;
+  cloudRealtimeReconnectTimer = setTimeout(() => {
+    cloudRealtimeReconnectTimer = null;
+    connectCloudRealtime(generation);
+  }, delay);
+  cloudRealtimeReconnectTimer.unref();
+  scheduleCloudFallback(generation);
+}
+
+function connectCloudRealtime(generation = cloudRealtimeGeneration) {
+  if (
+    generation !== cloudRealtimeGeneration || !cloudRealtimeEligible() ||
+    cloudRealtimeSocket?.readyState === 0 || cloudRealtimeSocket?.readyState === 1
+  ) return;
+  if (typeof WebSocket !== "function") {
+    scheduleCloudFallback(generation);
+    return;
+  }
+  let connection;
+  try {
+    connection = bridgeRealtimeConnection(config, operatingMode);
+  } catch (error) {
+    sheetError = errorMessage(error);
+    scheduleCloudFallback(generation);
+    return;
+  }
+  const socket = new WebSocket(connection.url, connection.protocols);
+  cloudRealtimeSocket = socket;
+  cloudRealtimeReady = false;
+  scheduleCloudFallback(generation);
+  socket.addEventListener("open", () => {
+    if (generation !== cloudRealtimeGeneration || cloudRealtimeSocket !== socket) {
+      socket.close(1000, "Superseded");
+      return;
+    }
+    socket.send(JSON.stringify(connection.authentication));
+    cloudRealtimeAuthTimer = setTimeout(() => {
+      cloudRealtimeAuthTimer = null;
+      if (!cloudRealtimeReady && cloudRealtimeSocket === socket) {
+        socket.close(4008, "Realtime authentication timed out");
+      }
+    }, 10_000);
+    cloudRealtimeAuthTimer.unref();
+  });
+  socket.addEventListener("message", (event) => {
+    if (generation !== cloudRealtimeGeneration || cloudRealtimeSocket !== socket) return;
+    try {
+      const message = JSON.parse(String(event.data || "{}"));
+      if (!message.type || message.type === "realtime.auth-required" || message.type === "pong") return;
+      if (message.type === "realtime.ready") {
+        cloudRealtimeReady = true;
+        cloudRealtimeAttempt = 0;
+        cloudRealtimeFallbackAttempt = 0;
+        if (cloudRealtimeAuthTimer) clearTimeout(cloudRealtimeAuthTimer);
+        if (cloudRealtimeFallbackTimer) clearTimeout(cloudRealtimeFallbackTimer);
+        cloudRealtimeAuthTimer = null;
+        cloudRealtimeFallbackTimer = null;
+      } else if (!cloudRealtimeReady) {
+        return;
+      }
+      void refreshCloudAfterSignal(message.type === "realtime.ready" ? "bootstrap" : message.type).catch((error) => {
+        sheetError = errorMessage(error);
+        broadcastState();
+      });
+    } catch {
+      // Only small server invalidations are accepted on this channel.
+    }
+  });
+  socket.addEventListener("close", () => {
+    if (generation !== cloudRealtimeGeneration || cloudRealtimeSocket !== socket) return;
+    cloudRealtimeSocket = null;
+    cloudRealtimeReady = false;
+    if (cloudRealtimeAuthTimer) clearTimeout(cloudRealtimeAuthTimer);
+    cloudRealtimeAuthTimer = null;
+    scheduleCloudReconnect(generation);
+  });
+  socket.addEventListener("error", () => {
+    if (generation === cloudRealtimeGeneration && cloudRealtimeSocket === socket) {
+      cloudRealtimeReady = false;
+    }
+    // Undici closes failed WebSockets itself. Calling close() from this handler
+    // can synchronously emit another error in Node 22 and overflow the stack.
+  });
+}
+
+function stopCloudRealtime() {
+  cloudRealtimeGeneration += 1;
+  clearCloudRealtimeTimers();
+  const socket = cloudRealtimeSocket;
+  cloudRealtimeSocket = null;
+  cloudRealtimeReady = false;
+  cloudRealtimeAttempt = 0;
+  cloudRealtimeFallbackAttempt = 0;
+  cloudRealtimePendingSync = false;
+  cloudRealtimePendingCommands = false;
+  try { socket?.close(1000, "Guest Star disconnected"); } catch { /* already closed */ }
+}
+
+function restartCloudRealtime() {
+  stopCloudRealtime();
+  if (!cloudRealtimeEligible()) return;
+  const generation = cloudRealtimeGeneration;
+  connectCloudRealtime(generation);
+}
+
 await refreshStemEngineCapability();
 await refreshSystemMemoryPressure();
 updateStemResourceState();
@@ -5345,22 +6776,22 @@ startLibraryWatchers();
 await scanNow();
 await syncNow();
 void processStemQueue();
-
-async function requestLoop() {
-  await syncNow();
-  setTimeout(requestLoop, config.requestIntervalSeconds * 1000).unref();
-}
+void verifyStemEngineCapability();
 
 async function scanLoop() {
   await scanNow();
   setTimeout(scanLoop, (WEB_BETA ? 5 : config.scanIntervalSeconds) * 1000).unref();
 }
 
-setTimeout(requestLoop, config.requestIntervalSeconds * 1000).unref();
 setTimeout(scanLoop, (WEB_BETA ? 5 : config.scanIntervalSeconds) * 1000).unref();
-setInterval(() => {
-  void bridgeCloudLoop();
-}, 2000).unref();
+restartCloudRealtime();
+// Network Control exposes HTTP queries, not push events. Bounded LOCAL reads
+// only while Bridge has an SSE consumer; never poll D1/cloud for playback.
+async function vdjPlaybackLoop() {
+  if (operatingMode === 'bridge' && eventClients.size > 0) await vdjOperations.refresh();
+  setTimeout(vdjPlaybackLoop, vdjOperations.view().connected ? 1000 : 5000).unref();
+}
+void vdjPlaybackLoop();
 setInterval(() => {
   void refreshSystemMemoryPressure().then(() => {
     const result = updateStemResourceState();
@@ -5385,8 +6816,8 @@ setInterval(() => {
 }, 20000).unref();
 setInterval(() => {
   const queued = diagnostics.reports.find((report) =>
-    report.deliveryStatus === "queued" &&
-    (report.automatic !== true || config.diagnostics?.autoSendTechnicalErrors === true)
+    (report.deliveryStatus === "queued" || (report.automatic === true && report.deliveryStatus === "local")) &&
+    (report.automatic !== true || diagnosticPreferences.view().autoSendTechnicalErrors === true)
   );
   if (queued) void deliverDiagnosticReport(queued);
 }, 30000).unref();

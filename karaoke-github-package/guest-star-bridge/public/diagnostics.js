@@ -1,3 +1,4 @@
+import { bindDiagnosticPreferences, diagnosticPreferenceRequest } from './diagnostic-preferences.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const MODULES = [
   'Audio', 'Player', 'Star Screen', 'Queue', 'Stems IA', 'Spleeter', 'Demucs',
@@ -33,6 +34,13 @@ function healthIcon(status) {
   if (['WARNING', 'RECOVERING', 'PRESSURE'].includes(status)) return '⚠';
   if (['ERROR', 'OFFLINE'].includes(status)) return '✕';
   return '·';
+}
+
+function diagnosticEventTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? 'Fecha no disponible'
+    : date.toLocaleTimeString();
 }
 
 export function initDiagnostics({ api, getState, getPlayerSnapshot, showNotice }) {
@@ -170,9 +178,19 @@ export function initDiagnostics({ api, getState, getPlayerSnapshot, showNotice }
   function renderRecent() {
     const target = $('#diagnosticRecentErrors');
     if (!target) return;
-    const list = serverState?.recentErrors || [];
+    const reports = Array.isArray(serverState?.reports) ? serverState.reports : [];
+    const delivered = reports.find((report) => report.deliveryStatus === 'sent');
+    const queued = reports.find((report) => report.deliveryStatus === 'queued' && report.deliveryError);
+    const pendingCount = reports.filter((report) => report.deliveryStatus === 'queued').length;
+    const deliveryStatus = $('#diagnosticDeliveryStatus');
+    if (deliveryStatus) {
+      deliveryStatus.textContent = delivered
+        ? `Último reporte enviado al Superhost. ID ${delivered.reportId}.${pendingCount ? ` Hay ${pendingCount} reporte${pendingCount === 1 ? '' : 's'} anterior${pendingCount === 1 ? '' : 'es'} pendiente${pendingCount === 1 ? '' : 's'}: ${queued?.deliveryError || 'esperando reintento'}.` : ''}`
+        : queued ? `Reporte pendiente de entrega: ${queued.deliveryError}. ID ${queued.reportId}.` : '';
+    }
+    const list = (serverState?.recentErrors || []).filter((event) => event && typeof event === 'object');
     target.innerHTML = list.length
-      ? list.slice(0, 8).map((event) => `<li><b>${escapeDiagnosticHtml(event.severity)}</b><span>${escapeDiagnosticHtml(event.summary || event.event)}</span><small>${escapeDiagnosticHtml(new Date(event.timestamp).toLocaleTimeString())}</small></li>`).join('')
+      ? list.slice(0, 8).map((event) => `<li><b>${escapeDiagnosticHtml(event.severity)}</b><span>${escapeDiagnosticHtml(event.summary || event.event)}</span><small>${escapeDiagnosticHtml(diagnosticEventTime(event.timestamp))}</small></li>`).join('')
       : '<li><span>No hay errores técnicos recientes.</span></li>';
   }
 
@@ -210,7 +228,7 @@ export function initDiagnostics({ api, getState, getPlayerSnapshot, showNotice }
     const latest = serverState?.recentErrors?.[0];
     if (detected) {
       detected.classList.toggle('hidden', !latest);
-      detected.textContent = latest ? `Se detectó un evento ${latest.severity.toLowerCase()} recientemente: ${latest.summary}` : '';
+      detected.textContent = latest && typeof latest === 'object' ? `Se detectó un evento ${String(latest.severity || 'INFO').toLowerCase()} recientemente: ${latest.summary}` : '';
       detected.dataset.eventId = latest?.eventId || recentAutomaticEventId;
     }
     if (dialog && !dialog.open) dialog.showModal();
@@ -265,15 +283,18 @@ export function initDiagnostics({ api, getState, getPlayerSnapshot, showNotice }
     try {
       const result = await createReport('send');
       if (!result) return;
-      const status = result.report.deliveryStatus === 'sent' ? 'enviado' : 'guardado en la cola offline';
-      showNotice(`Reporte ${status}. ID ${result.report.reportId}.`);
+      const sent = result.report.deliveryStatus === 'sent';
+      showNotice(sent ? `Reporte enviado. ID ${result.report.reportId}.` : `Reporte guardado, pendiente de entrega: ${result.report.deliveryError || 'El servidor aún no confirmó la recepción'}. ID ${result.report.reportId}.`, !sent);
     } catch (error) { showNotice(error.message, true); }
   }
 
   async function exportDiagnostics() {
     try {
       const response = await fetch('/api/diagnostics/export');
-      if (!response.ok) throw new Error('No se pudo exportar el diagnóstico.');
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.error || `No se pudo exportar el diagnóstico (HTTP ${response.status}).`);
+      }
       const blob = await response.blob();
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -291,14 +312,46 @@ export function initDiagnostics({ api, getState, getPlayerSnapshot, showNotice }
     }
   }
 
+  const preferenceStatus = document.createElement('p');
+  preferenceStatus.id = 'diagnosticPreferenceStatus';
+  preferenceStatus.setAttribute('role', 'status');
+  preferenceStatus.setAttribute('aria-live', 'polite');
+  $('#diagnosticTesterMode')?.closest('label')?.after(preferenceStatus);
+  const deliveryStatus = document.createElement('p');
+  deliveryStatus.id = 'diagnosticDeliveryStatus';
+  deliveryStatus.setAttribute('role', 'status');
+  preferenceStatus.after(deliveryStatus);
+  try { preferenceStatus.textContent = localStorage.getItem('guestStar.diagnosticPreferenceFailure') || ''; } catch { /* Storage can be unavailable. */ }
+  const preferenceControls = bindDiagnosticPreferences({
+    controls: { autoSendTechnicalErrors: $('#diagnosticAutoSend'), testerMode: $('#diagnosticTesterMode') },
+    status: preferenceStatus,
+    request: async (patch) => {
+      const result = await diagnosticPreferenceRequest(patch);
+      try { localStorage.removeItem('guestStar.diagnosticPreferenceFailure'); } catch { /* Nonessential storage. */ }
+      return result;
+    },
+    apply(preferences) {
+      if (state?.config) state.config.diagnostics = preferences;
+      document.body.classList.toggle('diagnostic-tester-mode', preferences.testerMode === true);
+    },
+    onError(error) {
+      try { localStorage.setItem('guestStar.diagnosticPreferenceFailure', preferenceStatus.textContent); } catch { /* The inline error remains visible. */ }
+      showNotice(preferenceStatus.textContent, true);
+    }
+  });
+
   function sync(nextState) {
     state = nextState;
     const preferences = state?.config?.diagnostics || {};
-    const auto = $('#diagnosticAutoSend');
-    const tester = $('#diagnosticTesterMode');
-    if (auto && !auto.matches(':active')) auto.checked = preferences.autoSendTechnicalErrors === true;
-    if (tester && !tester.matches(':active')) tester.checked = preferences.testerMode === true;
-    document.body.classList.toggle('diagnostic-tester-mode', preferences.testerMode === true);
+    preferenceControls.sync(preferences);
+    if (preferences.error) preferenceStatus.textContent = preferences.error;
+    else if (
+      preferences.autoSendTechnicalErrors === true &&
+      preferenceStatus.textContent.includes('D1_ACTION_NOT_IMPLEMENTED')
+    ) {
+      preferenceStatus.textContent = 'Activado y guardado.';
+      try { localStorage.removeItem('guestStar.diagnosticPreferenceFailure'); } catch { /* The server-confirmed state is still shown. */ }
+    }
     observeMedia();
   }
 

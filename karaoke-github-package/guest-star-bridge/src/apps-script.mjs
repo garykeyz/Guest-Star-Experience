@@ -9,7 +9,7 @@ async function parseResponse(response) {
 }
 
 const REQUIRED_CODE_VERSION = "4.2.0";
-const BRIDGE_APP_VERSION = "4.4.1";
+const BRIDGE_APP_VERSION = "4.5";
 const GUEST_STAR_SERVICE_TIMEOUT_MS = 70000;
 
 function endpoint(config) {
@@ -52,6 +52,30 @@ async function postPayload(config, payload, timeoutMs = GUEST_STAR_SERVICE_TIMEO
 
 export function hasV4Session(config) {
   return Boolean(config.authToken && config.deviceToken && config.deviceId);
+}
+
+export function bridgeRealtimeConnection(config, mode = "observer") {
+  if (!hasV4Session(config) || !config.lastHotelId || !config.lastActivityId) {
+    throw new Error("Select a Guest Star activity before connecting realtime.");
+  }
+  const url = new URL(endpoint(config));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/api/realtime";
+  url.search = "";
+  url.searchParams.set("channel", String(config.lastHotelId));
+  url.searchParams.set("role", "bridge");
+  url.searchParams.set("deviceId", String(config.deviceId));
+  url.searchParams.set("activityId", String(config.lastActivityId));
+  url.searchParams.set("mode", ["bridge", "player"].includes(mode) ? mode : "observer");
+  return {
+    url: url.toString(),
+    protocols: ["guest-star-v1"],
+    authentication: {
+      type: "auth",
+      authToken: config.authToken,
+      deviceToken: config.deviceToken
+    }
+  };
 }
 
 export function v4AppsScriptAction(config, action, extra = {}) {
@@ -109,19 +133,14 @@ export function createHostPanelLogin(config) {
   return v4AppsScriptAction(config, "createOneTimeLoginCode");
 }
 
-export function sendBridgeHeartbeat(config, status = {}) {
-  return v4AppsScriptAction(config, "bridgeHeartbeat", {
-    bridgeVersion: BRIDGE_APP_VERSION,
-    virtualDJConnected: status.virtualDJConnected === true
-  });
-}
-
 export function pollBridgeCommands(config) {
   return v4AppsScriptAction(config, "pollBridgeCommands");
 }
 
 export function completeBridgeCommand(config, commandId, result) {
   return v4AppsScriptAction(config, "completeBridgeCommand", {
+    hotelId: config.lastHotelId,
+    activityId: config.lastActivityId,
     commandId,
     ok: result.ok === true,
     result: result.result || {},
@@ -131,16 +150,11 @@ export function completeBridgeCommand(config, commandId, result) {
 
 export function syncExternalVirtualDjEntries(config, entries, confirmedMissingIds = []) {
   return v4AppsScriptAction(config, "bridgeExternalSync", {
+    hotelId: config.lastHotelId,
+    activityId: config.lastActivityId,
     entries,
     confirmedMissingIds
   });
-}
-
-export async function appsScriptAction(config, action, extra = {}) {
-  void config;
-  void action;
-  void extra;
-  throw new Error("The legacy Google Sheets/PIN backend is disabled. Sign in to Guest Star D1.");
 }
 
 export async function fetchBridgeQueue(config) {
@@ -165,6 +179,8 @@ export function updateBridgeRequest(
   extra = {}
 ) {
   return v4AppsScriptAction(config, "bridgeRequestUpdate", {
+    hotelId: config.lastHotelId,
+    activityId: config.lastActivityId,
     id,
     status,
     fileName,
@@ -173,7 +189,13 @@ export function updateBridgeRequest(
     virtualDJItemId: extra.virtualDJItemId,
     queuePosition: extra.queuePosition,
     syncState: extra.syncState,
-    lastSeenAt: extra.lastSeenAt
+    lastSeenAt: extra.lastSeenAt,
+    singer: extra.singer,
+    song: extra.song,
+    artist: extra.artist,
+    expectedRevision: extra.expectedRevision,
+    eventOrigin: extra.eventOrigin,
+    beforeRequestId: extra.beforeRequestId
   });
 }
 

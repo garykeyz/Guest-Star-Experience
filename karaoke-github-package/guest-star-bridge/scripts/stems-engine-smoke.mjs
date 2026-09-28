@@ -9,6 +9,19 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const engineRoot = resolve(process.argv[2] || "");
 assert.notEqual(engineRoot, resolve(""), "Pass the installed Guest Star stem-engine folder.");
+const requestedEngines = new Set(
+  process.argv.slice(3)
+    .map((value) => String(value || "").replace(/^--engine=/, "").trim().toLowerCase())
+    .filter(Boolean)
+);
+if (!requestedEngines.size || requestedEngines.has("all")) {
+  requestedEngines.clear();
+  requestedEngines.add("spleeter");
+  requestedEngines.add("demucs");
+}
+for (const engine of requestedEngines) {
+  assert.ok(["spleeter", "demucs"].includes(engine), `Unknown Stems engine: ${engine}`);
+}
 
 const engineRequire = createRequire(resolve(engineRoot, "package.json"));
 const ffmpeg = String(engineRequire("ffmpeg-static") || "");
@@ -84,50 +97,50 @@ try {
     input
   ], 30_000);
 
-  await Promise.all([
-    access(spleeterCli),
-    access(spleeterVocalsModel),
-    access(spleeterAccompanimentModel),
-    access(demucsCli)
-  ]);
+  const result = {};
+  if (requestedEngines.has("spleeter")) {
+    await Promise.all([
+      access(spleeterCli),
+      access(spleeterVocalsModel),
+      access(spleeterAccompanimentModel)
+    ]);
+    await run(spleeterCli, [
+      `--spleeter-vocals=${spleeterVocalsModel}`,
+      `--spleeter-accompaniment=${spleeterAccompanimentModel}`,
+      "--num-threads=1",
+      `--input-wav=${input}`,
+      `--output-vocals-wav=${spleeterVocals}`,
+      `--output-accompaniment-wav=${spleeterInstrumental}`
+    ]);
+    result.spleeter = await validatePair("Spleeter", spleeterInstrumental, spleeterVocals);
+  }
 
-  await run(spleeterCli, [
-    `--spleeter-vocals=${spleeterVocalsModel}`,
-    `--spleeter-accompaniment=${spleeterAccompanimentModel}`,
-    "--num-threads=1",
-    `--input-wav=${input}`,
-    `--output-vocals-wav=${spleeterVocals}`,
-    `--output-accompaniment-wav=${spleeterInstrumental}`
-  ]);
-  const spleeterResult = await validatePair("Spleeter", spleeterInstrumental, spleeterVocals);
+  if (requestedEngines.has("demucs")) {
+    await access(demucsCli);
+    await run(process.execPath, [
+      demucsCli, input, "--output", separated, "--overlap", "0.10"
+    ]);
 
-  await run(process.execPath, [
-    demucsCli, input, "--output", separated, "--overlap", "0.10"
-  ]);
+    const parts = join(separated, "input");
+    await run(ffmpeg, [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", join(parts, "drums.wav"),
+      "-i", join(parts, "bass.wav"),
+      "-i", join(parts, "other.wav"),
+      "-filter_complex", "[0:a][1:a][2:a]amix=inputs=3:normalize=0,alimiter=limit=0.95[a]",
+      "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
+      instrumental
+    ], 30_000);
+    await run(ffmpeg, [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      "-i", join(parts, "vocals.wav"),
+      "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+      vocals
+    ], 30_000);
+    result.demucs = await validatePair("Demucs", instrumental, vocals);
+  }
 
-  const parts = join(separated, "input");
-  await run(ffmpeg, [
-    "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-    "-i", join(parts, "drums.wav"),
-    "-i", join(parts, "bass.wav"),
-    "-i", join(parts, "other.wav"),
-    "-filter_complex", "[0:a][1:a][2:a]amix=inputs=3:normalize=0,alimiter=limit=0.95[a]",
-    "-map", "[a]", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
-    instrumental
-  ], 30_000);
-  await run(ffmpeg, [
-    "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-    "-i", join(parts, "vocals.wav"),
-    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
-    vocals
-  ], 30_000);
-
-  const demucsResult = await validatePair("Demucs", instrumental, vocals);
-
-  console.log("Guest Star Stems IA smoke test passed", {
-    spleeter: spleeterResult,
-    demucs: demucsResult
-  });
+  console.log("Guest Star Stems IA smoke test passed", result);
 } finally {
   await rm(workDir, { recursive: true, force: true });
 }

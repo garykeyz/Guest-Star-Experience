@@ -1,20 +1,31 @@
+import { applyBrandingTheme, brandingTheme, renderBrandLogos } from "./shared/branding-theme.js";
 import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
+import { currentHostActivityAccess } from "./host-activity-access.js";
 import { initSuperhostPanel } from "./superhost.js";
 import { createBridgeI18n } from "./bridge-i18n.js";
 import { preserveBridgeScroll } from "./scroll-preserver.js";
-import { initPlayerBeta } from "./player-beta.js";
+import { createBridgeOperations } from './bridge-operations.js';
+import { initPlayerBeta, normalizeBrandImageUrl } from "./player-beta.js";
+import { starScreenPreferences } from "./star-screen-presentation.js";
 import { initDiagnostics } from "./diagnostics.js";
+import { createQueueToast } from "./queue-toast.js";
+import { createStoragePreferences } from "./storage-preferences.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
+const starScreenPreferencesChannel = new BroadcastChannel("guest-star-player");
+let lastStarScreenPreferencesSignature = "";
+window.addEventListener("beforeunload", () => starScreenPreferencesChannel.close(), { once: true });
 const ACTIVITY_LANGUAGES = [
   ["es", "#activityLanguageEs"], ["en", "#activityLanguageEn"],
   ["fr", "#activityLanguageFr"], ["it", "#activityLanguageIt"],
   ["de", "#activityLanguageDe"], ["ru", "#activityLanguageRu"],
-  ["pt", "#activityLanguagePt"]
+  ["pt", "#activityLanguagePt"], ["hi", "#activityLanguageHi"]
 ];
 const requestsEl = $("#requests");
 const finishedRequestsEl = $("#finishedRequests");
 const noticeEl = $("#notice");
+const queueToast = createQueueToast(noticeEl);
+document.body.append(noticeEl);
 const preferencesDialog = $("#preferencesDialog");
 const settingsDialog = $("#settingsDialog");
 const successDialog = $("#successDialog");
@@ -24,6 +35,7 @@ const selectionDialog = $("#selectionDialog");
 const playbackModeDialog = $("#playbackModeDialog");
 const passwordDialog = $("#passwordDialog");
 const shareDialog = $("#shareDialog");
+const hostActivityQrDialog = $("#hostActivityQrDialog");
 const moreDialog = $("#moreDialog");
 const folderList = $("#folderList");
 const bridgeI18n = createBridgeI18n({ language: "es" });
@@ -34,12 +46,17 @@ let scanBusy = false;
 let syncBusy = false;
 let passwordChangeRequired = false;
 let pendingActivityAction = "";
+let pendingHostEntry = false;
+let superhostInHostView = false;
+let bridgeFinishedExpanded = false;
+let autoOpenedHostActivityId = "";
 const actionLocks = new Set();
 const hitSearchLocks = new Set();
 const expandedRequestIds = new Set();
 let lastActivityRevision = null;
 let lastInstantSyncAt = 0;
 let autoRestoredPlayerActivityId = "";
+let autoRestoredBridgeActivityId = "";
 let nativeDisplays = [];
 let playerPanel;
 const diagnostics = initDiagnostics({
@@ -61,7 +78,8 @@ playerPanel = initPlayerBeta({
   diagnostics,
   operations: {
     controlActivity: (action) => controlActivity(action),
-    openShare: () => $("#shareButton").click(),
+    getHostLanguage: () => bridgeI18n.getLanguage(),
+    openShare: () => $("#hostSessionQrButton").click(),
     openSettings: () => $("#settingsButton").click(),
     scanLibrary: () => scan()
   }
@@ -79,13 +97,12 @@ async function api(path, options = {}) {
   return data;
 }
 
-function showNotice(message, error = false) {
-  noticeEl.textContent = message;
-  noticeEl.classList.remove("hidden", "error");
-  if (error) noticeEl.classList.add("error");
-  window.clearTimeout(showNotice.timer);
-  showNotice.timer = window.setTimeout(() => noticeEl.classList.add("hidden"), 6500);
+function showNotice(message, error = false, action = null) {
+  queueToast(message, error, action);
 }
+
+const storagePreferences = createStoragePreferences({ request: api, dialog: preferencesDialog, i18n: bridgeI18n, notify: showNotice });
+const bridgeOperations = createBridgeOperations({ request: api, getState: () => state, refresh, notify: showNotice, markOutcome, undoOutcome, i18n: bridgeI18n });
 
 function showSuccess(title, detail) {
   $("#successTitle").textContent = title;
@@ -176,8 +193,7 @@ async function runAction(scope, progress, operation, successMessage) {
     const data = await operation();
     await refresh();
     const success = successMessage(data);
-    showNotice(success.detail);
-    showSuccess(success.title, success.detail);
+    showNotice(success.detail, false, success.action);
     return data;
   } catch (error) {
     showNotice(`The action could not be completed: ${error.message}`, true);
@@ -377,6 +393,13 @@ function updateTimeDashboard() {
   } else {
     advice.classList.add("hidden");
   }
+  document.querySelectorAll(".operations-summary-strip .status-card, .operations-summary-strip .time-card, .operations-summary-strip .event-reminder")
+    .forEach((summaryItem) => {
+      const label = $("small", summaryItem)?.textContent?.trim();
+      const value = $("strong", summaryItem)?.textContent?.trim();
+      const detail = $("p", summaryItem)?.textContent?.trim();
+      summaryItem.title = [label, value, detail].filter(Boolean).join(" · ");
+    });
 }
 
 function activityMessage(activity) {
@@ -401,9 +424,35 @@ function setStatus(id, mode, title, detail) {
   if (mode) card.classList.add(mode);
   $("strong", card).textContent = title;
   $("p", card).textContent = detail;
+  card.title = [$('small', card)?.textContent?.trim(), title, detail].filter(Boolean).join(" · ");
+}
+
+function renderHostActivityQr(access) {
+  const qr = $("#hostActivityQrImage");
+  try {
+    if (qr.dataset.qrText !== access.joinUrl) setLocalQrImage(qr, access.joinUrl, 900);
+    $("#hostActivityQrTitle").textContent = state.tenant.activity.name || "Actividad";
+    $("#hostActivityQrContext").textContent = [state.tenant.hotel.name, state.tenant.venue.name].filter(Boolean).join(" · ");
+    $("#hostActivityQrPin").textContent = `PIN ${access.pin}`;
+    $("#hostActivityQrUrl").value = access.joinUrl;
+    return true;
+  } catch (error) {
+    if (hostActivityQrDialog.open) hostActivityQrDialog.close();
+    showNotice(error.message, true);
+    return false;
+  }
 }
 
 function updateStatus() {
+  // Hotel identity is local to the operational view; editing a hotel never themes Superhost.
+  const administrativeView=superhostPanel.isOpen();
+  document.body.classList.toggle('gs-superhost-view',administrativeView);
+  for(const key of Object.keys(brandingTheme({})))document.documentElement.style.removeProperty(key);
+  if(administrativeView){
+    for(const key of Object.keys(brandingTheme({})))document.body.style.removeProperty(key);
+  }else{
+    applyBrandingTheme(document.body,state?.account?.authenticated===true&&state?.account?.current?.activityId?state.tenant?.branding||{}:{});
+  }
   if (!state) return;
   const library = state.library;
   setStatus(
@@ -420,9 +469,9 @@ function updateStatus() {
   const sheet = state.sheet;
   setStatus(
     "#sheetStatus",
-    sheet.error ? "error" : state.config.hostPinConfigured ? "ok" : "",
+    sheet.error ? "error" : state.config.signedIn ? "ok" : "",
     sheet.error ? "Disconnected" : `${state.requests.length} requests`,
-    sheet.error || (state.config.signedIn || state.config.hostPinConfigured
+    sheet.error || (state.config.signedIn
       ? `Synced: ${timeAgo(sheet.lastSyncAt)}`
       : "Sign in to Guest Star")
   );
@@ -469,6 +518,20 @@ function updateStatus() {
   const authenticated = state.account?.authenticated === true;
   const tenant = state.tenant || {};
   const selectedActivity = tenant.activity || null;
+  const isHostView = authenticated && (state.account?.user?.role === "host" ||
+    (state.account?.user?.role === "superhost" && superhostInHostView && !superhostPanel.isOpen()));
+  const access = currentHostActivityAccess(state, { superhostInHostView: isHostView });
+  const hostSessionPin = $("#hostSessionPin");
+  hostSessionPin.classList.toggle("hidden", !isHostView || !tenant.hotel || !selectedActivity || !tenant.venue);
+  const roomName = [tenant.hotel?.name, selectedActivity?.name, tenant.venue?.name].filter(Boolean).join(" · ");
+  $("#hostSessionHotel").textContent = roomName || "—";
+  $("#hostSessionPinValue").textContent = access ? `PIN ${access.pin}` : "PIN —";
+  $("#hostSessionQrButton").disabled = !access;
+  hostSessionPin.title = access ? `${roomName} · PIN ${access.pin}` : `${roomName || "Actividad"} · PIN pendiente`;
+  if (hostActivityQrDialog.open) {
+    if (access) renderHostActivityQr(access);
+    else hostActivityQrDialog.close();
+  }
   const permissions = tenant.permissions || {};
   const status = selectedActivity?.status || (running ? "in_progress" : "ready");
   const can = (permission) => permissions.all === true || permissions[permission] === true;
@@ -514,18 +577,30 @@ function updateStatus() {
   $("#shareButton").disabled = !tenant.share?.publicUrl;
   $("#settingsButton").disabled = !selectedActivity;
   const isSuperhost = authenticated && state.account?.user?.role === "superhost";
-  $("#openHostPanel").classList.toggle("hidden", running || !isSuperhost || superhostPanel.isOpen());
-  $("#liveEventButton").classList.toggle("hidden", running || !isSuperhost || !superhostPanel.isOpen());
-  $("#playerBetaButton").classList.toggle("hidden", running || !authenticated || !selectedActivity || playerPanel.isOpen());
-  $("#playbackModeButton").classList.toggle("hidden", !authenticated);
-  $("#playbackModeButton").disabled = running || !selectedActivity;
-  $("#playbackModeButton").textContent = !selectedActivity
-    ? "Selecciona una actividad"
-    : running
-    ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"} 🔒`
-    : selectedMode
-      ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}`
-      : "Elegir modo";
+  const hostViewButton = $("#openHostPanel");
+  hostViewButton.classList.toggle("hidden", !isSuperhost);
+  hostViewButton.textContent = superhostPanel.isOpen() ? "Modo Host" : "Superhost";
+  hostViewButton.setAttribute("aria-label", superhostPanel.isOpen()
+    ? "Ir a la operación del Host"
+    : "Volver al Panel Superhost");
+  const modeStatus = $("#playbackModeStatus");
+  modeStatus.classList.toggle("hidden", !authenticated || !selectedActivity || !selectedMode);
+  modeStatus.textContent = selectedMode
+    ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}${running ? " · bloqueado" : ""}`
+    : "";
+  const modeLocked = state.operatingMode?.locked === true || state.activity?.activityRunning === true;
+  for (const modeButton of [$("#bridgeChangeMode"), $("#playerChangeMode")]) {
+    modeButton.classList.toggle("hidden", !authenticated || !selectedActivity);
+    modeButton.disabled = modeLocked;
+    modeButton.textContent = modeLocked
+      ? "Modo bloqueado"
+      : selectedMode
+        ? "Cambiar modo"
+        : "Elegir modo";
+    modeButton.title = modeLocked
+      ? "El modo queda bloqueado mientras la actividad está en curso."
+      : "Puedes cambiar entre Player y Bridge hasta iniciar la actividad.";
+  }
   $("#switchActivity").classList.toggle("hidden", running || !authenticated);
   $("#changePasswordButton").classList.toggle("hidden", running || !authenticated);
   $("#logoutButton").classList.toggle("hidden", running || !authenticated);
@@ -559,8 +634,10 @@ async function copyLink(url, message = "Link copied.") {
   try {
     await navigator.clipboard.writeText(url);
     showNotice(message);
-  } catch {
-    window.prompt("Copy this link:", url);
+  } catch (error) {
+    // Clipboard permission failures must never stop a live Bridge session.
+    // The link remains visible/selectable in the current panel.
+    showNotice("Automatic copy failed. Select the visible link and press ⌘C.", true);
   }
 }
 
@@ -627,14 +704,6 @@ async function queue(id, filePath) {
 
 async function replaceQueueFile(id, candidate) {
   const label = requestLabel(id);
-  const confirmed = await confirmAction({
-    title: "Change linked file",
-    detail:
-      `Replace the current VirtualDJ row for ${label} with ${candidate.fileName}? ` +
-      "If the new insertion fails, the Bridge will restore the original row.",
-    confirmLabel: "Change File"
-  });
-  if (!confirmed) return;
   await runAction(
     actionScope(id),
     `Changing the linked file for ${label}…`,
@@ -651,14 +720,54 @@ async function replaceQueueFile(id, candidate) {
   );
 }
 
+async function linkLocalFile(id, candidate) {
+  const label = requestLabel(id);
+  await runAction(
+    actionScope(id),
+    `Linking ${candidate.fileName} to ${label}…`,
+    () => api(`/api/requests/${encodeURIComponent(id)}/link`, {
+      method: "POST",
+      body: JSON.stringify({ filePath: candidate.filePath })
+    }),
+    (data) => ({
+      title: "Local file linked",
+      detail: data.warning || `${label} now uses ${data.fileName}. Manual selection is protected from rescans.`
+    })
+  );
+}
+
+async function unlinkLocalFile(id) {
+  const label = requestLabel(id);
+  await runAction(
+    actionScope(id),
+    `Clearing the local link for ${label}…`,
+    () => api(`/api/requests/${encodeURIComponent(id)}/unlink`, {
+      method: "POST",
+      body: "{}"
+    }),
+    (data) => ({
+      title: "Local link cleared",
+      detail: data.warning || `${label} returned to normal matching without deleting the request.`
+    })
+  );
+}
+
+function confidenceLabel(candidate) {
+  const tier = {
+    "very-high": "very high",
+    high: "high",
+    medium: "medium",
+    low: "low"
+  }[candidate.confidenceTier] || "estimated";
+  const notes = [];
+  if (candidate.ambiguous) notes.push("ambiguous");
+  if (candidate.youtubeCorroborated) notes.push("YouTube corroborated");
+  if (candidate.artistConflict) notes.push("artist conflict");
+  return `${candidate.confidencePercent ?? Math.round(candidate.score * 100)}% · ${tier} confidence${notes.length ? ` · ${notes.join(" · ")}` : ""}`;
+}
+
 async function removeFromQueue(id) {
   const label = requestLabel(id);
-  const confirmed = await confirmAction({
-    title: "Remove from VirtualDJ",
-    detail: `Remove ${label} from the VirtualDJ rotation?`,
-    confirmLabel: "Remove"
-  });
-  if (!confirmed) return;
   await runAction(
     actionScope(id),
     `Removing ${label} from VirtualDJ…`,
@@ -668,6 +777,7 @@ async function removeFromQueue(id) {
     }),
     (data) => ({
       title: "Song removed from VirtualDJ",
+      action: { label: "Deshacer", run: () => queue(id) },
       detail:
         data.warning ||
         `${label} was removed and the live VirtualDJ queue confirmed the change.`
@@ -695,34 +805,29 @@ async function dismissRequeue(id) {
 
 async function markOutcome(id, outcome) {
   const songLabel = requestLabel(id);
-  if (
-    outcome === "skipped" &&
-    !(await confirmAction({
-      title: "Mark as Skipped",
-      detail: `Mark ${songLabel} as skipped, remove it from VirtualDJ and exclude it from the total time?`,
-      confirmLabel: "Mark Skipped"
-    }))
-  ) {
-    return;
-  }
   await runAction(
     actionScope(id),
     outcome === "completed"
       ? `Marking ${songLabel} as completed…`
-      : `Marking ${songLabel} as skipped…`,
+      : outcome === 'removed' ? `Removing ${songLabel}…` : `Marking ${songLabel} as skipped…`,
     () => api(
       `/api/requests/${encodeURIComponent(id)}/outcome`,
       {
         method: "POST",
-        body: JSON.stringify({ outcome })
+        body: JSON.stringify({ outcome, commandId: crypto.randomUUID() })
       }
     ),
     (data) => ({
-      title: outcome === "completed" ? "Singer completed" : "Song skipped",
+      title: outcome === "completed" ? "Singer completed" : outcome === 'removed' ? 'Request removed' : "Song skipped",
+      action: { label: "Deshacer", run: () => {
+        const item = state?.requests?.find(entry => entry.id === id);
+        return undoOutcome(id, item?.canRestoreToQueue ? (item.undoOriginalPosition ? "original" : "end") : "pending");
+      } },
       detail:
         data.warning ||
         (outcome === "completed"
           ? `${songLabel} is marked as completed; it remains included in total time and was removed from VirtualDJ.`
+          : outcome === 'removed' ? `${songLabel} was removed from the lineup. Undo is available.`
           : `${songLabel} is marked as skipped; it was removed from VirtualDJ and excluded from total time.`)
     })
   );
@@ -802,7 +907,6 @@ async function copyYoutubeOption(id, url) {
       ? "The selected link was copied and saved with the request."
       : "The selected link was copied to the clipboard.";
     showNotice(detail);
-    showSuccess("Karaoke link selected", detail);
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -846,6 +950,13 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
       duration(item.durationSeconds)
     ].filter(Boolean).join(" · ");
     info.append(optionLabel, strong, small);
+    if (item.localMatch) {
+      const related = document.createElement("small");
+      related.className = "youtube-local-match";
+      related.textContent = `Related local file: ${item.localMatch.fileName} · ${item.localMatch.confidencePercent}%`;
+      related.title = item.localMatch.fileName;
+      info.append(related);
+    }
     const actions = document.createElement("div");
     actions.className = "source-actions";
     actions.append(
@@ -854,6 +965,13 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
       ),
       button("Open ↗", "youtube", () => openExternal(item.url))
     );
+    if (item.localMatch) {
+      actions.prepend(
+        button("Link Local File", "ghost", () =>
+          linkLocalFile(requestId, item.localMatch)
+        )
+      );
+    }
     row.append(info, actions);
     list.append(row);
   });
@@ -952,6 +1070,7 @@ function renderVdjQueueContents() {
     const durationLabel = document.createElement("span");
     durationLabel.textContent = activityDuration(entry.durationSeconds);
     row.append(position, info, durationLabel);
+    bridgeOperations.appendRowActions(row, entry, entries);
     list.append(row);
   });
 }
@@ -1006,9 +1125,10 @@ function renderRequestContents() {
     ["active", "Active Requests", "Pending and linked, in arrival order", requestsEl],
     ["finished", "Completed / Skipped", "Only Undo can return them to the rotation", finishedRequestsEl]
   ].forEach(([key, title, detail, target]) => {
-    const section = document.createElement("section");
+    const section = document.createElement(key === "finished" ? "details" : "section");
     section.className = `request-group ${key}`;
-    const header = document.createElement("header");
+    if (key === "finished") section.open = bridgeFinishedExpanded;
+    const header = document.createElement(key === "finished" ? "summary" : "header");
     header.className = "request-group-head";
     const copy = document.createElement("div");
     const heading = document.createElement("h3");
@@ -1024,9 +1144,16 @@ function renderRequestContents() {
     list.className = "request-list";
     section.append(header, list);
     target.append(section);
+    if (key === "finished") {
+      section.addEventListener("toggle", () => {
+        bridgeFinishedExpanded = section.open;
+      });
+    }
     groups.set(key, { list, count, total: 0 });
   });
-  state.requests.forEach((item, index) => {
+  const visibleRequests = state.operatingMode?.selected === 'bridge' ? [...state.requests].sort((a, b) =>
+    (a.administrativePosition || Number.MAX_SAFE_INTEGER) - (b.administrativePosition || Number.MAX_SAFE_INTEGER)) : state.requests;
+  visibleRequests.forEach((item, index) => {
     const fragment = template.content.cloneNode(true);
     const card = $(".request-card", fragment);
     card.dataset.requestId = item.id;
@@ -1068,7 +1195,7 @@ function renderRequestContents() {
       `${activityDuration(plannedSeconds)}`;
     const badge = $(".state-badge", card);
     badge.classList.add(item.localState);
-    badge.textContent = {
+    badge.textContent = item.outcome === 'removed' ? 'Removed · Undo available' : {
       exact: "✓ Local file found",
       possible: "Possible match",
       missing: "Not available locally",
@@ -1102,7 +1229,7 @@ function renderRequestContents() {
       item.localState === "removed" ||
       item.localState === "removed-missing";
     const isTerminal =
-      item.localState === "completed" || item.localState === "skipped";
+      item.localState === "completed" || item.localState === "skipped" || item.outcome === 'removed';
     const details = $(".request-details", card);
     const detailsLabel = $("summary span", details);
     details.open = expandedRequestIds.has(item.id);
@@ -1119,6 +1246,7 @@ function renderRequestContents() {
     if (isTerminal) {
       match.innerHTML = item.localState === "completed"
         ? '<div class="outcome-summary completed"><strong>This person has performed.</strong><p>The song duration remains included in the activity total.</p></div>'
+        : item.outcome === 'removed' ? '<div class="outcome-summary skipped"><strong>This request was removed.</strong><p>Undo returns this same request without a duplicate.</p></div>'
         : '<div class="outcome-summary skipped"><strong>This song was skipped.</strong><p>Its duration was excluded from the activity total and it will not be resent to VirtualDJ.</p></div>';
     } else if (isUnverified) {
       match.innerHTML =
@@ -1178,7 +1306,7 @@ function renderRequestContents() {
       match.innerHTML =
         item.localState === "queued"
           ? item.manualLink
-            ? '<p class="empty-match"><strong>Manual link protected.</strong> Match percentages cannot unlink or remove this VirtualDJ row.</p>'
+            ? '<p class="empty-match"><strong>Manual local link protected.</strong> Rescans and match percentages cannot replace it.</p>'
             : '<p class="empty-match">This request is in VirtualDJ. Move it directly in VirtualDJ and the Bridge will preserve it at its new position.</p>'
           : '<p class="empty-match missing-warning">The file previously linked to this request no longer exists in the local folder.</p>';
       const actions = document.createElement("div");
@@ -1186,9 +1314,14 @@ function renderRequestContents() {
       actions.append(
         button("Remove from VirtualDJ", "danger", () => removeFromQueue(item.id))
       );
+      if (item.linkedFilePath) {
+        actions.prepend(
+          button("Unlink Local File", "ghost", () => unlinkLocalFile(item.id))
+        );
+      }
       match.append(actions);
       const replacementCandidates = item.matches.filter(
-        (candidate) => candidate.filePath !== item.queuedFilePath
+        (candidate) => candidate.filePath !== (item.linkedFilePath || item.queuedFilePath)
       );
       const changePanel = document.createElement("details");
       changePanel.className = "change-link-panel";
@@ -1209,13 +1342,21 @@ function renderRequestContents() {
           const name = document.createElement("strong");
           name.textContent = candidate.fileName;
           const score = document.createElement("small");
-          score.textContent = `${Math.round(candidate.score * 100)}% match`;
+          score.textContent = confidenceLabel(candidate);
           infoOption.append(name, score);
+          const optionActions = document.createElement("div");
+          optionActions.className = "source-actions";
+          optionActions.append(
+            button("Link Only", "ghost", () => linkLocalFile(item.id, candidate))
+          );
+          if (candidate.filePath !== item.queuedFilePath) {
+            optionActions.append(
+              button("Replace VDJ Row", "primary", () => replaceQueueFile(item.id, candidate))
+            );
+          }
           option.append(
             infoOption,
-            button("Use This File", "ghost", () =>
-              replaceQueueFile(item.id, candidate)
-            )
+            optionActions
           );
           candidates.append(option);
         });
@@ -1237,8 +1378,17 @@ function renderRequestContents() {
         );
         match.append(recovery);
       }
-    } else if (item.matches.length) {
-      const top = item.matches[0];
+    } else if (item.linkedFilePath || item.matches.length) {
+      const linkedMatch = item.matches.find((candidate) => candidate.filePath === item.linkedFilePath);
+      const top = item.linkedFilePath
+        ? linkedMatch || {
+            filePath: item.linkedFilePath,
+            fileName: item.linkedFileName,
+            score: 1,
+            confidencePercent: 100,
+            confidenceTier: "very-high"
+          }
+        : item.matches[0];
       const row = document.createElement("div");
       row.className = "match-row";
       const info = document.createElement("div");
@@ -1246,25 +1396,44 @@ function renderRequestContents() {
       const strong = document.createElement("strong");
       strong.textContent = top.fileName;
       const small = document.createElement("small");
-      small.textContent = `${Math.round(top.score * 100)}% match`;
+      small.textContent = item.linkedFilePath
+        ? `${item.manualLink ? "Manual" : "Automatic"} local link · protected`
+        : confidenceLabel(top);
       info.append(strong, small);
-      row.append(info, button("Add to VirtualDJ", "primary", () => queue(item.id, top.filePath)));
+      const topActions = document.createElement("div");
+      topActions.className = "source-actions";
+      if (!item.linkedFilePath) {
+        topActions.append(button("Link File", "ghost", () => linkLocalFile(item.id, top)));
+      } else {
+        topActions.append(button("Unlink", "ghost", () => unlinkLocalFile(item.id)));
+      }
+      if (!item.linkedFilePath || item.linkedFileAvailable) {
+        topActions.append(button("Add to VirtualDJ", "primary", () => queue(item.id, top.filePath)));
+      }
+      row.append(info, topActions);
       match.append(row);
-      if (item.matches.length > 1) {
+      const alternateMatches = item.matches.filter((candidate) => candidate.filePath !== top.filePath);
+      if (alternateMatches.length) {
         const candidates = document.createElement("div");
         candidates.className = "candidate-list";
-        item.matches.slice(1).forEach((candidate) => {
+        alternateMatches.forEach((candidate) => {
           const option = document.createElement("div");
           option.className = "candidate";
           const infoOption = document.createElement("span");
           const name = document.createElement("strong");
           name.textContent = candidate.fileName;
           const score = document.createElement("small");
-          score.textContent = `${Math.round(candidate.score * 100)}% match`;
+          score.textContent = confidenceLabel(candidate);
           infoOption.append(name, score);
+          const optionActions = document.createElement("div");
+          optionActions.className = "source-actions";
+          optionActions.append(
+            button("Link File", "ghost", () => linkLocalFile(item.id, candidate)),
+            button("Add to VDJ", "primary", () => queue(item.id, candidate.filePath))
+          );
           option.append(
             infoOption,
-            button("Use This File", "ghost", () => queue(item.id, candidate.filePath))
+            optionActions
           );
           candidates.append(option);
         });
@@ -1321,6 +1490,10 @@ function renderRequestContents() {
           undoOutcome(item.id, "pending")
         )
       );
+    }
+    if (state.operatingMode?.selected === 'bridge' && item.sourceType !== 'player_local') {
+      $(".request-main", card).insertBefore(outcomePanel, details);
+      bridgeOperations.appendRequestActions(outcomePanel, item);
     }
     if (requestPending) {
       card.classList.add("processing");
@@ -1524,12 +1697,16 @@ async function refreshAudioOutputs() {
     select.disabled = false;
     if (saved && seen.has(saved)) {
       select.value = saved;
-      status.textContent = "La salida seleccionada se aplicará a karaoke, stems y música ambiental.";
+      status.textContent = capability?.mode === "coreaudio"
+        ? "La app instalada aplicará esta salida real mediante CoreAudio a karaoke, stems y música de fondo. En este WebKit, el cambio corresponde a la salida del sistema macOS."
+        : "La salida seleccionada se aplicará a karaoke, stems y música de fondo.";
     } else {
       select.value = "";
       status.textContent = saved
         ? "La salida configurada ya no está disponible. Se usará la salida predeterminada."
-        : "La salida predeterminada mantiene karaoke, stems y ambiente en la misma ruta.";
+        : capability?.mode === "coreaudio"
+          ? "CoreAudio usará la salida predeterminada actual de macOS para toda la mezcla de Guest Star."
+          : "La salida predeterminada mantiene karaoke, stems y ambiente en la misma ruta.";
     }
   } catch (error) {
     select.innerHTML = '<option value="">Salida predeterminada del sistema</option>';
@@ -1544,7 +1721,7 @@ function renderNativeDisplays(displays = nativeDisplays) {
   const status = $("#preferencesDisplayStatus");
   if (!select || !status) return;
   const saved = select.value || state?.config?.starScreenDisplayId || "";
-  select.innerHTML = '<option value="">Pantalla principal</option>';
+  select.innerHTML = '<option value="">Automática · pantalla externa</option>';
   const ids = new Set([""]);
   displays.forEach((display, index) => {
     const id = String(display.displayId || display.uuid || "");
@@ -1565,8 +1742,8 @@ function renderNativeDisplays(displays = nativeDisplays) {
   } else {
     select.value = "";
     status.textContent = saved
-      ? "La pantalla configurada ya no está disponible. Se usará la pantalla principal."
-      : "Star Screen usará la pantalla principal hasta que elijas otra.";
+      ? "La pantalla configurada ya no está disponible. Se usará otra externa o una ventana en la principal."
+      : "Star Screen usará automáticamente la pantalla externa; sin ella se abrirá en una ventana.";
   }
 }
 
@@ -1585,8 +1762,64 @@ function requestNativeDisplays() {
 function applyInterfacePreferences(preferences = {}) {
   document.body.classList.toggle("preference-hide-star-preview", preferences.showStarScreenPreview === false);
   document.body.classList.toggle("preference-hide-waveform", preferences.showWaveform === false);
+  document.body.classList.toggle("preference-current-song-background", preferences.showCurrentSongBackground === true);
   document.body.classList.toggle("preference-hide-eq", preferences.showEq === false);
   document.body.classList.toggle("preference-hide-advanced", preferences.showAdvancedControls === false);
+  const publicPreferences = starScreenPreferences(preferences);
+  const signature = JSON.stringify(publicPreferences);
+  if (signature !== lastStarScreenPreferencesSignature) {
+    lastStarScreenPreferencesSignature = signature;
+    starScreenPreferencesChannel.postMessage({ type: "star-screen-preferences", preferences: publicPreferences, publishedAt: Date.now() });
+    try {
+      const snapshot = JSON.parse(localStorage.getItem("guest-star:player-state") || "null");
+      if (snapshot) localStorage.setItem("guest-star:player-state", JSON.stringify({ ...snapshot, starScreenPreferences: publicPreferences }));
+    } catch { /* The existing state stream remains authoritative. */ }
+  }
+}
+
+// Save presentation controls without submitting audio/activity settings.
+for (const selector of ["#preferenceShowWaveform", "#preferenceShowStarScreenNowPlaying", "#preferenceShowCurrentSongBackground", "#preferenceStarScreenSongSource", "#preferenceStarScreenLineupCount", "#preferenceShowActivityAccess"]) {
+  $(selector).addEventListener("change", async () => {
+    const controls = [$("#preferenceShowWaveform"), $("#preferenceShowStarScreenNowPlaying"), $("#preferenceShowCurrentSongBackground"), $("#preferenceStarScreenSongSource"), $("#preferenceStarScreenLineupCount"), $("#preferenceShowActivityAccess")];
+    const next = {
+      showWaveform: controls[0].checked,
+      showStarScreenNowPlaying: controls[1].checked,
+      showCurrentSongBackground: controls[2].checked,
+      starScreenSongSource: controls[3].value,
+      starScreenLineupCount: Number(controls[4].value),
+      showActivityAccess: controls[5].checked
+    };
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      const result = await api("/api/config", {
+        method: "POST", body: JSON.stringify({ interfacePreferences: next })
+      });
+      const confirmed = result.config?.interfacePreferences;
+      if (!confirmed || confirmed.showWaveform !== next.showWaveform ||
+          confirmed.showStarScreenNowPlaying !== next.showStarScreenNowPlaying ||
+          confirmed.showCurrentSongBackground !== next.showCurrentSongBackground ||
+          confirmed.starScreenSongSource !== next.starScreenSongSource ||
+          confirmed.starScreenLineupCount !== next.starScreenLineupCount ||
+          confirmed.showActivityAccess !== next.showActivityAccess) {
+        throw new Error("La preferencia visual no pudo confirmarse.");
+      }
+      state.config.interfacePreferences = confirmed;
+      applyInterfacePreferences(confirmed);
+      $("#starScreenPreferenceStatus").textContent = "Información de Star Screen guardada.";
+    } catch (error) {
+      const previous = state.config?.interfacePreferences || {};
+      controls[0].checked = previous.showWaveform !== false;
+      controls[1].checked = previous.showStarScreenNowPlaying !== false;
+      controls[2].checked = previous.showCurrentSongBackground === true;
+      controls[3].value = previous.starScreenSongSource === "local" ? "local" : "request";
+      controls[4].value = String(previous.starScreenLineupCount || 5);
+      controls[5].checked = previous.showActivityAccess === true;
+      $("#starScreenPreferenceStatus").textContent = error.message;
+      showNotice(error.message, true);
+    } finally {
+      controls.forEach(control => { control.disabled = false; });
+    }
+  });
 }
 
 function fillPreferences() {
@@ -1594,15 +1827,6 @@ function fillPreferences() {
   renderFolders();
   $("#rememberLibraryFolders").checked =
     state.config.rememberLibraryFolders !== false;
-  $("#appsScriptUrl").value = state.config.appsScriptUrl || "";
-  $("#hostPin").value = "";
-  $("#hostPin").placeholder = state.config.hostPinConfigured
-    ? "PIN saved · leave blank to keep"
-    : "Private PIN";
-  $("#rememberHostPin").checked = state.config.rememberHostPin !== false;
-  // Direct Apps Script/PIN values remain readable for automatic 3.x migration,
-  // but are never presented as operator controls in the 4.x interface.
-  $("#legacyConnection").classList.add("hidden");
   $("#vdjPort").value = state.config.virtualDJ.port || 80;
   $("#vdjPassword").value = "";
   $("#vdjPassword").placeholder = state.config.virtualDJ.passwordConfigured
@@ -1616,11 +1840,14 @@ function fillPreferences() {
   const interfacePreferences = state.config.interfacePreferences || {};
   $("#preferenceShowPreview").checked = interfacePreferences.showStarScreenPreview !== false;
   $("#preferenceShowWaveform").checked = interfacePreferences.showWaveform !== false;
+  $("#preferenceShowStarScreenNowPlaying").checked = interfacePreferences.showStarScreenNowPlaying !== false;
+  $("#preferenceShowActivityAccess").checked = interfacePreferences.showActivityAccess === true;
+  $("#preferenceShowCurrentSongBackground").checked = interfacePreferences.showCurrentSongBackground === true;
   $("#preferenceShowEq").checked = interfacePreferences.showEq !== false;
   $("#preferenceShowAdvanced").checked = interfacePreferences.showAdvancedControls !== false;
-  const diagnosticPreferences = state.config.diagnostics || {};
-  $("#diagnosticAutoSend").checked = diagnosticPreferences.autoSendTechnicalErrors === true;
-  $("#diagnosticTesterMode").checked = diagnosticPreferences.testerMode === true;
+  $("#preferenceStarScreenSongSource").value = interfacePreferences.starScreenSongSource === "local" ? "local" : "request";
+  $("#preferenceStarScreenLineupCount").value = String(interfacePreferences.starScreenLineupCount || 5);
+  diagnostics.sync(state);
   void diagnostics.refresh();
   void refreshAudioOutputs();
   requestNativeDisplays();
@@ -1681,9 +1908,6 @@ function preferencesPayload() {
     uiLanguage: bridgeI18n.getLanguage(),
     libraryFolders: folders.map((item) => item.trim()).filter(Boolean),
     rememberLibraryFolders: $("#rememberLibraryFolders").checked,
-    appsScriptUrl: $("#appsScriptUrl").value.trim(),
-    hostPin: $("#hostPin").value.trim(),
-    rememberHostPin: $("#rememberHostPin").checked,
     virtualDJ: {
       port: Number($("#vdjPort").value) || 80,
       password: $("#vdjPassword").value
@@ -1697,12 +1921,13 @@ function preferencesPayload() {
     interfacePreferences: {
       showStarScreenPreview: $("#preferenceShowPreview").checked,
       showWaveform: $("#preferenceShowWaveform").checked,
+      showStarScreenNowPlaying: $("#preferenceShowStarScreenNowPlaying").checked,
+      showActivityAccess: $("#preferenceShowActivityAccess").checked,
+      showCurrentSongBackground: $("#preferenceShowCurrentSongBackground").checked,
+      starScreenSongSource: $("#preferenceStarScreenSongSource").value,
+      starScreenLineupCount: Number($("#preferenceStarScreenLineupCount").value),
       showEq: $("#preferenceShowEq").checked,
       showAdvancedControls: $("#preferenceShowAdvanced").checked
-    },
-    diagnostics: {
-      autoSendTechnicalErrors: $("#diagnosticAutoSend").checked,
-      testerMode: $("#diagnosticTesterMode").checked
     }
   };
 }
@@ -1784,7 +2009,72 @@ function syncWhenActive() {
   const now = Date.now();
   if (now - lastInstantSyncAt < 1500) return;
   lastInstantSyncAt = now;
-  void syncRequests({ quiet: true });
+  // Cloud state arrives through the Bridge's authenticated realtime channel.
+  // A focus change only recovers the local UI snapshot; it must not create an
+  // extra D1 refresh while realtime is healthy.
+  void refresh();
+}
+
+function openStarScreenOnExternalDisplay() {
+  const handler = window.webkit?.messageHandlers?.guestStarNative;
+  if (!handler?.postMessage || !nativeDisplays.some(display => display.builtIn === false) || superhostPanel.isOpen() ||
+      !state?.tenant?.activity || !state?.operatingMode?.selected) return;
+  handler.postMessage({ action: "openStarScreen", displayId: state.config?.starScreenDisplayId || "",
+    url: "/star-screen.html?display=1&visual=canonical-canvas-7", preview: false });
+}
+
+function showHostForSelectedMode({ resetBridgeHistory = true } = {}) {
+  const selectedMode = state?.operatingMode?.selected || "";
+  const activityId = String(state?.account?.current?.activityId || state?.activity?.activityId || "");
+  if (selectedMode === "player" || selectedMode === "bridge") {
+    superhostInHostView = state?.account?.user?.role === "superhost";
+  }
+  if (selectedMode === "player") {
+    if (state?.activity?.activityRunning) autoRestoredPlayerActivityId = activityId;
+    superhostPanel.close();
+    playerPanel.open();
+  } else if (selectedMode === "bridge") {
+    if (state?.activity?.activityRunning) autoRestoredBridgeActivityId = activityId;
+    if (resetBridgeHistory) bridgeFinishedExpanded = false;
+    superhostPanel.close();
+    playerPanel.close({ force: true });
+    renderRequests();
+  }
+  updateStatus();
+  openStarScreenOnExternalDisplay();
+}
+
+function requestHostEntry({ selectionConfirmed = false } = {}) {
+  if ((!selectionConfirmed && superhostPanel.isOpen()) || !state?.tenant?.activity || !state?.account?.current?.activityId) {
+    pendingHostEntry = true;
+    fillSelection(true);
+    if (!selectionDialog.open) selectionDialog.showModal();
+    showNotice("Selecciona una actividad para entrar al modo Host.", true);
+    return;
+  }
+  if (!state?.operatingMode?.selected) {
+    pendingHostEntry = true;
+    openPlaybackModeDialog();
+    return;
+  }
+  pendingHostEntry = false;
+  showHostForSelectedMode();
+}
+
+function openSuperhostView() {
+  if (state?.account?.user?.role !== "superhost") return;
+  pendingHostEntry = false;
+  superhostInHostView = false;
+  const activityId = String(state?.account?.current?.activityId || state?.activity?.activityId || "");
+  if (state?.activity?.activityRunning && state?.operatingMode?.selected === "player") {
+    autoRestoredPlayerActivityId = activityId;
+  }
+  if (state?.activity?.activityRunning && state?.operatingMode?.selected === "bridge") {
+    autoRestoredBridgeActivityId = activityId;
+  }
+  playerPanel.close({ force: true });
+  superhostPanel.open();
+  updateStatus();
 }
 
 function openPlaybackModeDialog(action = "") {
@@ -1812,10 +2102,13 @@ async function selectPlaybackMode(mode) {
     applyState(next);
     if (playbackModeDialog.open) playbackModeDialog.close();
     const action = pendingActivityAction;
+    const shouldEnterHost = pendingHostEntry || !superhostPanel.isOpen();
     pendingActivityAction = "";
+    pendingHostEntry = false;
+    if (shouldEnterHost) showHostForSelectedMode();
     showNotice(mode === "player"
-      ? "Player interno seleccionado. Este modo se bloqueará al iniciar."
-      : "Bridge con VirtualDJ seleccionado. Este modo se bloqueará al iniciar.");
+      ? "Player interno seleccionado. Puedes cambiarlo hasta iniciar la actividad."
+      : "Bridge con VirtualDJ seleccionado. Puedes cambiarlo hasta iniciar la actividad.");
     if (action) await controlActivity(action);
   } catch (error) {
     showNotice(error.message, true);
@@ -1883,7 +2176,7 @@ function option(select, value, label) {
   select.append(element);
 }
 
-function fillSelection() {
+function fillSelection(explicitActivity = false) {
   const available = state.account?.selection || { hotels: [], venues: [], activities: [] };
   const current = state.account?.current || {};
   const hotelSelect = $("#hotelSelect");
@@ -1915,13 +2208,28 @@ function fillSelection() {
         activity.venueId === $("#venueSelect").value
       )
       .forEach((activity) => option(activitySelect, activity.activityId, activity.name));
-    activitySelect.value = current.activityId && [...activitySelect.options]
+    activitySelect.value = !explicitActivity && current.activityId && [...activitySelect.options]
       .some((entry) => entry.value === current.activityId)
       ? current.activityId
-      : activitySelect.options[1]?.value || "";
+      : "";
   };
-  hotelSelect.onchange = refreshVenues;
-  $("#venueSelect").onchange = refreshActivities;
+  const grid = $("#hotelChoiceGrid");
+  grid.replaceChildren();
+  for (const hotel of available.hotels || []) {
+    const button = document.createElement("button"); button.type = "button";
+    const logo = document.createElement("span"); logo.className = "brand-logos";
+    const name = document.createElement("strong"); name.textContent = hotel.name;
+    button.append(logo, name); grid.append(button);
+    const branding = superhostPanel.hotelBranding(hotel.hotelId);
+    const url = branding.hotelLogoUrl || hotel.logoUrl || (hotel.hotelId === current.hotelId ? state.tenant?.branding?.hotelLogoUrl : "");
+    renderBrandLogos(logo, [url], normalizeBrandImageUrl);
+    button.dataset.hotelId = hotel.hotelId;
+    button.addEventListener("click", () => { hotelSelect.value = hotel.hotelId; hotelSelect.dispatchEvent(new Event("change")); });
+  }
+  const refreshHotelCards = () => [...grid.children].forEach(button => button.setAttribute("aria-pressed", String(button.dataset.hotelId === hotelSelect.value)));
+  hotelSelect.onchange = () => { explicitActivity = true; refreshHotelCards(); refreshVenues(); };
+  $("#venueSelect").onchange = () => { explicitActivity = true; refreshActivities(); };
+  refreshHotelCards();
   refreshVenues();
 }
 
@@ -1956,8 +2264,14 @@ function updateAuthUi() {
   }
   if (state.account?.user?.role === "superhost") return;
   if (!state.account?.current?.activityId && !passwordDialog.open) {
-    fillSelection();
+    fillSelection(true);
     if (!selectionDialog.open) selectionDialog.showModal();
+    return;
+  }
+  const activityId = String(state.account?.current?.activityId || "");
+  if (activityId && autoOpenedHostActivityId !== activityId && !passwordDialog.open) {
+    autoOpenedHostActivityId = activityId;
+    requestHostEntry();
   }
 }
 
@@ -2053,6 +2367,11 @@ $("#selectionForm").addEventListener("submit", async (event) => {
   const error = $("#selectionError");
   error.classList.add("hidden");
   try {
+    if (!$("#hotelSelect").value || !$("#venueSelect").value || !$("#activitySelect").value) return;
+    if (state?.activity?.activityRunning) {
+      const current = state.account?.current || {};
+      if (current.hotelId !== $("#hotelSelect").value || current.venueId !== $("#venueSelect").value || current.activityId !== $("#activitySelect").value) throw new Error("Finaliza la actividad antes de cambiar hotel, actividad o modo.");
+    } else {
     applyState(await api("/api/auth/selection", {
       method: "POST",
       body: JSON.stringify({
@@ -2062,19 +2381,24 @@ $("#selectionForm").addEventListener("submit", async (event) => {
         rememberSelection: $("#rememberSelection").checked
       })
     }));
+    }
     selectionDialog.close();
     showNotice("This Bridge is ready for the selected activity.");
+    if (pendingHostEntry || state.account?.user?.role !== "superhost") requestHostEntry({ selectionConfirmed: true });
   } catch (selectionError) {
     error.textContent = selectionError.message;
     error.classList.remove("hidden");
   }
 });
 
+selectionDialog.addEventListener("cancel", () => { pendingHostEntry = false; });
 $("#closeSelection").addEventListener("click", () => {
+  pendingHostEntry = false;
   if (state.account?.current?.activityId) selectionDialog.close();
 });
 $("#closePlaybackMode").addEventListener("click", () => {
   pendingActivityAction = "";
+  pendingHostEntry = false;
   if (playbackModeDialog.open) playbackModeDialog.close();
 });
 playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => {
@@ -2103,33 +2427,13 @@ async function logout() {
 $("#logoutButton").addEventListener("click", logout);
 $("#menuLogout").addEventListener("click", logout);
 $("#openHostPanel").addEventListener("click", () => {
-  if (state?.activity?.activityRunning) {
-    showNotice("La actividad en curso permanece dentro del modo elegido hasta finalizar.", true);
-    return;
-  }
-  playerPanel.close();
-  superhostPanel.open();
-  updateStatus();
+  if (superhostPanel.isOpen()) requestHostEntry();
+  else openSuperhostView();
 });
-$("#liveEventButton").addEventListener("click", () => {
-  if (state?.activity?.activityRunning) {
-    showNotice("La actividad en curso permanece dentro del modo elegido hasta finalizar.", true);
-    return;
-  }
-  playerPanel.close();
-  superhostPanel.close();
-  updateStatus();
-});
-$("#playerBetaButton").addEventListener("click", () => {
-  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
-    showNotice("Selecciona una actividad antes de abrir el Player.", true);
-    return;
-  }
-  superhostPanel.close();
-  playerPanel.open();
-  updateStatus();
-});
-$("#playbackModeButton").addEventListener("click", () => openPlaybackModeDialog());
+$("#bridgeChangeMode").addEventListener("click", () => openPlaybackModeDialog());
+$("#playerChangeMode").addEventListener("click", () => openPlaybackModeDialog());
+window.addEventListener("gueststar:open-host", requestHostEntry);
+window.addEventListener("gueststar:open-superhost", openSuperhostView);
 
 $("#primaryActivity").addEventListener("click", () =>
   controlActivity($("#primaryActivity").dataset.action || "start")
@@ -2141,6 +2445,20 @@ $("#requestsToggle").addEventListener("change", async (event) => {
 $("#archiveQueue").addEventListener("click", async () => {
   moreDialog.close();
   await controlActivity("archive");
+});
+
+$("#hostSessionQrButton").addEventListener("click", () => {
+  const access = currentHostActivityAccess(state, {
+    superhostInHostView: superhostInHostView && !superhostPanel.isOpen()
+  });
+  if (access && renderHostActivityQr(access)) hostActivityQrDialog.showModal();
+});
+$("#closeHostActivityQr").addEventListener("click", () => hostActivityQrDialog.close());
+$("#copyHostActivityLink").addEventListener("click", () => {
+  const access = currentHostActivityAccess(state, {
+    superhostInHostView: superhostInHostView && !superhostPanel.isOpen()
+  });
+  if (access?.joinUrl) copyLink(access.joinUrl, "Enlace directo de la actividad copiado.");
 });
 
 $("#shareButton").addEventListener("click", () => {
@@ -2190,6 +2508,7 @@ $("#previewGuestPage").addEventListener("click", async () => {
 $("#viewPrevious").addEventListener("click", () => {
   moreDialog.close();
   if (state.account?.user?.role === "superhost") {
+    superhostInHostView = false;
     superhostPanel.openTab("operation");
     updateStatus();
   } else {
@@ -2207,6 +2526,7 @@ function openPreferences() {
   if (!state?.config) return;
   fillPreferences();
   if (!preferencesDialog.open) preferencesDialog.showModal();
+  void storagePreferences.refresh();
 }
 $("#preferencesButton").addEventListener("click", openPreferences);
 $("#closePreferences").addEventListener("click", () => preferencesDialog.close());
@@ -2214,8 +2534,10 @@ $("#preferencesAudioRefresh").addEventListener("click", () => void refreshAudioO
 $("#preferencesDisplayRefresh").addEventListener("click", requestNativeDisplays);
 window.addEventListener("gueststar:open-preferences", openPreferences);
 window.addEventListener("gueststar:native-displays", (event) => {
+  const previousIds = new Set(nativeDisplays.map(display => display.displayId));
   nativeDisplays = Array.isArray(event.detail?.displays) ? event.detail.displays : [];
   renderNativeDisplays();
+  if (nativeDisplays.some(display => !previousIds.has(display.displayId))) openStarScreenOnExternalDisplay();
 });
 window.addEventListener("gueststar:native-star-screen-result", (event) => {
   const result = event.detail || {};
@@ -2234,24 +2556,6 @@ $("#chooseFolder").addEventListener("click", async () => {
     const data = await api("/api/library/choose-folder", { method: "POST", body: "{}" });
     if (!folders.includes(data.folder)) folders.push(data.folder);
     renderFolders();
-  } catch (error) {
-    showNotice(error.message, true);
-  }
-});
-$("#forgetHostPin").addEventListener("click", async () => {
-  if (!(await confirmAction({
-    title: "Forget PIN",
-    detail: "Forget the PIN saved on this Mac?",
-    confirmLabel: "Forget"
-  }))) return;
-  try {
-    await api("/api/config", {
-      method: "POST",
-      body: JSON.stringify({ clearHostPin: true })
-    });
-    showNotice("The saved PIN was removed from the app.");
-    await refresh();
-    fillPreferences();
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -2360,8 +2664,14 @@ $("#testVdj").addEventListener("click", async () => {
 });
 
 function applyState(nextState) {
+  bridgeOperations.captureFocus();
+  storagePreferences.observeState(nextState);
   preserveBridgeScroll(() => {
     state = nextState;
+
+    if (state.account?.authenticated !== true || state.account?.user?.role !== "superhost") {
+      superhostInHostView = false;
+    }
     bridgeI18n.setLanguage(state.config?.uiLanguage || "es");
     const versionLabel = $("#bridgeVersion");
     if (versionLabel) versionLabel.textContent = `v${state.version || "unknown"}`;
@@ -2370,6 +2680,7 @@ function applyState(nextState) {
     renderRequests();
     renderHitSuggestions();
     updateAuthUi();
+    bridgeOperations.render();
     superhostPanel.sync(state);
     playerPanel.sync(state);
     diagnostics.sync(state);
@@ -2381,24 +2692,36 @@ function applyState(nextState) {
         : "";
     if (activePlayerActivityId && autoRestoredPlayerActivityId !== activePlayerActivityId) {
       autoRestoredPlayerActivityId = activePlayerActivityId;
+      superhostInHostView = state.account?.user?.role === "superhost";
       superhostPanel.close();
       playerPanel.open();
-    } else if (state.activity?.activityRunning === true && state.operatingMode?.selected === "bridge") {
+    } else if (
+      state.activity?.activityRunning === true &&
+      state.operatingMode?.selected === "bridge" &&
+      autoRestoredBridgeActivityId !== String(state.account?.current?.activityId || state.activity?.activityId || "")
+    ) {
+      autoRestoredBridgeActivityId = String(state.account?.current?.activityId || state.activity?.activityId || "");
+      superhostInHostView = state.account?.user?.role === "superhost";
       superhostPanel.close();
       playerPanel.close({ force: true });
       autoRestoredPlayerActivityId = "";
     } else if (!activePlayerActivityId) {
       autoRestoredPlayerActivityId = "";
+      if (state.activity?.activityRunning !== true || state.operatingMode?.selected !== "bridge") {
+        autoRestoredBridgeActivityId = "";
+      }
     }
     updateStatus();
     bridgeI18n.refresh();
   });
+  bridgeOperations.restoreFocus();
 }
 
 $("#uiLanguageSelect").addEventListener("change", async (event) => {
   const language = event.target.value === "en" ? "en" : "es";
   preserveBridgeScroll(() => {
     bridgeI18n.setLanguage(language);
+    storagePreferences.renderLanguage();
     updateStatus();
     renderVdjQueue();
     renderRequests();
@@ -2409,20 +2732,53 @@ $("#uiLanguageSelect").addEventListener("change", async (event) => {
 
 function connectRealtime() {
   const source = new EventSource("/api/events");
+  let fallbackTimer;
+  let closed = false;
+  const clearFallback = () => {
+    if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+    fallbackTimer = undefined;
+  };
+  const scheduleFallback = () => {
+    if (closed || source.readyState === EventSource.OPEN || fallbackTimer !== undefined) return;
+    fallbackTimer = window.setTimeout(async () => {
+      fallbackTimer = undefined;
+      if (closed || source.readyState === EventSource.OPEN) return;
+      await refresh();
+      scheduleFallback();
+    }, 30000);
+  };
+  source.addEventListener("open", clearFallback);
+  source.addEventListener("error", scheduleFallback);
   source.addEventListener("state", (event) => {
     try {
       applyState(JSON.parse(event.data));
     } catch {
-      // EventSource reconnects automatically; the fallback refresh remains active.
+      // EventSource reconnects automatically; fallback is only active offline.
     }
   });
-  return source;
+  source.addEventListener("interface-preferences", (event) => {
+    try {
+      const preferences = JSON.parse(event.data);
+      state.config.interfacePreferences = preferences;
+      applyInterfacePreferences(preferences);
+    } catch { /* A later existing state refresh restores confirmed preferences. */ }
+  });
+  return {
+    close() {
+      closed = true;
+      clearFallback();
+      source.close();
+    }
+  };
 }
 
 await refresh();
 const realtimeSource = connectRealtime();
 window.addEventListener("beforeunload", () => realtimeSource.close());
+window.addEventListener("gueststar:native-audio-result", (event) => {
+  if (["nativeAudioLoad", "nativeAudioStop"].includes(event.detail?.action)) storagePreferences.changed();
+});
 window.addEventListener("focus", syncWhenActive);
+window.addEventListener("focus", () => storagePreferences.changed());
 document.addEventListener("visibilitychange", syncWhenActive);
 window.setInterval(updateTimeDashboard, 1000);
-window.setInterval(refresh, 30000);

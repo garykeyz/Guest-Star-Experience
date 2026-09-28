@@ -239,6 +239,43 @@ export function buildKaraokeRemoveScript(index) {
   return steps.join(" & ");
 }
 
+export async function moveKaraokeEntry(config, entry, beforeEntry = null) {
+  const before = await listKaraokeEntries(config);
+  const matches = before.filter(candidate => sameKaraokeIdentity(candidate, entry));
+  const anchors = beforeEntry ? before.filter(candidate => sameKaraokeIdentity(candidate, beforeEntry)) : [];
+  if (matches.length !== 1 || (beforeEntry && anchors.length !== 1)) {
+    throw new Error('The source or destination changed or is ambiguous. Synchronize the queue again.');
+  }
+  const source = matches[0];
+  if (/["`\r\n\0]/.test(source.filePath + source.singer)) throw new Error('This physical VDJ identity cannot be safely quoted.');
+  const target = beforeEntry ? anchors[0] : null;
+  if (target?.index === source.index) return { moved: false, entries: before };
+  const desired = target ? target.index - (source.index < target.index ? 1 : 0) : before.length - 1;
+  const delta = desired - source.index;
+  if (!delta) return { moved: false, entries: before };
+  const selection = ['browser_window "karaoke"', 'browser_scroll "top"'];
+  for (let position = 0; position < source.index; position++) selection.push('browser_scroll +1');
+  await executeVdj(config, selection.join(' & '));
+  // Existing Network Control/browser mechanism, guarded by source identity.
+  // No remove/reinsert, filesystem rename or duplicate row is involved.
+  // VirtualDJ's documented browser_move contract accepts one relative row at
+  // a time (+1/-1). Keep the whole guarded move in one execute request while
+  // repeating that supported primitive for multi-row drag destinations.
+  const moveSteps = Array.from({ length: Math.abs(delta) }, () => `browser_move ${delta > 0 ? '+1' : '-1'}`).join(' & ');
+  const script = `param_equal \`get_browsed_filepath\` "${safeVdjValue(source.filePath)}" ? ` +
+    `param_equal \`get_browsed_song 'singer'\` "${safeVdjValue(source.singer)}" ? ` +
+    `${moveSteps} : nothing : nothing`;
+  await executeVdj(config, script);
+  const after = await listKaraokeEntries(config);
+  const moved = after.filter(candidate => sameKaraokeIdentity(candidate, source));
+  const destination = target ? after.filter(candidate => sameKaraokeIdentity(candidate, target)) : [];
+  if (moved.length !== 1 || (target && (destination.length !== 1 || moved[0].index + 1 !== destination[0].index)) ||
+      (!target && moved[0].index !== after.length - 1)) {
+    throw new Error('VDJ did not confirm the requested order. Its current queue was preserved; no command was retried.');
+  }
+  return { moved: true, index: moved[0].index, entries: after };
+}
+
 function networkUrl(config, endpoint) {
   const host = config.host || "127.0.0.1";
   const port = Number(config.port) || 80;
@@ -363,7 +400,9 @@ async function readKaraokeSnapshot(config) {
     // read in order. Concurrent POSTs can return stale rows or HRESULT values.
     const filePath = await readQueueValue(
       config,
-      karaokeSongQuery("filepath", index),
+      // `filepath` is only the containing directory in current VirtualDJ.
+      // `fullpath` is the stable song identity used by the browsed/deck APIs.
+      karaokeSongQuery("fullpath", index),
       "file path",
       index
     );

@@ -2,7 +2,7 @@ import { setLocalQrImage } from "./qr-ui.js";
 
 const GUEST_LANGUAGES = [
   ["es", "Español"], ["en", "English"], ["fr", "Français"],
-  ["it", "Italiano"], ["de", "Deutsch"], ["ru", "Русский"], ["pt", "Português"]
+  ["it", "Italiano"], ["de", "Deutsch"], ["ru", "Русский"], ["pt", "Português"], ["hi", "हिन्दी"]
 ];
 const WEEKDAYS = [
   [0, "Domingo", "Sunday"], [1, "Lunes", "Monday"],
@@ -476,6 +476,7 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
   let language = "es";
   let activeTab = "hotels";
   let admin = null;
+  let creatingActivity = false;
   let reviews = [];
   let selectedBrandingHotel = "";
   let selectedFavoriteHotel = "";
@@ -768,12 +769,18 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     } else if (form.id === "createVenueForm") {
       if (await mutate("createVenue", data)) form.reset();
     } else if (form.id === "createActivityForm") {
+      if (creatingActivity || !form.reportValidity()) return;
       const venue = (admin.venues || []).find((item) => value(item, "venueId") === data.venueId);
       const allowedLanguages = selectedFormLanguages(form);
       if (!allowedLanguages.length) {
         notify(text().atLeastOneLanguage, true);
         return;
       }
+      if (!venue || !String(data.name || "").trim()) return;
+      creatingActivity = true;
+      const buttons = [...form.querySelectorAll('button[type="submit"],button:not([type])')];
+      buttons.forEach(button => { button.disabled = true; });
+      try {
       await mutate("createActivity", {
         hotelId: value(venue, "hotelId"),
         venueId: data.venueId,
@@ -783,6 +790,10 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
         showCountdown: true,
         allowedLanguages
       });
+      } finally {
+        creatingActivity = false;
+        buttons.forEach(button => { button.disabled = false; });
+      }
     } else if (form.id === "scheduleForm") {
       const activityId = form.dataset.activityId || data.activityId;
       const activity = (admin.activities || []).find((item) => value(item, "activityId") === activityId);
@@ -1076,5 +1087,5 @@ export function initSuperhostPanel({ api, showNotice, copyLink, openExternal }) 
     }
   }
 
-  return { open, openTab, close, sync, isOpen: () => opened, reload: load };
+  return { open, openTab, close, sync, isOpen: () => opened, reload: load, hotelBranding: hotelId => (admin?.branding || []).find(item => value(item, "hotelId") === hotelId) || {} };
 }

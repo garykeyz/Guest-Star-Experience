@@ -40,6 +40,18 @@ function cleanRecovery(value = {}) {
   };
 }
 
+function cleanRequestFileLink(value = {}) {
+  const id = String(value.id || "").trim();
+  const filePath = String(value.filePath || "").trim();
+  if (!id || !filePath) return null;
+  return {
+    id,
+    filePath,
+    source: value.source === "automatic" ? "automatic" : "manual",
+    updatedAt: String(value.updatedAt || "").trim()
+  };
+}
+
 function cleanPlayerRequest(value = {}) {
   const id = String(value.id || "").trim();
   const filePath = String(value.filePath || "").trim();
@@ -131,6 +143,8 @@ function cleanPlayerStemJob(value = {}) {
     manifestPath: String(value.manifestPath || "").trim(),
     instrumentalPath: String(value.instrumentalPath || "").trim(),
     vocalsPath: String(value.vocalsPath || "").trim(),
+    gsxPath: String(value.gsxPath || "").trim(),
+    cacheFormat: value.cacheFormat === "gsx" ? "gsx" : value.cacheFormat === "legacy" ? "legacy" : "",
     error: String(value.error || "").trim(),
     cacheHit: value.cacheHit === true,
     estimatedTurnSeconds: Math.max(0, Number(value.estimatedTurnSeconds) || 0),
@@ -152,6 +166,24 @@ function cleanPlayerStemJob(value = {}) {
   };
 }
 
+function cleanMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return ["player", "bridge"].includes(mode) ? mode : "";
+}
+
+function cleanActiveActivityState(value = {}, legacy = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const activityId = String(source.activityId || legacy.activityId || "").trim();
+  const activityStartedAt = String(source.activityStartedAt || legacy.activityStartedAt || "").trim();
+  const playbackMode = cleanMode(source.playbackMode || legacy.operatingMode);
+  if (!activityId || !Number.isFinite(Date.parse(activityStartedAt)) || !playbackMode) {
+    return { activityId: "", activityStartedAt: "", playbackMode: "" };
+  }
+  return { activityId, activityStartedAt, playbackMode };
+}
+
 export function normalizeQueueState(value = {}) {
   const entries = Array.isArray(value.entries)
     ? value.entries.map(cleanEntry).filter(Boolean)
@@ -168,12 +200,22 @@ export function normalizeQueueState(value = {}) {
   const playerRequests = Array.isArray(value.playerRequests)
     ? value.playerRequests.map(cleanPlayerRequest).filter(Boolean)
     : [];
+  const requestFileLinks = Array.isArray(value.requestFileLinks)
+    ? value.requestFileLinks.map(cleanRequestFileLink).filter(Boolean)
+    : [];
+  const legacyMode = cleanMode(value.operatingMode);
+  const hasExplicitActiveState = Object.prototype.hasOwnProperty.call(value, "activeActivityState");
   return {
     activityId: String(value.activityId || "").trim(),
     activityStartedAt: String(value.activityStartedAt || "").trim(),
-    operatingMode: ["player", "bridge"].includes(String(value.operatingMode || "").trim())
-      ? String(value.operatingMode).trim()
-      : "",
+    // lastSelectedMode is only a preference. activeActivityState is the
+    // persisted session candidate and must still be confirmed remotely.
+    lastSelectedMode: cleanMode(value.lastSelectedMode) || legacyMode,
+    activeActivityState: cleanActiveActivityState(
+      value.activeActivityState,
+      hasExplicitActiveState ? {} : value
+    ),
+    operatingMode: legacyMode,
     entries,
     suppressedIds,
     recoveries,
@@ -184,7 +226,8 @@ export function normalizeQueueState(value = {}) {
     playerPlayback: cleanPlayerPlayback(value.playerPlayback),
     playerStemJobs: Array.isArray(value.playerStemJobs)
       ? value.playerStemJobs.map(cleanPlayerStemJob).filter(Boolean)
-      : []
+      : [],
+    requestFileLinks
   };
 }
 
@@ -209,7 +252,10 @@ export async function saveQueueState(
   playerOrder = [],
   playerPlayback = {},
   playerStemJobs = [],
-  playerQueueVisibility = {}
+  playerQueueVisibility = {},
+  requestFileLinks = [],
+  lastSelectedMode = operatingMode,
+  activeActivityState = {}
 ) {
   const clean = normalizeQueueState({
     activityId,
@@ -219,11 +265,14 @@ export async function saveQueueState(
     recoveries: Array.from(recoveries || []),
     removedIds: Array.from(removedIds || []),
     operatingMode,
+    lastSelectedMode,
+    activeActivityState,
     playerRequests: Array.from(playerRequests || []),
     playerOrder: Array.from(playerOrder || []),
     playerQueueVisibility,
     playerPlayback,
-    playerStemJobs: Array.from(playerStemJobs || [])
+    playerStemJobs: Array.from(playerStemJobs || []),
+    requestFileLinks: Array.from(requestFileLinks || [])
   });
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");

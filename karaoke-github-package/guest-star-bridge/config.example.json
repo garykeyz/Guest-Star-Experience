@@ -21,16 +21,12 @@
     "autoSendTechnicalErrors": false,
     "testerMode": false
   },
-  "appsScriptUrl": "https://request.gstarxp.com/api/bridge",
-  "hostPin": "",
-  "rememberHostPin": true,
   "virtualDJ": {
     "host": "127.0.0.1",
     "port": 80,
     "password": "",
     "timeoutMs": 3500
   },
-  "requestIntervalSeconds": 2,
   "scanIntervalSeconds": 10,
   "autoQueueExact": false
 }

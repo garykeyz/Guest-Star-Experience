@@ -53,7 +53,9 @@ export function sanitizeDiagnosticValue(value, depth = 0, seen = new WeakSet()) 
   if (seen.has(value)) return "<circular>";
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map((entry) => sanitizeDiagnosticValue(entry, depth + 1, seen));
+    const result = value.slice(0, 100).map((entry) => sanitizeDiagnosticValue(entry, depth + 1, seen));
+    seen.delete(value);
+    return result;
   }
   const result = {};
   for (const [key, entry] of Object.entries(value).slice(0, 100)) {
@@ -68,6 +70,7 @@ export function sanitizeDiagnosticValue(value, depth = 0, seen = new WeakSet()) 
       result[key] = sanitizeDiagnosticValue(entry, depth + 1, seen);
     }
   }
+  seen.delete(value);
   return result;
 }
 
@@ -124,8 +127,10 @@ function cleanLocation(value = {}) {
 
 export function normalizeDiagnosticEvent(value = {}, defaults = {}) {
   const location = cleanLocation(value);
-  const timestamp = Number.isFinite(Date.parse(String(value.timestamp || "")))
-    ? new Date(value.timestamp).toISOString()
+  const sourceTimestamp = String(value.timestamp || "").trim();
+  const timestampIsValid = Number.isFinite(Date.parse(sourceTimestamp));
+  const timestamp = timestampIsValid
+    ? new Date(sourceTimestamp).toISOString()
     : new Date().toISOString();
   const event = {
     eventId: clipped(value.eventId || `GSE-${randomUUID()}`, 80),
@@ -144,7 +149,10 @@ export function normalizeDiagnosticEvent(value = {}, defaults = {}) {
     jobId: clipped(value.jobId || "", 100),
     engine: clipped(value.engine || "", 40),
     elapsedMs: Math.max(0, Number(value.elapsedMs) || 0),
-    context: sanitizeDiagnosticValue(value.context || {})
+    context: sanitizeDiagnosticValue({
+      ...(value.context || {}),
+      ...(!timestampIsValid && sourceTimestamp ? { originalInvalidTimestamp: sourceTimestamp } : {})
+    })
   };
   event.fingerprint = diagnosticFingerprint(event);
   return event;
