@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-export async function activityPersistenceFixture({keep=false,remember=true,automation=false,cloudDelay=0,runtimeSource='',playing=false,autoQueueExact=false,manualVdj=false,auditWrites=false,role='superhost',startedAt='2026-10-05T18:00:00.000Z'}={}) {
+export async function activityPersistenceFixture({keep=false,remember=true,automation=false,cloudDelay=0,stallYoutube=false,runtimeSource='',playing=false,autoQueueExact=false,manualVdj=false,auditWrites=false,role='superhost',startedAt='2026-10-05T18:00:00.000Z'}={}) {
   const root=await mkdtemp(join(tmpdir(),'guest-star-activity-persistence-'));
   await Promise.all(['src','public'].map(d=>cp(runtimeSource?join(runtimeSource,d):new URL('../../'+d,import.meta.url),join(root,d),{recursive:true})));
   await Promise.all(['data','library','stem-engine'].map(d=>mkdir(join(root,d))));
@@ -14,13 +14,14 @@ export async function activityPersistenceFixture({keep=false,remember=true,autom
   const started=startedAt;
   const activities={A:{hotelId:'hotel-A',venueId:'venue-A',activityId:'A',name:'Activity A',status:'finished'},B:{hotelId:'hotel-B',venueId:'venue-B',activityId:'B',name:'Activity B',status:'scheduled'}};
   const rows={A:[{id:'a-queued',singer:'Singer A',song:'A',artist:'Artist A',fileName:paths[0],status:'Agregada a VirtualDJ',durationSeconds:120,stateRevision:1},{id:'a-finished',singer:'Finished A',song:'Finished',status:'Ya cantó',stateRevision:1},{id:'a-pending',singer:'Pending A',song:'Missing A',status:'Pendiente',stateRevision:1}],B:[{id:'b-pending',singer:'Singer B',song:'Missing B',status:'Pendiente',durationSeconds:180,stateRevision:1}]};
-  let selected='A',cloudFailureId='';const calls=[],commands=[];
+  let selected='A',cloudFailureId='',youtubeReleased=false;const stalledYoutubeResponses=[];const calls=[],commands=[];
   const physical=[{filepath:paths[0],singer:'Singer A',title:'A',artist:'Artist A',length:'2:00'},{filepath:paths[2],singer:'External',title:'External',artist:'Outside',length:'3:00'}];
   let master=.73,loadedPath=paths[0],vdjOnline=true,loseNextEnqueueResponse=false,beforeEffect=null;const cloudCommands=[],queries=[];
   let runStatus='in_progress',accepting=true;
   const payload=()=>({ok:true,codeVersion:'4.6',bridgeFeatures:{versionedMetadata:true,playedCompareAndSet:true,administrativeReorder:true},state:{activityId:selected,activityRunning:automation&&runStatus==='in_progress',activityStartedAt:selected==='A'?started:'',activityFinishedAt:automation?(runStatus==='finished'?new Date().toISOString():''):selected==='A'?'2026-10-05T20:00:00.000Z':'',activityHours:selected==='A'?2:3,transitionSeconds:30,accepting:automation?accepting:selected==='B',playbackMode:'',stateRevision:1},requests:rows[selected],session:automation?{runId:'fixture-run',hotelId:activities[selected].hotelId,venueId:activities[selected].venueId,activityId:selected,playbackSource:'bridge',status:runStatus,startsAt:started,startedAt:started,autoFinish:true,durationSeconds:7200}:null,hotel:{hotelId:activities[selected].hotelId,name:'Hotel '+selected,timezone:'America/Santo_Domingo'},venue:{venueId:activities[selected].venueId,name:'Venue '+selected},activity:activities[selected],kioskAccess:{...activities[selected],pin:selected==='A'?'111111':'222222',joinUrl:'https://request.gstarxp.com/join/fixture-'+selected},permissions:{all:true}});
   const listen=server=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(server.address().port)));
   const cloud=createServer(async(req,res)=>{const chunks=[];for await(const c of req)chunks.push(c);const b=JSON.parse(Buffer.concat(chunks).toString()||'{}');calls.push({action:b.action,activityId:b.activityId,id:b.id});let result={ok:true};
+    if(stallYoutube && !youtubeReleased && b.action==='youtubeSearchV4'){stalledYoutubeResponses.push(res);return;}
     if(cloudDelay)await new Promise(r=>setTimeout(r,cloudDelay));
     if(automation&&['prepareSession','startActivityV4','finishActivityV4','toggleRequests'].includes(b.action)){if(b.action==='finishActivityV4'){runStatus='finished';accepting=false;}if(b.action==='startActivityV4')runStatus='in_progress';if(b.action==='toggleRequests')accepting=b.open===true;result=payload();}
     if(b.action==='pollBridgeCommands')result={ok:true,commands:cloudCommands.splice(0)};
@@ -63,5 +64,5 @@ export async function activityPersistenceFixture({keep=false,remember=true,autom
   const stop=async()=>{if(child?.exitCode===null){const done=once(child,'exit');child.kill('SIGTERM');await done;}};
   const close=async()=>{await stop();for(const s of [cloud,vdj]){s.closeAllConnections();await new Promise(r=>s.close(r));}if(!keep)await rm(root,{recursive:true,force:true});};
   await start();
-  return {root,base,get,post,close,stop,start,calls,commands,queries,rows,physical,paths,activities,cloudCommands,setOnline:value=>{vdjOnline=value;},loseResponse:()=>{loseNextEnqueueResponse=true;},setPlayback:(path,play=false)=>{loadedPath=path;playing=play;},loaded:()=>loadedPath,setBeforeEffect:fn=>{beforeEffect=fn;},master:()=>master,setCloudFailure:id=>{cloudFailureId=id;}};
+  return {root,base,get,post,close,stop,start,calls,commands,queries,rows,physical,paths,activities,cloudCommands,releaseYoutube:()=>{youtubeReleased=true;for(const res of stalledYoutubeResponses)if(!res.destroyed)res.end(JSON.stringify({ok:true,items:[]}));},setOnline:value=>{vdjOnline=value;},loseResponse:()=>{loseNextEnqueueResponse=true;},setPlayback:(path,play=false)=>{loadedPath=path;playing=play;},loaded:()=>loadedPath,setBeforeEffect:fn=>{beforeEffect=fn;},master:()=>master,setCloudFailure:id=>{cloudFailureId=id;}};
 }

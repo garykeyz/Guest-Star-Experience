@@ -1321,6 +1321,23 @@ function numberOr(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+// Re-entering the already running Bridge is not a tenant/context switch.
+// Validate remotely, but do not wait for unrelated maintenance or suspend delivery.
+function sameRunningBridgeSelection(selection, data = null) {
+  if (freeModeSession || !activityState.activityRunning || operatingMode !== 'bridge' ||
+      !tenantState.activity || tenantState.activity.activityId !== selection.activityId ||
+      activityContextKey(currentContextSelection()) !== activityContextKey(selection)) return false;
+  if (!data) return true;
+  const next = normalizedActivity(data);
+  return next.activityRunning && next.activityId === selection.activityId &&
+    next.activityStartedAt === activityState.activityStartedAt &&
+    String(data.session?.playbackSource || next.playbackMode) === 'bridge' &&
+    String(data.hotel?.hotelId) === selection.hotelId &&
+    String(data.venue?.venueId) === selection.venueId &&
+    String(data.activity?.activityId) === selection.activityId &&
+    String(data.session?.runId || '') === String(tenantState.session?.runId || '');
+}
+
 function normalizedActivity(data = {}) {
   const source = data?.state && typeof data.state === "object" ? data.state : data;
   const activityId = String(source.activityId ?? activityState.activityId ?? "");
@@ -6372,6 +6389,27 @@ async function api(request, response, url) {
     }
     const selection = {hotelId:String(body.hotelId || ''),venueId:String(body.venueId || ''),activityId:String(body.activityId || '')};
     if (activityState.activityRunning && activityContextKey(currentContextSelection())!==activityContextKey(selection) && !superhostCanOverride()) throw new Error('Finaliza la actividad antes de cambiar de contexto.');
+    if (sameRunningBridgeSelection(selection)) {
+      // The existing endpoint rechecks credentials, tenant access and the run.
+      // Keep requests, outcomes and revision arbitration owned by the receiver.
+      const resumeScope = activityContextKey(currentContextSelection(), activityState.activityStartedAt);
+      const resumed = await selectBridgeActivity(config, selection);
+      if (activitySelectionBusy || clearOperationsBusy || queueLocks.size || vdjQueueOperationBusy ||
+          resumeScope !== activityContextKey(currentContextSelection(), activityState.activityStartedAt)) {
+        json(response, 409, { error: 'La actividad cambió durante la validación. Vuelve a seleccionarla.' });
+        return;
+      }
+      if (sameRunningBridgeSelection(selection, resumed)) {
+        if (body.rememberSelection === true) {
+          config = await saveConfig(sanitizeConfig({ rememberedActivity: selection }, config));
+        }
+        applyActivityState(resumed);
+        entryModeResolved = true;
+        json(response, 200, stateView());
+        broadcastState();
+        return;
+      }
+    }
     activitySelectionBusy=true;entryModeResolved=false;stopCloudRealtime();
     try {
       await Promise.all([syncOperation,maintenanceOperation,vdjQueueCheckPromise]);
