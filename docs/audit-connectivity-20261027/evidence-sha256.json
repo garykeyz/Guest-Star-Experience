@@ -1,0 +1,20 @@
+{
+  "d1-trace-verification.json": "e74dd27d4ff967c48ba92a6aa6b074dde7a563cbcb60a3c0d7f59d08bb550796",
+  "all-stage-runs-counts.json": "5321ae111a6605694eb76085718433bb44e01d35acbd0730bd19424dfc8c75d5",
+  "request-trace.csv": "2f383d06766aad1fbec148b0cee4ec278bccf9ff303fa35dd0c1cfff9034fefe",
+  "versions-comparison.json": "946c239e173434541239b784e7d0967dffc14604cda71c9a5352c1bba4677a2d",
+  "latency-by-batch.json": "30c99aa3058692e6ddeae117f01054c9f799a4def361dbd7acd18774eb22cb75",
+  "rc2-critical.txt": "f564561d2d38733fb7cd2c335b61ba49ce69cc9756a67530a513502a4b6b31e1",
+  "resume-repair-test.txt": "5668bdc283fff8ede4ff2b7ad633d77f02b80221d72fa06851eb579e2555b8ef",
+  "production-restored.json": "b73db6885599082b2f7d1bc97f1f5b1d6337758646f02a568f3be085b4d1e1f9",
+  "README.md": "959b36100227ffb975cb635f71cc1b905b6f560d4df6da0c15cf417b6b6c1ab0",
+  "resume-before-final.txt": "f483495fe1358666cb760368a00abee8e56d36e4fe276ae90b508dd68ac42653",
+  "third-d1-trace-verification.json": "e42a07b100893413d1762531984e59a34181c12c47d9e7a522790d481c297da4",
+  "dmg-attestation.json": "68d59730fd27def9576f9f02da78e69b39ec8184d86842ad4f9066660ab52ce2",
+  "request-trace.json": "5a1bae3041149560aa2f2f568cf601e5b4d7397032d8fd589fec0bb62c9c2381",
+  "rc2-regression-comparison.json": "1fc02e87a14f163e76b3b9da32ea1321390e9c2ab3a5b9d92ec54c0249ec0cf6",
+  "guest-star-connectivity-audit-20261027-metrics.json": "87f3287a9c5797d012c7f8d20e69100e21165a50e0bf70677cb518cf3f1eb39b",
+  "third-attempt-request-trace-verified.json": "62954ee9f52deed892053101b8bf257704f6cfb82f1f2898cf6caed1ce9b22e6",
+  "socket-recovery-results.json": "5ea80a391d5d17f1027ae86bc62d58b1771b05cd9d4af36ea221d50d2b85254f",
+  "github-download-verification.json": "bfcdc6a554625a7b8499c5fc92a9deab01dc34f6171e08a368ce0c37e88443b5"
+}

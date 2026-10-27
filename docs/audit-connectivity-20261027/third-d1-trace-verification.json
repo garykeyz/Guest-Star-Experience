@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "accepted": 283,
+  "persisted": 283,
+  "visible": 283,
+  "missing": 0,
+  "duplicateIDs": 0,
+  "uniqueQueuePositions": 283,
+  "minPosition": 1,
+  "maxPosition": 283,
+  "singleCycle": true,
+  "tenantIsolationVerified": true,
+  "readMeta": {
+    "served_by": "v3-prod",
+    "served_by_region": "ENAM",
+    "served_by_colo": "MIA",
+    "served_by_primary": true,
+    "timings": {
+      "sql_duration_ms": 2.0834
+    },
+    "duration": 2.0834,
+    "changes": 0,
+    "last_row_id": 0,
+    "changed_db": false,
+    "size_after": 901120,
+    "rows_read": 566,
+    "rows_written": 0,
+    "total_attempts": 1
+  }
+}

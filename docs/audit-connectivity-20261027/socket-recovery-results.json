@@ -1,0 +1,247 @@
+{
+  "startedAt": "2026-10-27T21:51:05.303Z",
+  "virtualClients": 100,
+  "initial100At": "2026-10-27T21:52:25.351Z",
+  "recovered100At": "2026-10-27T21:52:40.334Z",
+  "passed": true,
+  "endedAt": "2026-10-27T21:55:40.336Z",
+  "peak": 100,
+  "finalConnected": 100,
+  "uniqueSessions": 100,
+  "uniquePongs": 100,
+  "mobileResumed": 30,
+  "samplesAt100": 173,
+  "totalSamples": 272,
+  "closed": [
+    {
+      "client": 6,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945589
+    },
+    {
+      "client": 4,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945592
+    },
+    {
+      "client": 8,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945594
+    },
+    {
+      "client": 23,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945607
+    },
+    {
+      "client": 25,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945619
+    },
+    {
+      "client": 27,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945624
+    },
+    {
+      "client": 2,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945625
+    },
+    {
+      "client": 29,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945626
+    },
+    {
+      "client": 22,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945626
+    },
+    {
+      "client": 20,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945627
+    },
+    {
+      "client": 26,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945627
+    },
+    {
+      "client": 28,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945628
+    },
+    {
+      "client": 19,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945638
+    },
+    {
+      "client": 12,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945638
+    },
+    {
+      "client": 3,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945638
+    },
+    {
+      "client": 24,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945638
+    },
+    {
+      "client": 9,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945638
+    },
+    {
+      "client": 0,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945677
+    },
+    {
+      "client": 16,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945720
+    },
+    {
+      "client": 13,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945723
+    },
+    {
+      "client": 17,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945742
+    },
+    {
+      "client": 14,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945749
+    },
+    {
+      "client": 10,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137945756
+    },
+    {
+      "client": 7,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946042
+    },
+    {
+      "client": 5,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946042
+    },
+    {
+      "client": 1,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946042
+    },
+    {
+      "client": 21,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946459
+    },
+    {
+      "client": 18,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946585
+    },
+    {
+      "client": 11,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137946587
+    },
+    {
+      "client": 15,
+      "code": 1000,
+      "reason": "mobile background test",
+      "at": 1793137975402
+    },
+    {
+      "client": 64,
+      "code": 1006,
+      "reason": "",
+      "at": 1793137991637
+    },
+    {
+      "client": 94,
+      "code": 1006,
+      "reason": "",
+      "at": 1793137994181
+    },
+    {
+      "client": 43,
+      "code": 1006,
+      "reason": "",
+      "at": 1793137998448
+    },
+    {
+      "client": 50,
+      "code": 1006,
+      "reason": "",
+      "at": 1793138017171
+    },
+    {
+      "client": 59,
+      "code": 1006,
+      "reason": "",
+      "at": 1793138090982
+    },
+    {
+      "client": 15,
+      "code": 1006,
+      "reason": "",
+      "at": 1793138102001
+    }
+  ],
+  "errors": [
+    {
+      "stage": "http",
+      "code": "UND_ERR_CONNECT_TIMEOUT",
+      "message": "fetch failed",
+      "attempt": 0
+    },
+    {
+      "stage": "http",
+      "code": "UND_ERR_CONNECT_TIMEOUT",
+      "message": "fetch failed",
+      "attempt": 0
+    }
+  ]
+}

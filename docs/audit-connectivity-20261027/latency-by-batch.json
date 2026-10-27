@@ -1,0 +1,214 @@
+[
+  {
+    "trace": "third-attempt-request-trace-verified.json",
+    "count": 283,
+    "statistics": [
+      {
+        "batch": "batch10",
+        "accepted": 10,
+        "visible": 10,
+        "meanMs": 2451.4,
+        "p95Ms": 4239,
+        "maxMs": 4239,
+        "httpMeanMs": 728.3960083000013,
+        "httpP95Ms": 1074.1993340000045
+      },
+      {
+        "batch": "batch25",
+        "accepted": 25,
+        "visible": 25,
+        "meanMs": 4359.56,
+        "p95Ms": 8706,
+        "maxMs": 9647,
+        "httpMeanMs": 3639.389573360001,
+        "httpP95Ms": 8115.421125000008
+      },
+      {
+        "batch": "batch3",
+        "accepted": 3,
+        "visible": 3,
+        "meanMs": 3550,
+        "p95Ms": 4274,
+        "maxMs": 4274,
+        "httpMeanMs": 738.0649029999986,
+        "httpP95Ms": 990.8967919999996
+      },
+      {
+        "batch": "batch50",
+        "accepted": 50,
+        "visible": 50,
+        "meanMs": 4471.48,
+        "p95Ms": 6245,
+        "maxMs": 12930,
+        "httpMeanMs": 3064.68645326,
+        "httpP95Ms": 5506.491750000001
+      },
+      {
+        "batch": "concurrent100",
+        "accepted": 100,
+        "visible": 100,
+        "meanMs": 5170.45,
+        "p95Ms": 13758,
+        "maxMs": 18334,
+        "httpMeanMs": 3430.42814713,
+        "httpP95Ms": 6360.930166000006
+      },
+      {
+        "batch": "during-updates",
+        "accepted": 20,
+        "visible": 20,
+        "meanMs": 3415.3,
+        "p95Ms": 5711,
+        "maxMs": 5711,
+        "httpMeanMs": 1870.7260437000034,
+        "httpP95Ms": 5706.648083000007
+      },
+      {
+        "batch": "latency1700",
+        "accepted": 10,
+        "visible": 10,
+        "meanMs": 9872.3,
+        "p95Ms": 9873,
+        "maxMs": 9873,
+        "httpMeanMs": 1582.6884539999999,
+        "httpP95Ms": 3136.930541000009
+      },
+      {
+        "batch": "lost-invalidation",
+        "accepted": 1,
+        "visible": 1,
+        "meanMs": 25127,
+        "p95Ms": 25127,
+        "maxMs": 25127,
+        "httpMeanMs": 1855.9075840000005,
+        "httpP95Ms": 1855.9075840000005
+      },
+      {
+        "batch": "offline",
+        "accepted": 20,
+        "visible": 20,
+        "meanMs": 17867.05,
+        "p95Ms": 17869,
+        "maxMs": 17869,
+        "httpMeanMs": 2272.723166749998,
+        "httpP95Ms": 6726.103040999995
+      },
+      {
+        "batch": "soak",
+        "accepted": 44,
+        "visible": 44,
+        "meanMs": 3664.8636363636365,
+        "p95Ms": 4812,
+        "maxMs": 38184,
+        "httpMeanMs": 1366.1061383409085,
+        "httpP95Ms": 3018.4557090000017
+      }
+    ]
+  },
+  {
+    "trace": "request-trace.json",
+    "count": 271,
+    "statistics": [
+      {
+        "batch": "batch10",
+        "accepted": 10,
+        "visible": 10,
+        "meanMs": 3928.8,
+        "p95Ms": 9224,
+        "maxMs": 9224,
+        "httpMeanMs": 850.1902790999986,
+        "httpP95Ms": 1291.003582999998
+      },
+      {
+        "batch": "batch25",
+        "accepted": 25,
+        "visible": 25,
+        "meanMs": 7659.64,
+        "p95Ms": 17194,
+        "maxMs": 21477,
+        "httpMeanMs": 2553.228223479999,
+        "httpP95Ms": 4493.646584000002
+      },
+      {
+        "batch": "batch3",
+        "accepted": 3,
+        "visible": 3,
+        "meanMs": 2786,
+        "p95Ms": 2923,
+        "maxMs": 2923,
+        "httpMeanMs": 1394.6645970000052,
+        "httpP95Ms": 1524.2778749999998
+      },
+      {
+        "batch": "batch50",
+        "accepted": 50,
+        "visible": 50,
+        "meanMs": 16805.14,
+        "p95Ms": 19372,
+        "maxMs": 19372,
+        "httpMeanMs": 3850.9038491600018,
+        "httpP95Ms": 7384.937542000014
+      },
+      {
+        "batch": "concurrent100",
+        "accepted": 100,
+        "visible": 100,
+        "meanMs": 19707.1,
+        "p95Ms": 20264,
+        "maxMs": 20264,
+        "httpMeanMs": 4124.56021326,
+        "httpP95Ms": 8483.827916999988
+      },
+      {
+        "batch": "during-updates",
+        "accepted": 20,
+        "visible": 20,
+        "meanMs": 19575.15,
+        "p95Ms": 28006,
+        "maxMs": 28006,
+        "httpMeanMs": 4239.822831250002,
+        "httpP95Ms": 10617.337083999999
+      },
+      {
+        "batch": "latency1700",
+        "accepted": 10,
+        "visible": 10,
+        "meanMs": 28554,
+        "p95Ms": 28554,
+        "maxMs": 28554,
+        "httpMeanMs": 2411.9675958000007,
+        "httpP95Ms": 7475.907042000006
+      },
+      {
+        "batch": "lost-invalidation",
+        "accepted": 1,
+        "visible": 1,
+        "meanMs": 23997,
+        "p95Ms": 23997,
+        "maxMs": 23997,
+        "httpMeanMs": 1250.0253749999974,
+        "httpP95Ms": 1250.0253749999974
+      },
+      {
+        "batch": "offline",
+        "accepted": 20,
+        "visible": 20,
+        "meanMs": 17924.65,
+        "p95Ms": 17926,
+        "maxMs": 17926,
+        "httpMeanMs": 1827.2971083499956,
+        "httpP95Ms": 3830.7337919999845
+      },
+      {
+        "batch": "soak",
+        "accepted": 32,
+        "visible": 32,
+        "meanMs": 8928.90625,
+        "p95Ms": 27243,
+        "maxMs": 28640,
+        "httpMeanMs": 1607.1923007500063,
+        "httpP95Ms": 3316.3729169999715
+      }
+    ]
+  }
+]
