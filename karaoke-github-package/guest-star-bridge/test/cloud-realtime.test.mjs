@@ -123,15 +123,9 @@ test("no-op and idempotent writes do not fan out invalidations", () => {
     ),
     {}
   );
-  assert.deepEqual(
-    realtimeResponseHeaders(
-      "/api/bridge",
-      "selectActivity",
-      {},
-      { ok: true, hotel: { hotelId: "verified-hotel" } }
-    ),
-    {}
-  );
+  const selectionHeaders=realtimeResponseHeaders('/api/bridge','selectActivity',{}, {ok:true,hotel:{hotelId:'verified-hotel'}});
+  assert.equal(selectionHeaders['X-Guest-Star-Realtime-Channel'],undefined,'selection must not fan out a queue invalidation');
+  assert.equal(JSON.parse(selectionHeaders['X-Guest-Star-Run-Wakeup']).hotelId,'verified-hotel','authorized selection may wake the run alarm');
 });
 
 test("public queue changes carry an absolute count instead of causing one D1 read per guest", async () => {

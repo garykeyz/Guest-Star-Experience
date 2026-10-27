@@ -1,3 +1,4 @@
+const packageVersion = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json',import.meta.url),'utf8')).version;
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -90,8 +91,8 @@ test("Star Screen reutiliza una sola ventana, respeta pantalla y recupera foco",
   assert.match(nativeHostSource, /setStarScreenDisplay/);
   assert.match(nativeHostSource, /updateStarScreenDisplayWithPayload:/);
   assert.match(nativeHostSource, /NSApplicationDidChangeScreenParametersNotification/);
-  assert.match(nativeHostSource, /requestedScreen \?: \[self primaryScreen\]/);
-  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| NSScreen\.screens\.count <= 1/);
+  assert.match(nativeHostSource, /requested \?: \[self primaryScreen\]/);
+  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| \(NSScreen\.screens\.count <= 1 &&\s*\[self isBuiltInScreen:screen\]\)/);
   assert.match(nativeHostSource, /NSWindowCollectionBehaviorDefault/);
   assert.match(nativeHostSource, /contentAspectRatio = NSMakeSize\(16, 9\)/);
   assert.match(nativeHostSource, /9\.0 \/ 16\.0/);
@@ -102,7 +103,7 @@ test("Star Screen reutiliza una sola ventana, respeta pantalla y recupera foco",
 });
 
 test("Star Screen es flotante con una sola pantalla y conserva la salida externa", () => {
-  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| NSScreen\.screens\.count <= 1/);
+  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| \(NSScreen\.screens\.count <= 1 &&\s*\[self isBuiltInScreen:screen\]\)/);
   assert.match(
     nativeHostSource,
     /if \(floatingWindow\) \{[\s\S]*?NSWindowStyleMaskTitled[\s\S]*?NSWindowStyleMaskClosable[\s\S]*?NSWindowStyleMaskMiniaturizable[\s\S]*?NSWindowStyleMaskResizable[\s\S]*?\} else \{[\s\S]*?NSWindowStyleMaskBorderless[\s\S]*?NSWindowCollectionBehaviorCanJoinAllSpaces[\s\S]*?NSWindowCollectionBehaviorFullScreenAuxiliary[\s\S]*?setFrame:screen\.frame/
@@ -178,7 +179,7 @@ test("firma y valida plist, frameworks, binario final, DMG y ZIP", () => {
 test("selecciona automáticamente el runtime correcto en cada Mac", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.5"/);
+  assert.ok(shellSource.includes('APP_VERSION="'+packageVersion+'"'));
   assert.match(shellSource, /GUEST_STAR_PORT=8787 \/usr\/bin\/nohup/);
   assert.match(shellSource, /puerto local 8787 está ocupado por otra aplicación/);
   assert.match(shellSource, /\.bundle-build/);

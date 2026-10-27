@@ -92,7 +92,7 @@ test('lyrics HTTP isolated: allowed resolution, cache/export, jobs and origin',{
     assert.equal((await f.json(request)).data.status,'cancelled');
     await pause(100);const retry=await f.json(plain,'POST',{language:'auto',force:true});assert.equal(retry.status,200);
     const ready=await until(()=>f.json(request),r=>r.data.status==='ready');assert.equal(ready.data.provider,'whisper-tiny-local');assert.equal(ready.data.estimated,true);assert.equal(ready.data.segments[0].text,'Protocol fixture cue');assert.ok(ready.data.segments[0].words.length);
-    assert.match((await f.api(request+'/lrc')).text,/\[00:01.50\](?:<[^>]+>)?Protocol fixture cue/);
+    const exported=(await f.api(request+'/lrc')).text;assert.match(exported,/<00:02\.06>/,'enhanced LRC preserves word timing');assert.match(exported.replace(/<\d\d:\d\d\.\d\d>/g,''),/\[00:01.50\]Protocol fixture cue/);
   });
   await t.test('lyrics operations preserve queue/config and do not issue cloud mutations',async()=>{
     assert.equal(await readFile(f.configPath,'utf8'),configBefore);assert.equal(await readFile(f.queuePath,'utf8'),queueBefore);

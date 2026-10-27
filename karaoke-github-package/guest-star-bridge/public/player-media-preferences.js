@@ -4,8 +4,8 @@ export function installPlayerMediaPreferences({request,document}){
  for(const kind of ['audio','video']){
   const prefix='#player'+(kind==='audio'?'Audio':'Video');
   $(prefix+'Add').addEventListener('click',()=>{value[kind+'Folders'].push('');render();});
-  $(prefix+'Choose').addEventListener('click',async()=>{try{const selected=await request('/api/player/media/choose-folder',{method:'POST',body:JSON.stringify({kind})});if(selected.folder){value[kind+'Folders'].push(selected.folder);render();}}catch(e){$('#playerMediaStatus').textContent=e.message;}});
+  $(prefix+'Choose').addEventListener('click',async()=>{try{const selected=await request('/api/player/media/choose-folder',{method:'POST',body:JSON.stringify({kind})});if(selected.folder){value[kind+'Folders'].push(selected.folder);render();}}catch(e){$('#playerMediaPreferencesStatus').textContent=e.message;}});
  }
- $('#playerMediaSave').addEventListener('click',async()=>{try{value.priority=$('#playerMediaPriority').value;for(const kind of ['audio','video'])value[kind+'Folders']=value[kind+'Folders'].map(x=>x.trim()).filter(Boolean);value=await request('/api/player/media-preferences',{method:'POST',body:JSON.stringify(value)});render();$('#playerMediaStatus').textContent='Preferencias del Player guardadas. La pista en reproducción conserva su fuente.';}catch(e){$('#playerMediaStatus').textContent=e.message;}});
- return {async load(){try{value=await request('/api/player/media-preferences');render();}catch(e){$('#playerMediaStatus').textContent=e.message;}}};
+ $('#playerMediaSave').addEventListener('click',async()=>{try{value.priority=$('#playerMediaPriority').value;for(const kind of ['audio','video'])value[kind+'Folders']=value[kind+'Folders'].map(x=>x.trim()).filter(Boolean);value=await request('/api/player/media-preferences',{method:'POST',body:JSON.stringify(value)});render();$('#playerMediaPreferencesStatus').textContent='Preferencias del Player guardadas. La pista en reproducción conserva su fuente.';}catch(e){$('#playerMediaPreferencesStatus').textContent=e.message;}});
+ return {async load(){try{value=await request('/api/player/media-preferences');render();}catch(e){$('#playerMediaPreferencesStatus').textContent=e.message;}}};
 }

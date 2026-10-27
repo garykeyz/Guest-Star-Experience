@@ -33,7 +33,7 @@ test("storage UI: calculating, actual values, path tooltip and language without 
   complete(data); await pending;
   assert.equal(f.elements.Total.textContent, "3,4 GB utilizados");
   const row = f.elements.List.children[0];
-  assert.equal(row.children[0].children[0].textContent, "Stems IA · Library <b>");
+  assert.equal(row.children[0].children[0].textContent, "Voz guía IA · Library <b>");
   assert.equal(row.children[0].children[1].title, "/test/Library/.guest-star-stems");
   f.setLanguage("en"); f.controller.renderLanguage();
   assert.equal(f.elements.Total.textContent, "3.4 GB used");

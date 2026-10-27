@@ -33,7 +33,7 @@ async function waitForState(url, predicate, timeoutMs = 12000) {
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
-  throw new Error(`El estado esperado no llegó: ${JSON.stringify(latest)}`);
+  throw new Error(`El estado esperado no llegó: ${JSON.stringify({mode:latest?.operatingMode,activity:latest?.activity,requests:latest?.requests?.map(r=>({id:r.id,queued:r.queued,localState:r.localState,duration:r.durationSeconds,youtube:r.youtube?.length})),virtualDJ:latest?.virtualDJ})}`);
 }
 
 test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
@@ -98,7 +98,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     let payload = { ok: true };
-    if (body.action === "activityState") {
+    if (["activityState","selectActivity"].includes(body.action)) {
       payload = {
         ok: true,
         codeVersion: "4.2.0",
@@ -163,6 +163,8 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
         ]
       };
     }
+    if (body.action==='me') payload={ok:true,user:{userId:'fixture-host',role:'superhost'},selection:{hotels:[{hotelId:'hotel-1',name:'Test hotel'}],venues:[{hotelId:'hotel-1',venueId:'venue-1',name:'Test venue'}],activities:[{hotelId:'hotel-1',venueId:'venue-1',activityId:'activity-1',name:'Test activity',status:'in_progress'}]}};
+    if (payload.state) Object.assign(payload,{hotel:{hotelId:'hotel-1',name:'Test hotel'},venue:{venueId:'venue-1',name:'Test venue'},activity:{activityId:activity.activityId,name:'Test activity',status:'in_progress'},permissions:{all:true}});
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(payload));
   });
@@ -216,7 +218,11 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       response.end("true");
       return;
     }
-    if (script === "file_count karaoke") response.end(String(vdjQueue.length));
+    if(script.includes('`file_count karaoke & param_cast'))response.end([vdjQueue.length,vdjQueue[0]?.filepath||'',vdjQueue[0]?.singer||'','','off','off'].join('|'));
+    else if(script.includes('`get_decks`'))response.end('1|1|1');
+    else if(script.includes('get_songlength'))response.end('0|0|||');
+    else if(script.includes('get_text'))response.end('|off|off|off|0|off|');
+    else if (script === "file_count karaoke") response.end(String(vdjQueue.length));
     else if (script === "get_clock") response.end("10:30 PM");
     else {
       const next = script.match(
@@ -273,6 +279,9 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   });
 
   const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
+  await waitForState(bridgeUrl,c=>c.requests?.length===2);
+  const mode=await fetch(`${bridgeUrl}/api/activity/mode`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'bridge'})});
+  assert.equal(mode.status,200,await mode.text());
   let state = await waitForState(
     bridgeUrl,
     (candidate) =>
@@ -296,7 +305,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   assert.equal(state.virtualDJ.entries[0].localAvailable, true);
   assert.equal(state.virtualDJ.entries[0].availableInVirtualDJ, true);
   assert.equal(state.activitySummary.queueSongCount, 2);
-  assert.equal(state.activitySummary.queuedSeconds, 483);
+  assert.equal(state.activitySummary.queuedSeconds, 273);
 
   const playerLibrary = await fetch(`${bridgeUrl}/api/player/library?query=hello`)
     .then((response) => response.json());
@@ -343,7 +352,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: localSong })
+      body: JSON.stringify({ filePath: localSong, origin:'HOST_SEND_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   ).then((response) => response.json());
   assert.equal(restored.restored, true);
@@ -377,7 +386,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: localSong })
+      body: JSON.stringify({ filePath: localSong, origin:'HOST_SEND_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   ).then((response) => response.json());
   assert.equal(queuedAgain.ok, true);
@@ -412,7 +421,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   ).then((response) => response.json());
   assert.equal(youtubeLinked.ok, true);
   state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
-  assert.equal(state.requests.find((item) => item.id === "request-1").linkedFilePath, "");
+  assert.equal(state.requests.find((item) => item.id === "request-1").linkedFilePath, await realpath(replacementSong), "clipboard selection must preserve the explicit file link and physical row");
   assert.match(state.requests.find((item) => item.id === "request-1").sourceUrl, /youtube\.com/);
 
   await fetch(`${bridgeUrl}/api/requests/request-1/link`, {
@@ -443,10 +452,10 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: replacementSong })
+      body: JSON.stringify({ filePath: replacementSong,origin:'HOST_REPLACE_IN_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   ).then((response) => response.json());
-  assert.equal(replaced.replaced, true);
+  assert.equal(replaced.replaced, true, JSON.stringify(replaced));
   assert.equal(replaced.fileName, "Adele - Hello Alternate Karaoke.mp4");
   assert.equal(
     vdjQueue.find((entry) => entry.singer === "Ana")?.filepath,
@@ -505,7 +514,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: localSong })
+      body: JSON.stringify({ filePath: localSong, origin:'HOST_SEND_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   );
   assert.equal(blockedTerminalRequeue.status, 400);
@@ -519,7 +528,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ placement: "original" })
+      body: JSON.stringify({ placement: 'original',origin:'HOST_RETURN_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   ).then((response) => response.json());
   assert.equal(undoneToOriginalTurn.restoredToVirtualDJ, true);
@@ -546,14 +555,15 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     }
   ).then((response) => response.json());
   assert.equal(undoneOutsideQueue.restoredToVirtualDJ, false);
-  assert.equal(undoneOutsideQueue.status, "Fuera de VirtualDJ");
+  assert.equal(undoneOutsideQueue.status, "Pendiente");
+  assert.equal(vdjQueue.some(entry=>entry.singer==='Ana'),false,'undo to pending cannot insert into the physical queue');
 
   const queuedAfterUndo = await fetch(
     `${bridgeUrl}/api/requests/request-1/queue`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: localSong })
+      body: JSON.stringify({ filePath: localSong, origin:'HOST_SEND_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }
   ).then((response) => response.json());
   assert.equal(queuedAfterUndo.ok, true);
@@ -561,6 +571,8 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
 
   await unlink(localSong);
   await unlink(replacementSong);
+  const search=await fetch(`${bridgeUrl}/api/requests/request-1/youtube`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  assert.equal(search.status,200,'Host may explicitly search alternatives for an unavailable queued file');
   state = await waitForState(
     bridgeUrl,
     (candidate) => {

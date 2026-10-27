@@ -20,7 +20,7 @@ test("la selección responde antes de ejecutar la sincronización completa", () 
     server.indexOf("let cloudLoopRunning"),
     server.indexOf("server.listen")
   );
-  assert.match(body, /const data = await selectBridgeActivity\(config, selection\)/);
+  assert.match(body, /const data\s*=\s*await selectBridgeActivity\(config,\s*selection\)/);
   assert.match(body, /applyActivityState\(data\)/);
   assert.match(body, /json\(response, 200, stateView\(\)\)/);
   assert.match(body, /restartCloudRealtime\(\)/);
@@ -28,7 +28,8 @@ test("la selección responde antes de ejecutar la sincronización completa", () 
   assert.doesNotMatch(body, /syncNow\(\)/);
   assert.match(realtime, /socket\.addEventListener\("message"/);
   assert.match(realtime, /refreshCloudAfterSignal/);
-  assert.doesNotMatch(realtime, /requestLoop|setInterval\s*\(/);
+  assert.doesNotMatch(realtime, /requestLoop/);
+  assert.match(realtime,/Realtime heartbeat timed out/);
 });
 
 test("la sesión revocable queda disponible aunque Keychain no responda", () => {

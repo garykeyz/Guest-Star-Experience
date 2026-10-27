@@ -42,8 +42,8 @@ test('Preview y Star Screen usan el mismo canvas, sin ramas visuales internas', 
   assert.match(source, /singleNext \? escapeHtml\(copy\.next\) : escapeHtml\(copy\.queued\)/);
   assert.match(styles, /li\.star-screen-next-row\{grid-template-columns:minmax\(0,1fr\) 110px\}/);
   assert.match(visualStyles, /grid-template-columns:500px minmax\(0,1fr\)/);
-  assert.match(visualStyles, /width:344px;[\s\S]*height:390px/);
-  assert.match(visualStyles, /grid-template-rows:226px minmax\(0,1fr\)/);
+  assert.match(visualStyles, /\.star-screen-vintage-mic\s*\{[\s\S]*?height:674px/);
+  assert.match(visualStyles, /grid-template-rows:126px minmax\(0,1fr\) 108px/);
 });
 
 test('altura natural de Star Lineup contiene 1–5 filas consistentes dentro del área central', () => {

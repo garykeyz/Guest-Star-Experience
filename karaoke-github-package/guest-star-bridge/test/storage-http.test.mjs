@@ -58,7 +58,7 @@ test("storage HTTP: isolated real endpoints, live update after file changes, no 
   await mkdir(cache);
   await writeFile(join(cache, "instrumental.m4a"), Buffer.alloc(250));
   await mkdir(join(temporary, "GuestStarNativeAudio"));
-  await writeFile(join(temporary, "GuestStarNativeAudio", "background.media"), Buffer.alloc(50));
+  await writeFile(join(temporary, "GuestStarNativeAudio", "karaoke-fixture.media"), Buffer.alloc(50));
   const updated = await get();
   assert.equal(updated.totalBytes, 300);
   await rm(join(cache, "instrumental.m4a")); // Test-owned fixture only.

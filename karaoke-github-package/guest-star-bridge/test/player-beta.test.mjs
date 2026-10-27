@@ -141,6 +141,9 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
   });
 
   const url = `http://127.0.0.1:${bridgePort}`;
+  await waitForState(url,candidate=>candidate.account?.authenticated===true);
+  const modeResponse=await fetch(`${url}/api/activity/mode`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'player'})});
+  assert.equal(modeResponse.status,200);
   let state = await waitForState(url, (candidate) =>
     candidate.account?.authenticated === true &&
     candidate.operatingMode?.selected === "player" &&

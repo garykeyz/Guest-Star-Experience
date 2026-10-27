@@ -184,6 +184,7 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
 
   assert.deepEqual(received, {
     action: "youtubeSearchV4",
+    candidateLimit: 6,
     authToken: "auth-token",
     deviceToken: "device-token",
     hotelId: "hotel-1",

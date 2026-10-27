@@ -1,3 +1,4 @@
+const packageVersion=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json',import.meta.url),'utf8')).version;
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -156,28 +157,28 @@ test("Google se limita al inicio de sesión del Bridge y usa el binding real de 
   assert.doesNotMatch(formSource, /googleFallback|Google Forms/);
 });
 
-test("el formulario exige elegir idioma y el Bridge se lo muestra al host", () => {
-  assert.match(formSource, /useState<Lang\|null>\(null\)/);
-  assert.match(formSource, /What language will you sing in\?/);
-  assert.match(formSource, /!lang\?<motion\.section/);
+test("el formulario envía el idioma seleccionado y el Bridge se lo muestra al host", () => {
+  assert.match(formSource, /useState<Lang>\(providedUiLanguage\|\|"en"\)/);
+  assert.match(formSource, /const active=languages\.find\(x=>x\[0\]===uiLang\)/);
+  assert.match(formSource, /language:active\[3\]/);
   assert.match(bridgeHtml, /class="request-language"/);
   assert.match(appSource, /Language: \$\{item\.language\}/);
 });
 
-test("idioma de interfaz y canción son independientes y usan el catálogo de ocho idiomas", () => {
-  assert.match(formSource, /SONG LANGUAGE/);
+test("el idioma seleccionado usa el catálogo de ocho idiomas y persiste la interfaz", () => {
+  assert.match(formSource, /aria-label="Interface language"/);
   assert.match(formSource, /GUEST_LANGUAGES\.map/);
   assert.match(formSource, /requestUiLanguage/);
   assert.match(formSource, /UI_LANGUAGE_STORAGE_KEY/);
-  assert.match(formSource, /SONG_LANGUAGE_STORAGE_KEY/);
-  assert.match(formSource, /hi:\{label:"गाने की भाषा"/);
+  assert.match(formSource, /songLanguage=\{active\[0\]\}/);
+  assert.match(formSource, /hindiLatinRequired=active\[0\]===\"hi\"/);
   assert.match(formSource, /language:active\[3\]/);
 });
 
-test("los módulos públicos siguen el idioma de interfaz sin cambiar el idioma de canción", () => {
+test("los módulos públicos y sugerencias siguen el idioma seleccionado", () => {
   assert.match(formSource, /const moduleText=moduleCopy\[uiLang\]/);
-  assert.match(formSource, /className="songLanguageControl"/);
-  assert.match(formSource, /value=\{active\[0\]\}/);
+  assert.match(formSource, /className="requestUiLanguage"/);
+  assert.match(formSource, /value=\{uiLang\}/);
   assert.match(formSource, /\{moduleText\.startsIn\}/);
   assert.match(formSource, /\{moduleText\.nextActivity\}/);
   assert.match(formSource, /\{moduleText\.addCalendar\}/);
@@ -247,7 +248,7 @@ test("permite deshacer el resultado y elegir dónde restaurar la pista", () => {
 
 test("el reloj visible avanza cada segundo y recalcula todos los totales", () => {
   assert.match(appSource, /window\.setInterval\(updateTimeDashboard, 1000\)/);
-  assert.match(appSource, /Number\.isFinite\(finished\) \? finished : Date\.now\(\)/);
+  assert.match(appSource, /buildActivitySummary\(state\?\.activity/);
   assert.match(appSource, /activityFinishedAt/);
   assert.match(appSource, /Select Start Activity to activate the clock/);
   assert.match(appSource, /primary\.disabled = activityBusy/);
@@ -265,10 +266,10 @@ test("el Bridge respeta el estado sin iniciar y no inventa una hora local", () =
   assert.doesNotMatch(normalizedActivitySource, /new Date\(\)\.toISOString\(\)/);
 });
 
-test("el enlace seleccionado se copia y se guarda como fuente única", () => {
+test("el enlace seleccionado se copia y se guarda como referencia", () => {
   assert.match(
     appSource,
-    /The selected link was copied and saved with the request/
+    /showNotice\([\x27"]Copiado[\x27"]\)/
   );
   assert.match(serverSource, /sourceUrl: selected\.url/);
   assert.match(serverSource, /item\.sourceUrl = selected\.url/);
@@ -336,7 +337,7 @@ test("muestra la cola real de VirtualDJ y la hora final sin saturar la lista", (
   assert.match(appSource, /function renderVdjQueue/);
   assert.match(appSource, /EMCEE: manage the rotation/);
   assert.match(serverSource, /entries: vdjQueueEntries\.map/);
-  assert.match(serverSource, /verifiedQueue = vdjQueueHasSnapshot/);
+  assert.match(serverSource, /verifiedQueue = operatingMode === .bridge. \? \(vdjQueueHasSnapshot/);
   assert.match(appSource, /live VDJ/);
 });
 
@@ -389,7 +390,7 @@ test("mantiene hotel, actividad, venue y PIN visibles en Modo Host", () => {
   assert.match(appSource, /superhostInHostView && !superhostPanel\.isOpen\(\)/);
   assert.match(appSource, /!isHostView \|\| !tenant\.hotel \|\| !selectedActivity \|\| !tenant\.venue/);
   assert.match(appSource, /tenant\.hotel\?\.name, selectedActivity\?\.name, tenant\.venue\?\.name/);
-  assert.match(serverSource, /kioskAccess: data\.kioskAccess \|\| null/);
+  assert.match(serverSource, /kioskAccess: Object\.hasOwn\(data,\x27kioskAccess\x27\) \? data\.kioskAccess \|\| null : tenantState\.kioskAccess/);
 });
 
 test("integra Player Beta dentro de Guest Star y comparte la actividad real", () => {
@@ -424,12 +425,12 @@ test("obliga a elegir Player o Bridge y bloquea el modo durante la actividad", (
   assert.match(bridgeHtml, /data-playback-mode="bridge"/);
   assert.match(bridgeHtml, /id="bridgeChangeMode"/);
   assert.match(bridgeHtml, /id="playerChangeMode"/);
-  assert.match(bridgeHtml, /Puedes cambiar entre Player y Bridge hasta iniciar la actividad/);
+  assert.match(bridgeHtml, /Seleccionar el modo no inicia la actividad/);
   assert.match(appSource, /openPlaybackModeDialog/);
   assert.match(appSource, /state\.activity\?\.activityRunning === true/);
   assert.match(appSource, /#bridgeChangeMode/);
   assert.match(appSource, /#playerChangeMode/);
-  assert.match(appSource, /Puedes cambiarlo hasta iniciar la actividad/);
+  assert.match(appSource, /Puedes cambiar entre Player y Bridge hasta iniciar la actividad/);
   assert.match(serverSource, /\/api\/activity\/mode/);
   assert.match(serverSource, /if \(activityState\.activityRunning\)/);
   assert.match(serverSource, /operatingMode !== "bridge"/);
@@ -440,7 +441,7 @@ test("obliga a elegir Player o Bridge y bloquea el modo durante la actividad", (
   assert.match(appSource, /pendingHostEntry/);
   assert.match(appSource, /gueststar:open-superhost/);
   assert.match(appSource, /bridgeFinishedExpanded/);
-  assert.match(appSource, /document\.createElement\(key === "finished" \? "details" : "section"\)/);
+  assert.match(appSource, /createBridgeOperations/);
 });
 
 test("Player ofrece controles operativos completos y un preview real de Star Screen", () => {
@@ -460,11 +461,11 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
   assert.match(playerSource, /\/api\/player\/requests\/\$\{encodeURIComponent\(id\)\}\/undo/);
   assert.match(playerSource, /\/api\/player\/requests\/pull/);
   assert.match(starScreenSource, /const drift = target - \(video\.currentTime/);
-  assert.match(starScreenSource, /setVideoPlaybackRate\(Math\.max\(0\.985/);
+  assert.match(starScreenSource, /setVideoPlaybackRate\(rate \* \(1 \+ Math\.sign\(drift\)/);
   assert.match(starScreenSource, /pendingVideoTransportKey/);
   assert.match(starScreenSource, /presentationSignature/);
   assert.match(starScreenSource, /star-screen-video-health/);
-  assert.match(starScreenSource, /setInterval\(\(\) => .*250\)/);
+  assert.match(starScreenSource, /setInterval\(\(\) => .*syncVideo\(lastState\); \}, 100\)/);
   assert.match(starScreenSource, /lastState\.playing/);
   assert.match(playerSource, /moveQueueItem/);
   assert.match(playerSource, /data-player-row-outcome/);
@@ -476,7 +477,7 @@ test("Player ofrece controles operativos completos y un preview real de Star Scr
   assert.match(playerSource, /endedNaturally/);
   assert.match(playerSource, /currentTimeSeconds: karaokeClockPosition\(\)/);
   assert.match(playerSource, /function cancelPendingKaraokeSeek/);
-  assert.match(playerSource, /nativeAudioRequest\('nativeAudioSeek', \{ deck: 'karaoke', position: target, revision: generation \}\)/);
+  assert.match(playerSource, /nativeAudioRequest\('nativeAudioSeek', \{ deck: 'karaoke', position: target, revision: generation \}, \{ signal: controller\.signal \}\)/);
   assert.match(playerSource, /if \(usingNativeAudio\(\)\) return;/);
   assert.match(playerStyles, /body\.player-mode \.player-star-screen-shell[^}]+aspect-ratio:16\/9!important/);
   assert.doesNotMatch(playerStyles, /player-star-screen-shell[^}]+aspect-ratio:auto/);
@@ -548,7 +549,7 @@ test("al volver desde Player muestra la actividad y oculta la consola VirtualDJ"
   assert.match(playerStyles, /player-selected-mode:not\(\.player-mode\) #vdjQueuePanel/);
   assert.match(playerStyles, /player-selected-mode:not\(\.player-mode\) #requests \.request-details/);
   assert.match(appSource, /active Player/);
-  assert.match(appSource, /Player queue cover the activity duration/);
+  assert.match(appSource, /function playerActivityDisplaySummary/);
 });
 
 test("Player recibe solicitudes públicas sin reconciliar VirtualDJ", () => {
@@ -599,7 +600,7 @@ test("las preferencias visuales ocultan sus regiones sin detener Player, audio n
   assert.match(starScreenHtml, /id="starScreenWaveformRegion"/);
   assert.match(starScreenHtml, /id="starScreenNow"/);
   assert.match(starScreenSource, /starScreenWaveformRegion'\)\.hidden = !showWaveform/);
-  assert.match(starScreenSource, /starScreenNow'\)\.hidden = !showNowPlaying/);
+  assert.match(starScreenSource, /starScreenNow'\)\.hidden = finale \|\| !showNowPlaying/);
   assert.match(playerStyles, /star-screen-hide-waveform [^{]*\.star-screen-lobby-waveform\{display:none!important\}/);
   assert.match(playerStyles, /star-screen-hide-now-playing [^{]*\.star-screen-now\{display:none!important\}/);
   assert.doesNotMatch(starScreenSource, /showWaveform[\s\S]{0,120}(?:pause|load|currentTime|playbackRate)/);
@@ -723,8 +724,8 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(serverSource, /\.guest-star-stems/);
   assert.match(serverSource, /instrumental\.m4a/);
   assert.match(serverSource, /vocals\.m4a/);
-  assert.match(serverSource, /"-c:a", "aac", "-b:a", "256k"/);
-  assert.match(stemsInstaller, /no se instaló una copia separada en tu perfil/i);
+  assert.match(serverSource, /"-c:a", "aac", "-profile:a", "aac_low", "-b:a", String\(GSX_DEFAULT_PROFILE\.instrumentalBitrate\)/);
+  assert.match(stemsInstaller, /scripts\/install-stem-engine-macos\.sh/);
   assert.match(stemsSmokeTest, /sherpa-onnx-offline-source-separation/);
   assert.match(stemsSmokeTest, /instrumentalDuration - vocalsDuration/);
   assert.match(stemsSmokeTest, /instrumentalBytes/);
@@ -733,13 +734,13 @@ test("Player ofrece pista ambiental específica, EQ real y stems IA separados", 
   assert.match(playerSource, /shell\.addEventListener\('pointermove'/);
   assert.match(playerSource, /audioContext\?\.resume\(\)/);
   assert.match(playerStyles, /\.player-knob-shell input\{pointer-events:none\}/);
-  assert.match(playerSource, /now - lastStemSyncAt < 750/);
-  assert.match(playerSource, /Math\.abs\(drift\) > 0\.45/);
+  assert.match(playerSource, /function syncStemTimes\(force = false\)/);
+  assert.match(playerSource, /Math\.abs\(drift\) > 0\.15/);
   assert.doesNotMatch(playerSource, /element\.playbackRate = Math\.max/);
   assert.match(playerSource, /for \(const type of \['waiting', 'stalled'\]\)/);
   assert.match(playerSource, /media\.addEventListener\(type, \(\) => \{[\s\S]*?pauseStemTracks\(\)/);
   assert.match(playerSource, /media\.addEventListener\('seeked'/);
-  assert.match(serverSource, /stemCachePaths/);
+  assert.match(serverSource, /gsxStemCachePaths/);
   assert.match(serverSource, /aresample=44100:first_pts=0/);
   assert.match(serverSource, /spleeterExecutionBudget\(availableParallelism\(\), stemResourceState\)/);
   assert.match(serverSource, /"--overlap", "0\.05"/);
@@ -778,7 +779,7 @@ test("la fila y Stems mantienen altura fija y las opciones flotan fuera de la ta
 test("historial y Plan B viven dentro del Player y la lista infinita ya no se duplica", () => {
   assert.match(bridgeHtml, /data-player-drawer="history"/);
   assert.doesNotMatch(bridgeHtml, /data-player-drawer="plan-b"/);
-  assert.match(bridgeHtml, /<details class="player-plan-b-card" open>/);
+  assert.match(bridgeHtml, /<details class="player-plan-b-card">/);
   assert.match(bridgeHtml, /<summary><div><p class="eyebrow">PLAN B DE ROTACIÓN/);
   assert.match(bridgeHtml, /class="player-plan-b-content"/);
   assert.match(bridgeHtml, /id="playerPlanBBadge"/);
@@ -790,7 +791,7 @@ test("historial y Plan B viven dentro del Player y la lista infinita ya no se du
 });
 
 test("Plan B permanece compacto, desplegable y con scroll interno junto al Player", () => {
-  assert.match(bridgeHtml, /<aside class="player-side-rail"[\s\S]*?class="player-queue-list"[\s\S]*?<details class="player-plan-b-card" open>[\s\S]*?<\/aside>/);
+  assert.match(bridgeHtml, /<aside class="player-side-rail"[\s\S]*?class="player-queue-list"[\s\S]*?<details class="player-plan-b-card">[\s\S]*?<\/aside>/);
   assert.match(playerStyles, /body\.player-mode \.player-side-rail\{[\s\S]*?grid-template-rows:minmax\(150px,1fr\) minmax\(210px,46%\);[\s\S]*?overflow:visible/);
   assert.match(playerStyles, /body\.player-mode \.player-side-rail \.player-queue-list\{[\s\S]*?max-height:none;[\s\S]*?overflow:auto/);
   assert.match(playerStyles, /\.player-plan-b-card\{[\s\S]*?height:auto;[\s\S]*?max-height:100%;[\s\S]*?align-self:stretch;[\s\S]*?overflow:hidden/);
@@ -882,13 +883,13 @@ test("el cambio a karaoke espera reproducción real y la música ambiental no pu
   assert.match(ambient, /maximumAttempts = Math\.min\(backgroundTracks\(\)\.length, 3\)/);
   assert.match(starScreenSource, /publishedAt && publishedAt < lastPublishedAt/);
   assert.match(starScreenSource, /function expectedPlaybackTime/);
-  assert.match(starScreenSource, /Date\.now\(\) - publishedAt/);
+  assert.match(starScreenSource, /return lyricsPlaybackTime\(next\)/);
   assert.match(starScreenSource, /video\.addEventListener\('loadedmetadata'/);
   assert.doesNotMatch(starScreenSource, /else video\.addEventListener\('loadedmetadata', align/);
 });
 
 test("el lanzador web de prueba sigue aislado de la aplicación oficial", () => {
-  assert.match(bridgeHtml, /GUEST STAR 4\.5/);
+  assert.match(bridgeHtml, new RegExp("GUEST STAR "+packageVersion.replaceAll(".","\\.")));
   assert.match(serverSource, /process\.env\.GUEST_STAR_PORT/);
   assert.match(serverSource, /process\.env\.GUEST_STAR_WEB_BETA/);
   assert.match(webBetaLauncher, /GUEST_STAR_PORT=8790/);

@@ -37,7 +37,7 @@ test("storage: nested stems, legacy files, work files and native audio only; ori
     writeFile(join(entry, "vocals.m4a"), Buffer.alloc(700)),
     writeFile(join(entry, "manifest.json"), "{}"),
     writeFile(join(work, "input.wav"), Buffer.alloc(2100)),
-    writeFile(join(native, "background.media"), Buffer.alloc(900)),
+    writeFile(join(native, "karaoke-fixture.media"), Buffer.alloc(900)),
     writeFile(join(f.library, "original.mp4"), Buffer.alloc(100000)),
     writeFile(join(f.temporaryRoot, "unrelated.wav"), Buffer.alloc(100000))
   ]);

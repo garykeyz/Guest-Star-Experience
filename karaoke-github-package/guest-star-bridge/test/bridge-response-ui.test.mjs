@@ -49,13 +49,14 @@ test('all local render/optimistic updates measured below 100ms in the isolated f
 test('resuming a validated running Bridge opens locally without waiting for selection or YouTube',async()=>{
  const calls=[],locations=[];
  const context=vm.createContext({entryInitialized:false,state:{account:{authenticated:true,user:{}},operatingMode:{selected:'bridge'},activity:{activityRunning:true}},entryChoice:null,entryContextId:()=> 'activity',api:async url=>calls.push(url),location:{replace:url=>locations.push(url)}});
- vm.runInContext(section('async function initializeEntry()','const diagnostics =')+'\nglobalThis.initializeEntry=initializeEntry;',context);
- await context.initializeEntry();assert.deepEqual(calls,['/api/activity/mode']);assert.deepEqual(locations,['/operate?mode=bridge&context=activity']);
+ vm.runInContext(section('function enterSelectedContext()','const diagnostics =')+'\nglobalThis.initializeEntry=initializeEntry;',context);
+ await context.initializeEntry();assert.deepEqual(calls,[],'a validated running context redirects without repeating mode selection');assert.deepEqual(locations,['/operate?mode=bridge&context=activity']);
 });
 
-test('automatic insertion never replays a historically sent request',async()=>{
+test('passive matching links files without inserting historically sent requests',async()=>{
  const server=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8');
- const start=server.indexOf('async function autoQueueExactMatches()');const end=server.indexOf('async function autoLinkSafeMatches()',start);const sent=[];
- const context=vm.createContext({entryModeResolved:true,activitySelectionBusy:false,operatingMode:'bridge',clearOperationsBusy:false,vdjQueueOperationBusy:false,config:{autoQueueExact:true},requests:[{id:'mapped'},{id:'remote',status:'Agregada a VirtualDJ'}],effectiveRequestOutcome:()=>'',ensureOperationsContext:()=>({reserveIds:[]}),queuedIds:new Set(),queuedEntries:new Map([['mapped',{}]]),sheetMarksVirtualDj:item=>item.status==='Agregada a VirtualDJ',removedExternallyIds:new Set(),suppressedQueueIds:new Set(),pendingInsertions:new Map(),queueLocks:new Set(),matchesForRequest:()=>[{autoLinkEligible:true}],youtubeCache:new Map(),queueRequest:async id=>sent.push(id)});
- vm.runInContext(server.slice(start,end)+'\nglobalThis.autoQueueExactMatches=autoQueueExactMatches;',context);await context.autoQueueExactMatches();assert.deepEqual(sent,[]);
+ assert.ok(!server.includes('async function autoQueueExactMatches('),'automatic physical insertion was removed');
+ const start=server.indexOf('async function autoLinkSafeMatches()');const end=server.indexOf('async function findYoutube(',start);const sent=[],links=new Map();let saved=0;
+ const context=vm.createContext({requests:[{id:'mapped'},{id:'remote',status:'Agregada a VirtualDJ'}],effectiveRequestOutcome:()=>'',requestFileLinks:links,libraryFiles:[],matchesForRequest:()=>[{autoLinkEligible:true,filePath:'/test/song.mp4'}],youtubeCache:new Map(),persistQueuedEntries:async()=>saved++,queueRequest:async id=>sent.push(id)});
+ vm.runInContext(server.slice(start,end)+'\nglobalThis.autoLinkSafeMatches=autoLinkSafeMatches;',context);await context.autoLinkSafeMatches();assert.deepEqual(sent,[]);assert.equal(links.size,2);assert.equal(saved,1);
 });

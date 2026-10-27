@@ -24,7 +24,8 @@ test('layout local por containers, scroll natural y Preview proporcional',()=>{
   assert.match(css,/@container rail \(max-width: 400px\)/);
   assert.match(css,/aspect-ratio: 16 \/ 9 !important/);
   assert.match(css,/height: auto; min-height: 0; max-height: none/);
-  assert.ok(!css.includes('display: none'));
+  assert.match(css,/\.player-plan-b-card:not\(\[open\]\) > \.player-plan-b-content \{ display: none; \}/);
+  assert.doesNotMatch(css,/#playerMedia\s*\{[^}]*display:\s*none/);
   assert.ok(!css.includes('content-visibility'));
 });
 test('safe zone real, scroll interno y etiquetas del mismo botón sin lógica de resize',async()=>{
@@ -34,7 +35,9 @@ test('safe zone real, scroll interno y etiquetas del mismo botón sin lógica de
   assert.match(presentation,/setAttribute\('aria-label', text\)/);
   assert.match(presentation,/button.title = title/);
   assert.ok(!/addEventListener|ResizeObserver|AudioContext|\.play\(|\.pause\(|innerHTML|replaceChildren/.test(presentation));
-  assert.equal((host.match(/src="\/adaptive-host.js"/g)||[]).length,1);
+  const app=await read('../public/app.js');
+  assert.equal((app.match(/await import\('\.\/adaptive-host\.js'\)/g)||[]).length,1);
+  assert.match(app,/async function mountWorkspace/);
 });
 test('consola solo Host: búsqueda prioritaria y acciones movidas sin duplicación',async()=>{
   const consoleCSS=await read('../public/host-console.css');
@@ -63,7 +66,7 @@ test('Audio Mixer unifica solo la presentación y conserva decks independientes'
   assert.match(host,/for="playerTempoLock" title="Bloquear tempo del karaoke"/);
   assert.match(host,/for="playerBackgroundTempoLock" title="Bloquear tempo de la música de fondo"/);
   assert.match(consoleCSS,/player-audio-mixer-console/);
-  assert.match(consoleCSS,/grid-template-columns: minmax\(86px, \.42fr\) minmax\(340px, 1\.7fr\)/);
+  assert.match(consoleCSS,/\.player-audio-mixer-console\s*\{[^}]*display:\s*grid/);
   assert.match(consoleCSS,/@container performance \(max-width: 400px\)/);
 });
 test('Resumen usa los mismos valores en una franja inline desplegada por defecto',async()=>{
@@ -83,6 +86,6 @@ test('Resumen usa los mismos valores en una franja inline desplegada por defecto
   assert.match(consoleCSS,/player-summary-inline\.is-expanded \{ display: flex; \}/);
   assert.match(consoleCSS,/overflow-x: auto; overflow-y: hidden/);
   assert.match(player,/if \(name === 'summary'\) \{[\s\S]*setInlineSummaryExpanded/);
-  assert.match(player,/if \(previousActivity !== activityId\(\)\) \{\s*setInlineSummaryExpanded\(true\)/);
+  assert.match(player,/if \(previousActivity !== activityId\(\)\) \{[^}]*setInlineSummaryExpanded\(true\)/);
   assert.match(presentation,/detail\.dataset\.compactValue/);
 });

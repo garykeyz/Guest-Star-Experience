@@ -32,12 +32,12 @@ test('each PCM bar reacts independently, stale frames are ignored and silence is
   let callback;
   const bars = [];
   const motion = { matches: false };
-  globalThis.document = { createElementNS() { return { attributes: {}, setAttribute(key, value) { this.attributes[key] = Number(value); } }; } };
+  globalThis.document = { addEventListener() {}, createElementNS() { return { attributes: {}, hasAttribute(key){return key in this.attributes;}, setAttribute(key, value) { this.attributes[key] = Number(value); } }; } };
   globalThis.window = { matchMedia: () => motion, addEventListener() {} };
   globalThis.requestAnimationFrame = fn => { callback = fn; return 1; };
   globalThis.cancelAnimationFrame = () => {};
   try {
-    const renderer = initLobbyWaveform({ append: bar => bars.push(bar) });
+    const renderer = initLobbyWaveform({ getClientRects:()=>[{}], append: bar => bars.push(bar) });
     const now = performance.now();
     const height = () => bars[35].attributes.y2 - bars[35].attributes.y1;
     renderer.setScene({ displayMode: 'lobby', background: { playing: true } });
