@@ -25,8 +25,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--audited-app', type=Path, required=True)
 parser.add_argument('--native-executable', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--build', default='461')
+parser.add_argument('--source-commit', required=True)
+parser.add_argument('--minimum-macos', default='15.5')
 args = parser.parse_args()
 source = Path(__file__).resolve().parent.parent
+version = json.loads((source / 'package.json').read_text())['version']
+assert args.source_commit == subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip(), 'Source commit mismatch'
+assert not subprocess.check_output(['git', 'status', '--porcelain', '--', 'src', 'public', 'macos', 'package.json'], cwd=source, text=True).strip(), 'Build requires committed source'
+assert f'APP_VERSION="{version}"' in (source / 'macos/GuestStarBridge').read_text(), 'Supervisor version mismatch'
+assert f'const BRIDGE_VERSION = "{version}";' in (source / 'src/server.mjs').read_text(), 'Server version mismatch'
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=True)
 distribution = out / 'distribution'
@@ -41,7 +49,8 @@ with (args.audited_app / 'Contents/Info.plist').open('rb') as handle:
     info = plistlib.load(handle)
 info.update(CFBundleDisplayName='Guest Star Experience',
             CFBundleName='Guest Star Experience',
-            CFBundleShortVersionString='4.6', CFBundleVersion='460',
+            CFBundleShortVersionString=version, CFBundleVersion=args.build,
+            LSMinimumSystemVersion=args.minimum_macos,
             LSArchitecturePriority=['arm64'])
 with (contents / 'Info.plist').open('wb') as handle:
     plistlib.dump(info, handle)
@@ -101,6 +110,13 @@ for binary in sorted(binaries, key=lambda p: p == macos / 'GuestStarBridge'):
     run('lipo', binary, '-verify_arch', 'arm64')
     run('codesign', '--force', '--sign', '-', '--timestamp=none', binary)
     run('codesign', '--verify', '--strict', binary)
+source_inputs = {}
+for folder in ('src', 'public'):
+    for path in sorted((source / folder).rglob('*')):
+        if path.is_file(): source_inputs[path.relative_to(source).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+for relative in ('package.json', 'macos/GuestStarBridge', 'macos/GuestStarNativeHost.m', 'macos/build_vocal_stream.py', 'macos/build_release_46.py'):
+    source_inputs[relative] = hashlib.sha256((source / relative).read_bytes()).hexdigest()
+(bridge / 'release-provenance.json').write_text(json.dumps({'sourceCommit': args.source_commit, 'version': version, 'build': args.build, 'minimumMacOS': args.minimum_macos, 'sourceInputs': source_inputs, 'cleanNativeBuildSHA256': hashlib.sha256(args.native_executable.read_bytes()).hexdigest(), 'dependenciesPreservedFromAuditedApp': True}, indent=2) + '\n')
 digest = hashlib.sha256()
 for path in sorted(bridge.rglob('*')):
     if path.is_file() and path.name != '.bundle-build':
@@ -114,7 +130,7 @@ run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
 run('plutil', '-lint', contents / 'Info.plist')
 os.symlink('/Applications', distribution / 'Applications')
 (out / 'package-metadata.json').write_text(json.dumps({
-    'version': '4.6', 'build': '460', 'architecture': 'arm64',
+    'version': version, 'build': args.build, 'architecture': 'arm64', 'sourceCommit': args.source_commit, 'minimumMacOS': args.minimum_macos,
     'bundleId': info['CFBundleIdentifier'], 'bundleBuild': digest.hexdigest(),
     'signature': 'AD-HOC', 'notarized': False,
     'binaries': [str(p.relative_to(app)) for p in binaries],

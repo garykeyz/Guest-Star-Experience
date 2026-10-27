@@ -140,7 +140,7 @@ const STEM_ENGINE_VERIFICATION_PATH = resolve(STEM_DATA_ROOT, "data", "stem-engi
 const DEMUCS_ENGINE_CLI = process.env.GUEST_STAR_DEMUCS_CLI ||
   resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
-const BRIDGE_VERSION = "4.6";
+const BRIDGE_VERSION = "4.6.1";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
@@ -2608,7 +2608,13 @@ function stateView() {
     sheet: {
       lastSyncAt,
       syncing,
-      error: sheetError
+      error: sheetError,
+      delivery: {
+        ...cloudDelivery,
+        realtimeReady: cloudRealtimeReady,
+        pendingRefresh: cloudRealtimePendingSync,
+        lastTransportAt: cloudRealtimeLastMessageAt ? new Date(cloudRealtimeLastMessageAt).toISOString() : null
+      }
     },
     virtualDJ: {
       playback: vdjOperations.view(),
@@ -2831,8 +2837,19 @@ async function scanBackgroundMusicNow() {
 
 function syncNow() {
   if (activitySelectionBusy || clearOperationsBusy) return Promise.resolve();
-  if (syncOperation) return syncOperation;
-  syncOperation = performSyncNow().finally(()=>{syncOperation=null;});
+  if (syncOperation) {
+    syncAgain = true;
+    return syncOperation;
+  }
+  // An event arriving during a fetch requires a newer snapshot. Drain it before
+  // resolving the shared operation; starting it in performSyncNow's finally
+  // would still return the old syncOperation and silently lose the event.
+  syncOperation = (async () => {
+    do {
+      syncAgain = false;
+      await performSyncNow();
+    } while (syncAgain && !activitySelectionBusy && !clearOperationsBusy);
+  })().finally(()=>{syncOperation=null;});
   return syncOperation;
 }
 async function performSyncNow() {
@@ -2844,6 +2861,8 @@ async function performSyncNow() {
   syncing = true;
   sheetError = "";
   let refreshed = false;
+  const syncStartedAt = Date.now();
+  const previousRequestIds = new Set(requests.map(item => item.id));
   broadcastState();
   try {
     const previousRealtimeMode = operatingMode;
@@ -2906,7 +2925,6 @@ async function performSyncNow() {
       restartCloudRealtime();
     }
     await reconcileTerminalRequests(nextRequests);
-    lastSyncAt = new Date().toISOString();
     broadcastState();
     for (const item of requests) {
       if (effectiveRequestOutcome(item)) continue;
@@ -2918,6 +2936,18 @@ async function performSyncNow() {
       }
     }
     await persistQueuedEntries(nextActivity.activityId);
+    lastSyncAt = new Date().toISOString();
+    cloudRealtimeLastReconcileAt = Date.now();
+    cloudDelivery.snapshots += 1;
+    cloudDelivery.lastDurationMs = Date.now() - syncStartedAt;
+    cloudDelivery.lastRequestCount = requests.length;
+    const receivedIds = requests.filter(item => !previousRequestIds.has(item.id)).map(item => item.id);
+    if (receivedIds.length) {
+      cloudDelivery.lastReceivedAt = lastSyncAt;
+      console.info(JSON.stringify({ component: 'request_delivery', stage: 'host_snapshot',
+        received: receivedIds.length, requestRefs: receivedIds.slice(0, 100).map(diagnosticReference),
+        durationMs: cloudDelivery.lastDurationMs }));
+    }
     for (const duplicate of duplicateRequests) {
       if (reportedDuplicateIds.has(duplicate.id)) continue;
       try {
@@ -2939,14 +2969,13 @@ async function performSyncNow() {
     refreshed = true;
   } catch (error) {
     sheetError = errorMessage(error);
+    cloudDelivery.failures += 1;
+    console.warn(JSON.stringify({ component: 'request_delivery', stage: 'snapshot_failed',
+      durationMs: Date.now() - syncStartedAt, failures: cloudDelivery.failures }));
   } finally {
     syncing = false;
     broadcastState();
     if (refreshed) void runSyncMaintenance();
-    if (syncAgain) {
-      syncAgain = false;
-      void syncNow();
-    }
   }
 }
 
@@ -5615,7 +5644,10 @@ async function api(request, response, url) {
         if(mode==='player' && activityState.activityRunning && !freeModeSession)await pushPlayerRuntimeRemote();
         broadcastState();
         return {ok:true,state:stateView(),cleared:ids.length};
-      } finally { await persistQueuedEntries();clearOperationsBusy=false; }
+      } finally {
+        try { await persistQueuedEntries(); }
+        finally { clearOperationsBusy=false; }
+      }
     }); json(response,200,data); broadcastState(); return;
   }
   if (request.method === 'POST' && pathname === '/api/virtualdj/control') {
@@ -6995,6 +7027,7 @@ async function skipVdjTrack(body,hostIntent) {
 }
 
 let cloudLoopRunning = false;
+let cloudLoopAgain = false;
 
 async function executeCloudCommand(command) {
   if (operatingMode !== "bridge") {
@@ -7031,7 +7064,8 @@ async function executeCloudCommand(command) {
 
 async function bridgeCloudLoop() {
   if (operatingMode !== "bridge") return;
-  if (cloudLoopRunning || !hasV4Session(config) || !config.lastActivityId) return;
+  if (cloudLoopRunning) { cloudLoopAgain = true; return; }
+  if (!hasV4Session(config) || !config.lastActivityId) return;
   cloudLoopRunning = true;
   try {
     const data = await pollBridgeCommands(config);
@@ -7051,9 +7085,15 @@ async function bridgeCloudLoop() {
     }
   } catch (error) {
     sheetError = errorMessage(error);
+    if (terminalRealtimeError(error)) stopCloudRealtime();
+    else scheduleCloudFallback(cloudRealtimeGeneration, true);
   } finally {
     cloudLoopRunning = false;
     broadcastState();
+    if (cloudLoopAgain) {
+      cloudLoopAgain = false;
+      void bridgeCloudLoop();
+    }
   }
 }
 
@@ -7070,6 +7110,11 @@ let cloudRealtimeRefreshGeneration = -1;
 let cloudRealtimeReady = false;
 let cloudRealtimePendingSync = false;
 let cloudRealtimePendingCommands = false;
+let cloudRealtimeHealthTimer = null;
+let cloudRealtimeLastMessageAt = 0;
+let cloudRealtimeLastReconcileAt = 0;
+const cloudDelivery = { snapshots: 0, failures: 0, reconnects: 0,
+  lastDurationMs: null, lastRequestCount: 0, lastReceivedAt: null };
 
 function cloudRealtimeEligible() {
   return !freeModeSession && hasV4Session(config) && Boolean(
@@ -7078,6 +7123,8 @@ function cloudRealtimeEligible() {
 }
 
 function clearCloudRealtimeTimers() {
+  if (cloudRealtimeHealthTimer) clearTimeout(cloudRealtimeHealthTimer);
+  cloudRealtimeHealthTimer = null;
   if (cloudRealtimeReconnectTimer) clearTimeout(cloudRealtimeReconnectTimer);
   if (cloudRealtimeFallbackTimer) clearTimeout(cloudRealtimeFallbackTimer);
   if (cloudRealtimeAuthTimer) clearTimeout(cloudRealtimeAuthTimer);
@@ -7155,11 +7202,21 @@ async function refreshCloudAfterSignal(eventType = "bootstrap") {
       cloudRealtimePendingCommands = false;
       if (refreshState) await syncNow();
       if (generation !== cloudRealtimeGeneration) return;
+      if (activitySelectionBusy || clearOperationsBusy) {
+        // These locks defer synchronization. Keep the invalidation even if the
+        // socket stays healthy and no further event arrives after the unlock.
+        cloudRealtimePendingSync ||= refreshState;
+        cloudRealtimePendingCommands ||= refreshCommands;
+        scheduleCloudFallback(generation, true);
+        return;
+      }
       if (terminalRealtimeError(sheetError)) {
         stopCloudRealtime();
         return;
       }
-      if (refreshCommands) await bridgeCloudLoop();
+      // Command execution can wait for VirtualDJ. It must never hold the
+      // request invalidation drain; the existing command loop owns its lock.
+      if (refreshCommands) void bridgeCloudLoop();
       if (generation !== cloudRealtimeGeneration) return;
       if (terminalRealtimeError(sheetError)) {
         stopCloudRealtime();
@@ -7226,6 +7283,39 @@ function scheduleCloudReconnect(generation) {
   scheduleCloudFallback(generation);
 }
 
+function scheduleCloudHealth(generation) {
+  if (generation !== cloudRealtimeGeneration || !cloudRealtimeEligible() || cloudRealtimeHealthTimer) return;
+  cloudRealtimeHealthTimer = setTimeout(() => {
+    cloudRealtimeHealthTimer = null;
+    if (generation !== cloudRealtimeGeneration || !cloudRealtimeEligible()) return;
+    const socket = cloudRealtimeSocket;
+    if (socket && Date.now() - cloudRealtimeLastMessageAt >= 45_000) {
+      // Detach first: a silently broken socket may never deliver close/error.
+      cloudRealtimeSocket = null;
+      cloudRealtimeReady = false;
+      if (cloudRealtimeAuthTimer) clearTimeout(cloudRealtimeAuthTimer);
+      cloudRealtimeAuthTimer = null;
+      try { socket.close(4008, 'Realtime heartbeat timed out'); } catch { /* transport already failed */ }
+      cloudDelivery.reconnects += 1;
+      console.warn(JSON.stringify({ component: 'request_delivery', stage: 'heartbeat_timeout' }));
+      scheduleCloudReconnect(generation);
+      scheduleCloudFallback(generation, true);
+    } else if (socket?.readyState === 1 && cloudRealtimeReady) {
+      try { socket.send(JSON.stringify({ type: 'ping' })); }
+      catch { cloudRealtimeReady = false; scheduleCloudFallback(generation, true); }
+    }
+    // Notifications are hints. Reuse the same snapshot/drain even when pongs
+    // continue but publication was lost. One bounded read per minute per Host.
+    if (Date.now() - cloudRealtimeLastReconcileAt >= 60_000) {
+      void refreshCloudAfterSignal('public.request.created').catch(() => {
+        scheduleCloudFallback(generation, true);
+      });
+    }
+    scheduleCloudHealth(generation);
+  }, 20_000);
+  cloudRealtimeHealthTimer.unref();
+}
+
 function connectCloudRealtime(generation = cloudRealtimeGeneration) {
   if (
     generation !== cloudRealtimeGeneration || !cloudRealtimeEligible() ||
@@ -7246,6 +7336,8 @@ function connectCloudRealtime(generation = cloudRealtimeGeneration) {
   const socket = new WebSocket(connection.url, connection.protocols);
   cloudRealtimeSocket = socket;
   cloudRealtimeReady = false;
+  cloudRealtimeLastMessageAt = Date.now();
+  scheduleCloudHealth(generation);
   scheduleCloudFallback(generation);
   socket.addEventListener("open", () => {
     if (generation !== cloudRealtimeGeneration || cloudRealtimeSocket !== socket) {
@@ -7265,6 +7357,7 @@ function connectCloudRealtime(generation = cloudRealtimeGeneration) {
     if (generation !== cloudRealtimeGeneration || cloudRealtimeSocket !== socket) return;
     try {
       const message = JSON.parse(String(event.data || "{}"));
+      if (message.type) cloudRealtimeLastMessageAt = Date.now();
       if (!message.type || message.type === "realtime.auth-required" || message.type === "pong") return;
       if (message.type === "realtime.ready") {
         cloudRealtimeReady = true;
@@ -7296,6 +7389,7 @@ function connectCloudRealtime(generation = cloudRealtimeGeneration) {
   socket.addEventListener("error", () => {
     if (generation === cloudRealtimeGeneration && cloudRealtimeSocket === socket) {
       cloudRealtimeReady = false;
+      scheduleCloudFallback(generation, true);
     }
     // Undici closes failed WebSockets itself. Calling close() from this handler
     // can synchronously emit another error in Node 22 and overflow the stack.
