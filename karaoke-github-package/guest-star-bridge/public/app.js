@@ -1,20 +1,24 @@
+import {installPlayerMediaPreferences} from './player-media-preferences.js';
+import { createActivityAutomation } from './activity-automation.js';
+import {buildActivitySummary} from './shared/activity-coverage.js';
+import { prepareSession } from "./prepare-session.js";
 import { applyBrandingTheme, brandingTheme, renderBrandLogos } from "./shared/branding-theme.js";
 import { downloadLocalQr, setLocalQrImage } from "./qr-ui.js";
 import { currentHostActivityAccess } from "./host-activity-access.js";
 import { initSuperhostPanel } from "./superhost.js";
 import { createBridgeI18n } from "./bridge-i18n.js";
 import { preserveBridgeScroll } from "./scroll-preserver.js";
-import { createBridgeOperations } from './bridge-operations.js';
-import { initPlayerBeta, normalizeBrandImageUrl } from "./player-beta.js";
+import {normalizeBrandImageUrl} from './shared/brand-image-url.js';
+import {rememberedActivity,entryContextId} from './entry-flow.js';
 import { starScreenPreferences } from "./star-screen-presentation.js";
 import { initDiagnostics } from "./diagnostics.js";
 import { createQueueToast } from "./queue-toast.js";
 import { createStoragePreferences } from "./storage-preferences.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
-const starScreenPreferencesChannel = new BroadcastChannel("guest-star-player");
+let starScreenPreferencesChannel=null;
 let lastStarScreenPreferencesSignature = "";
-window.addEventListener("beforeunload", () => starScreenPreferencesChannel.close(), { once: true });
+window.addEventListener("beforeunload", () => starScreenPreferencesChannel?.close(), { once: true });
 const ACTIVITY_LANGUAGES = [
   ["es", "#activityLanguageEs"], ["en", "#activityLanguageEn"],
   ["fr", "#activityLanguageFr"], ["it", "#activityLanguageIt"],
@@ -42,6 +46,8 @@ const bridgeI18n = createBridgeI18n({ language: "es" });
 let state = null;
 let folders = [];
 let activityBusy = false;
+let bridgePendingAccepting = null;
+let bridgePendingLifecycle = null;
 let scanBusy = false;
 let syncBusy = false;
 let passwordChangeRequired = false;
@@ -49,8 +55,12 @@ let pendingActivityAction = "";
 let pendingHostEntry = false;
 let superhostInHostView = false;
 let bridgeFinishedExpanded = false;
+let bridgeWaitingExpanded = false;
+let renderedActivityContext = "";
 let autoOpenedHostActivityId = "";
 const actionLocks = new Set();
+const bridgeOptimisticRequests = new Map();
+const youtubePageOffsets = new Map();
 const hitSearchLocks = new Set();
 const expandedRequestIds = new Set();
 let lastActivityRevision = null;
@@ -58,7 +68,73 @@ let lastInstantSyncAt = 0;
 let autoRestoredPlayerActivityId = "";
 let autoRestoredBridgeActivityId = "";
 let nativeDisplays = [];
-let playerPanel;
+let mountedMode='';
+const workspaceRoute=location.pathname==='/operate';
+const entryChoice=new URLSearchParams(location.search).get('choose');
+let entryInitialized=false;
+let playerPanel={sync(){},open(){},close(){},isOpen:()=>false};
+let bridgeOperations={render(){},appendRowActions(){},appendRequestActions(){},captureFocus(){},restoreFocus(){},resetActivityContext(){}};
+let operationsDashboard={render(){}};
+async function navigateEntry(choice='switch') {
+  try {
+    await playerPanel.leaveWorkspace?.();
+    location.replace('/?choose='+encodeURIComponent(choice));
+  } catch (error) {
+    showNotice(error.message || 'No se pudo cambiar de actividad.', true);
+  }
+}
+async function mountWorkspace(mode) {
+  if(mountedMode)return;
+  if(mode==='player') {
+    starScreenPreferencesChannel=new BroadcastChannel('guest-star-player');
+    const {initPlayerBeta}=await import('./player-beta.js');
+    playerPanel=initPlayerBeta({api,showNotice,confirmAction,diagnostics,operations:{controlActivity:action=>controlActivity(action),getHostLanguage:()=>bridgeI18n.getLanguage(),openShare:()=>$('#hostSessionQrButton').click(),openSettings:()=>$('#settingsButton').click(),scanLibrary:()=>scan()}});
+    await import('./lobby-waveform-publisher.js');
+  } else {
+    const {createBridgeOperations}=await import('./bridge-operations.js');
+    bridgeOperations=createBridgeOperations({request:api,getState:()=>state,refresh,notify:showNotice,markOutcome,undoOutcome,i18n:bridgeI18n,redrawRequests:renderRequests});
+  }
+  const {initOperationsDashboard}=await import('./operations-dashboard.js');
+  operationsDashboard=initOperationsDashboard({getState:()=>state,api,applyState,closeRequests:()=>controlActivity('close'),notify:showNotice,language:()=>bridgeI18n.getLanguage()});
+  mountedMode=mode;document.body.dataset.mountedMode=mode;
+  document.body.classList.remove('entry-shell');
+  await import('./adaptive-host.js');
+}
+function showEntrySelection() {
+  const remembered=rememberedActivity(state);
+  $('#rememberedActivityChoice').hidden=!remembered;
+  $('#resumeFreeActivity').hidden=!(state?.account?.user?.role==='superhost' && state?.entryContext?.resumableFreeSession);
+  $('#rememberedActivityLabel').textContent=remembered ? [state.account.selection.hotels.find(h=>h.hotelId===remembered.hotelId)?.name,remembered.name,state.account.selection.venues.find(v=>v.venueId===remembered.venueId)?.name].filter(Boolean).join(' · ') : '';
+  $('#activitySelectionFields').hidden=state?.account?.user?.role!=='superhost';
+  fillSelection(true);
+  if(!selectionDialog.open)selectionDialog.showModal();
+}
+async function useRememberedActivity() {
+  const remembered=rememberedActivity(state);if(!remembered)return;
+  try{applyState(await api('/api/auth/selection',{method:'POST',body:JSON.stringify({...remembered,rememberSelection:false})}));selectionDialog.close();enterSelectedContext();}
+  catch(error){showNotice(error.message,true);showEntrySelection();}
+}
+function enterSelectedContext() {
+  if(state?.activity?.activityRunning && state?.operatingMode?.selected && entryContextId(state)) {
+    location.replace('/operate?mode='+encodeURIComponent(state.operatingMode.selected)+'&context='+encodeURIComponent(entryContextId(state)));
+    return;
+  }
+  openPlaybackModeDialog();
+}
+async function initializeEntry() {
+  if(entryInitialized || !state?.account?.authenticated || state.account.user?.mustChangePassword)return;
+  entryInitialized=true;
+  if(entryChoice==='mode' && entryContextId(state)){openPlaybackModeDialog();return;}
+  if(entryChoice==='switch'){showEntrySelection();return;}
+  if(state.account.user?.role==='superhost'){openSuperhostView();return;}
+  if (['player','bridge'].includes(state.operatingMode?.selected) && state.activity?.activityRunning && entryContextId(state)) {
+    enterSelectedContext();
+    return;
+  }
+  if(rememberedActivity(state))await useRememberedActivity();
+  else showEntrySelection();
+}
+
 const diagnostics = initDiagnostics({
   api,
   getState: () => state,
@@ -71,30 +147,39 @@ const superhostPanel = initSuperhostPanel({
   copyLink,
   openExternal
 });
-playerPanel = initPlayerBeta({
-  api,
-  showNotice,
-  confirmAction,
-  diagnostics,
-  operations: {
-    controlActivity: (action) => controlActivity(action),
-    getHostLanguage: () => bridgeI18n.getLanguage(),
-    openShare: () => $("#hostSessionQrButton").click(),
-    openSettings: () => $("#settingsButton").click(),
-    scanLibrary: () => scan()
-  }
-});
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) {
-    throw new Error(data.error || data.code || "The action could not be completed.");
+  const match = state?.operatingMode?.selected === 'bridge' && options.method === 'POST' &&
+    path.match(/^\/api\/requests\/([^/]+)\/(queue|outcome|undo-outcome)$/);
+  const id = match ? decodeURIComponent(match[1]) : '';
+  const body = match ? JSON.parse(options.body || '{}') : {};
+  const item = id && state.requests.find(item => item.id === id);
+  if (item) {
+    const patch = match[2] === 'outcome'
+      ? { outcome: body.outcome, localState: body.outcome, queued: false, queueUnverified: false, pendingResolution: false, canUndo: true }
+      : match[2] === 'queue'
+      ? { sentToVirtualDJ: true, queueUnverified: true, pendingResolution: false, localState: 'adding' }
+      : { outcome: '', localState: body.placement === 'pending' ? 'exact' : 'confirming', queued: false, sentToVirtualDJ: body.placement !== 'pending', queueUnverified: body.placement !== 'pending', removedExternally: false, pendingResolution: false };
+    bridgeOptimisticRequests.set(id, { patch, previous: { ...item } });
+    Object.assign(item, patch);
+    renderRequests(); renderVdjQueue(); updateTimeDashboard();
   }
-  return data;
+  try {
+    const response = await fetch(path, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || data.code || "The action could not be completed.");
+    return data;
+  } catch (error) {
+    const pending = bridgeOptimisticRequests.get(id);
+    const current = state?.requests?.find(item => item.id === id);
+    if (pending && current) Object.assign(current, pending.previous);
+    bridgeOptimisticRequests.delete(id);
+    if (item) { renderRequests(); renderVdjQueue(); updateTimeDashboard(); }
+    throw error;
+  }
 }
 
 function showNotice(message, error = false, action = null) {
@@ -102,7 +187,6 @@ function showNotice(message, error = false, action = null) {
 }
 
 const storagePreferences = createStoragePreferences({ request: api, dialog: preferencesDialog, i18n: bridgeI18n, notify: showNotice });
-const bridgeOperations = createBridgeOperations({ request: api, getState: () => state, refresh, notify: showNotice, markOutcome, undoOutcome, i18n: bridgeI18n });
 
 function showSuccess(title, detail) {
   $("#successTitle").textContent = title;
@@ -191,7 +275,8 @@ async function runAction(scope, progress, operation, successMessage) {
   renderRequests();
   try {
     const data = await operation();
-    await refresh();
+    if (scope.startsWith("request:")) bridgeOptimisticRequests.delete(scope.slice(8));
+    void refresh();
     const success = successMessage(data);
     showNotice(success.detail, false, success.action);
     return data;
@@ -200,6 +285,7 @@ async function runAction(scope, progress, operation, successMessage) {
     return null;
   } finally {
     actionLocks.delete(scope);
+    if (scope.startsWith("request:")) bridgeOptimisticRequests.delete(scope.slice(8));
     renderRequests();
   }
 }
@@ -247,73 +333,13 @@ function clockTime(value) {
 }
 
 function liveActivitySummary() {
-  const summary = { ...(state?.activitySummary || {}) };
-  const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
-  const started = Date.parse(String(state?.activity?.activityStartedAt || ""));
-  const finished = Date.parse(String(state?.activity?.activityFinishedAt || ""));
-  const hasStarted = Number.isFinite(started);
-  const activityRunning = hasStarted &&
-    state?.activity?.activityRunning !== false &&
-    !Number.isFinite(finished);
-  const elapsedSeconds = hasStarted
-    ? Math.max(0, Math.floor(((Number.isFinite(finished) ? finished : Date.now()) - started) / 1000))
-    : 0;
-  summary.activityRunning = activityRunning;
-  summary.elapsedSeconds = elapsedSeconds;
-  summary.clockRemainingSeconds = Math.max(0, targetSeconds - elapsedSeconds);
-  summary.clockOverrunSeconds = Math.max(0, elapsedSeconds - targetSeconds);
-  summary.eventEndsAt = hasStarted && targetSeconds > 0
-    ? new Date(started + targetSeconds * 1000).toISOString()
-    : "";
-  return summary;
+  return buildActivitySummary(state?.activity, (state?.requests || []).concat(state?.operations?.externalHistory || []), Date.now(), state?.operations?.coverageQueue ?? null, {currentPlayback:state?.operations?.currentPlayback, reserveIds:state?.operations?.reserveIds});
 }
-
-function playerActivityDisplaySummary(summary) {
-  if (state?.operatingMode?.selected !== "player") return summary;
-  const requests = Array.isArray(state?.requests) ? state.requests : [];
-  const fallbackTransition = Math.max(0, Number(state?.activity?.transitionSeconds) || 0);
-  const secondsFor = (item) =>
-    (Math.max(0, Number(item?.durationSeconds) || 240) +
-      Math.max(0, Number(item?.transitionSeconds) || fallbackTransition));
-  const completed = [];
-  const skipped = [];
-  const active = [];
-  for (const item of requests) {
-    const outcome = String(item?.outcome || "").toLowerCase();
-    const status = String(item?.status || "");
-    if (outcome === "completed" || status === "Ya cantó") completed.push(item);
-    else if (["skipped", "removed"].includes(outcome) || ["Saltado", "Retirada del Player"].includes(status)) skipped.push(item);
-    else if (!item?.stem || item.stem.status === "ready") active.push(item);
-  }
-  const plannedSeconds = requests
-    .filter((item) => !skipped.includes(item))
-    .reduce((total, item) => total + secondsFor(item), 0);
-  const completedSeconds = completed.reduce((total, item) => total + secondsFor(item), 0);
-  const queued = active.filter((item) => item.localAvailable);
-  const queuedSeconds = queued.reduce((total, item) => total + secondsFor(item), 0);
-  const skippedSeconds = skipped.reduce((total, item) => total + secondsFor(item), 0);
-  const targetSeconds = Math.max(0, Number(summary.targetSeconds) || 0);
-  const confirmedSeconds = completedSeconds + queuedSeconds;
-  const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
-  const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
-  return {
-    ...summary,
-    plannedSeconds,
-    completedSeconds,
-    skippedSeconds,
-    queuedSeconds,
-    queueSongCount: queued.length,
-    confirmedSeconds,
-    gapSeconds,
-    overrunSeconds,
-    coveragePercent: targetSeconds ? Math.round((confirmedSeconds / targetSeconds) * 100) : 0,
-    suggestClose: state?.activity?.accepting !== false && targetSeconds > 0 && confirmedSeconds >= targetSeconds,
-    suggestHits: queued.length === 0 && gapSeconds > 0
-  };
-}
+function playerActivityDisplaySummary(summary) { return summary; }
 
 function updateTimeDashboard() {
-  if (!state) return;
+  if (!state || !mountedMode) return;
+  operationsDashboard.render();
   const playerSelected = state.operatingMode?.selected === "player";
   const summary = playerActivityDisplaySummary(liveActivitySummary());
   const target = Number(summary.targetSeconds) || 0;
@@ -369,8 +395,8 @@ function updateTimeDashboard() {
     $("#coverageTime").textContent =
       `${activityDuration(summary.gapSeconds)} missing`;
     $("#coverageDetail").textContent = playerSelected
-      ? `${summary.coveragePercent || 0}% covered by completed songs and the Player queue`
-      : `${summary.coveragePercent || 0}% covered by completed songs and the live queue`;
+      ? `${summary.coveragePercent || 0}% covered by elapsed time and future content`
+      : `${summary.coveragePercent || 0}% covered by elapsed time and future content`;
   }
 
   const advice = $("#coverageAdvice");
@@ -378,8 +404,8 @@ function updateTimeDashboard() {
   if (summary.suggestClose) {
     const text = document.createElement("div");
     text.innerHTML = playerSelected
-      ? "<strong>You have enough confirmed time.</strong><p>Completed songs and the active Player queue cover the activity duration.</p>"
-      : "<strong>You have enough confirmed time.</strong><p>Completed songs and tracks actually present in VirtualDJ cover the activity duration.</p>";
+      ? "<strong>You have enough confirmed time.</strong><p>Future content covers the remaining activity time.</p>"
+      : "<strong>You have enough confirmed time.</strong><p>Future content covers the remaining activity time.</p>";
     advice.append(
       text,
       button("Close Requests Now", "danger", () => controlActivity("close"))
@@ -443,6 +469,21 @@ function renderHostActivityQr(access) {
   }
 }
 
+function updateAccountNavigation() {
+  const authenticated = state?.account?.authenticated === true;
+  const isSuperhost = authenticated && state.account?.user?.role === "superhost";
+  const running = state?.activity?.activityRunning === true;
+  const hostViewButton = $("#openHostPanel");
+  hostViewButton.classList.toggle("hidden", !isSuperhost);
+  hostViewButton.textContent = superhostPanel.isOpen() ? "Modo Host" : "Superhost";
+  hostViewButton.setAttribute("aria-label", superhostPanel.isOpen()
+    ? "Ir a la operación del Host"
+    : "Volver al Panel Superhost");
+  $("#changePasswordButton").classList.toggle("hidden", running || !authenticated);
+  $("#logoutButton").classList.toggle("hidden", running || !authenticated);
+  $("#menuLogout").classList.toggle("hidden", running || !authenticated);
+}
+
 function updateStatus() {
   // Hotel identity is local to the operational view; editing a hotel never themes Superhost.
   const administrativeView=superhostPanel.isOpen();
@@ -453,7 +494,8 @@ function updateStatus() {
   }else{
     applyBrandingTheme(document.body,state?.account?.authenticated===true&&state?.account?.current?.activityId?state.tenant?.branding||{}:{});
   }
-  if (!state) return;
+  updateAccountNavigation();
+  if (!state || !mountedMode) return;
   const library = state.library;
   setStatus(
     "#libraryStatus",
@@ -537,7 +579,7 @@ function updateStatus() {
   const can = (permission) => permissions.all === true || permissions[permission] === true;
   $("#tenantPath").textContent = tenant.hotel
     ? `${tenant.hotel.name} • ${tenant.venue?.name || "Venue"}`
-    : "SELECT AN ACTIVITY";
+    : state?.entryContext?.sessionType === "free" ? "Fuera de actividad programada" : "SELECT AN ACTIVITY";
   $("#selectedActivityName").textContent = selectedActivity?.name || "Guest Star Activity";
   $("#activityHeadline").textContent = !authenticated
     ? "Sign in to use this Bridge."
@@ -577,18 +619,13 @@ function updateStatus() {
   $("#shareButton").disabled = !tenant.share?.publicUrl;
   $("#settingsButton").disabled = !selectedActivity;
   const isSuperhost = authenticated && state.account?.user?.role === "superhost";
-  const hostViewButton = $("#openHostPanel");
-  hostViewButton.classList.toggle("hidden", !isSuperhost);
-  hostViewButton.textContent = superhostPanel.isOpen() ? "Modo Host" : "Superhost";
-  hostViewButton.setAttribute("aria-label", superhostPanel.isOpen()
-    ? "Ir a la operación del Host"
-    : "Volver al Panel Superhost");
+
   const modeStatus = $("#playbackModeStatus");
   modeStatus.classList.toggle("hidden", !authenticated || !selectedActivity || !selectedMode);
   modeStatus.textContent = selectedMode
-    ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}${running ? " · bloqueado" : ""}`
+    ? `Modo: ${selectedMode === "player" ? "Player" : "Bridge"}${running && !isSuperhost ? " · bloqueado" : ""}`
     : "";
-  const modeLocked = state.operatingMode?.locked === true || state.activity?.activityRunning === true;
+  const modeLocked = !isSuperhost && (state.operatingMode?.locked === true || state.activity?.activityRunning === true);
   for (const modeButton of [$("#bridgeChangeMode"), $("#playerChangeMode")]) {
     modeButton.classList.toggle("hidden", !authenticated || !selectedActivity);
     modeButton.disabled = modeLocked;
@@ -599,15 +636,14 @@ function updateStatus() {
         : "Elegir modo";
     modeButton.title = modeLocked
       ? "El modo queda bloqueado mientras la actividad está en curso."
-      : "Puedes cambiar entre Player y Bridge hasta iniciar la actividad.";
+      : running && isSuperhost
+        ? "Superhost puede cambiar entre Player y Bridge durante esta actividad."
+        : "Puedes cambiar entre Player y Bridge hasta iniciar la actividad.";
   }
-  $("#switchActivity").classList.toggle("hidden", running || !authenticated);
-  $("#changePasswordButton").classList.toggle("hidden", running || !authenticated);
-  $("#logoutButton").classList.toggle("hidden", running || !authenticated);
+  $("#switchActivity").classList.toggle("hidden", !authenticated || (running && !isSuperhost));
   $("#archiveQueue").disabled = !selectedActivity || !can("canArchiveQueue");
   $("#viewPrevious").classList.toggle("hidden", running || !isSuperhost);
   $("#previewGuestPage").disabled = !tenant.share?.publicUrl;
-  $("#menuLogout").classList.toggle("hidden", running || !authenticated);
   const revision = Number(activity.stateRevision) || 0;
   if (
     lastActivityRevision !== null &&
@@ -687,7 +723,7 @@ async function queue(id, filePath) {
     `Sending ${label} to VirtualDJ…`,
     () => api(`/api/requests/${encodeURIComponent(id)}/queue`, {
       method: "POST",
-      body: JSON.stringify({ filePath })
+      body: JSON.stringify({ filePath,origin:'HOST_SEND_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }),
     (data) => ({
       title: data.restored
@@ -709,7 +745,7 @@ async function replaceQueueFile(id, candidate) {
     `Changing the linked file for ${label}…`,
     () => api(`/api/requests/${encodeURIComponent(id)}/replace`, {
       method: "POST",
-      body: JSON.stringify({ filePath: candidate.filePath })
+      body: JSON.stringify({ filePath: candidate.filePath,origin:'HOST_REPLACE_IN_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
     }),
     (data) => ({
       title: "VirtualDJ file changed",
@@ -786,21 +822,28 @@ async function removeFromQueue(id) {
 }
 
 async function dismissRequeue(id) {
-  const label = requestLabel(id);
-  await runAction(
-    actionScope(id),
-    `Keeping ${label} outside the rotation…`,
-    () => api(
-      `/api/requests/${encodeURIComponent(id)}/dismiss-requeue`,
-      { method: "POST", body: "{}" }
-    ),
-    (data) => ({
-      title: "Song outside the rotation",
-      detail:
-        data.warning ||
-        `${label} will remain outside VirtualDJ.`
-    })
-  );
+  if (confirmDialog.open || actionLocks.has(actionScope(id))) return;
+  const outcome = await chooseMissingOutcome();
+  if (outcome) await markOutcome(id, outcome);
+}
+
+function chooseMissingOutcome() {
+  return new Promise(resolve => {
+    const accept = $('#acceptConfirm'), cancel = $('#cancelConfirm');
+    const omitted = button('Omitida', 'ghost', () => finish('skipped'));
+    $('#confirmTitle').textContent = '¿Esta canción ya fue cantada o fue omitida?';
+    $('#confirmDetail').textContent = 'La decisión se conservará en el historial.';
+    accept.textContent = 'Ya cantó'; cancel.textContent = 'Cancelar';
+    accept.before(omitted);
+    const completed = () => finish('completed'), cancelled = () => finish('');
+    const escape = event => { event.preventDefault(); finish(''); };
+    function finish(outcome) {
+      accept.removeEventListener('click', completed); cancel.removeEventListener('click', cancelled);
+      confirmDialog.removeEventListener('cancel', escape); omitted.remove(); confirmDialog.close(); resolve(outcome);
+    }
+    accept.addEventListener('click', completed); cancel.addEventListener('click', cancelled);
+    confirmDialog.addEventListener('cancel', escape); confirmDialog.showModal();
+  });
 }
 
 async function markOutcome(id, outcome) {
@@ -847,7 +890,7 @@ async function undoOutcome(id, placement) {
       `/api/requests/${encodeURIComponent(id)}/undo-outcome`,
       {
         method: "POST",
-        body: JSON.stringify({ placement })
+        body: JSON.stringify({ placement,origin:'HOST_RETURN_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID() })
       }
     ),
     (data) => ({
@@ -873,7 +916,7 @@ async function queueSuggestion(item, singerMode) {
         artist: item.artist,
         language: item.language,
         list: item.list,
-        singerMode
+        singerMode,origin:'HOST_SEND_SUGGESTION_TO_VDJ',userInitiated:true,commandId:crypto.randomUUID()
       })
     }),
     (data) => ({
@@ -898,18 +941,15 @@ async function youtube(id, panel) {
 }
 
 async function copyYoutubeOption(id, url) {
+  let clipboardCopied = false;
+  try { await navigator.clipboard.writeText(url); clipboardCopied = true; showNotice('Copiado'); }
+  catch { /* Native clipboard fallback stays available in the Bridge endpoint. */ }
   try {
-    const data = await api(`/api/requests/${encodeURIComponent(id)}/youtube/copy`, {
-      method: "POST",
-      body: JSON.stringify({ url })
+    await api(`/api/requests/${encodeURIComponent(id)}/youtube/copy`, {
+      method: 'POST', body: JSON.stringify({ url, clipboardCopied })
     });
-    const detail = data.sheetUpdated
-      ? "The selected link was copied and saved with the request."
-      : "The selected link was copied to the clipboard.";
-    showNotice(detail);
-  } catch (error) {
-    showNotice(error.message, true);
-  }
+    if (!clipboardCopied) showNotice('Copiado');
+  } catch (error) { showNotice(clipboardCopied ? `Copiado; no se pudo guardar el enlace: ${error.message}` : error.message, true); }
 }
 
 function renderYoutube(panel, items, requestId, clipboard = {}) {
@@ -933,14 +973,15 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
 
   const list = document.createElement("div");
   list.className = "youtube-list";
-  items.forEach((item, index) => {
+  const offset = (youtubePageOffsets.get(requestId) || 0) < items.length ? (youtubePageOffsets.get(requestId) || 0) : 0;
+  items.slice(offset, offset + 6).forEach((item, index) => {
     const isKaraoke = item.resultType === "karaoke";
     const row = document.createElement("div");
     row.className = "youtube-item";
     const info = document.createElement("span");
     const optionLabel = document.createElement("small");
     optionLabel.className = "youtube-option-label";
-    optionLabel.textContent = `OPTION ${index + 1}`;
+    optionLabel.textContent = `OPTION ${offset + index + 1}`;
     const strong = document.createElement("strong");
     strong.textContent = item.title || "YouTube";
     const small = document.createElement("small");
@@ -976,6 +1017,10 @@ function renderYoutube(panel, items, requestId, clipboard = {}) {
     list.append(row);
   });
   panel.append(list);
+  if (items.length > 6) panel.append(button("Mostrar otros", "ghost", () => {
+    youtubePageOffsets.set(requestId, offset + 6 < items.length ? offset + 6 : 0);
+    renderYoutube(panel, items, requestId, clipboard);
+  }));
 }
 
 function renderYoutubeForItem(item, panel) {
@@ -1061,11 +1106,12 @@ function renderVdjQueueContents() {
       entry.artist,
       `Singer: ${displayedSinger(entry)}`,
       entry.sourceType === "virtualdj_external"
-        ? "Unmatched VirtualDJ item"
+        ? "Pista propia de VirtualDJ"
         : "Linked request"
     ]
       .filter(Boolean)
       .join(" · ");
+    detail.textContent += ` · ${entry.phase || "QUEUED"}`;
     info.append(song, detail);
     const durationLabel = document.createElement("span");
     durationLabel.textContent = activityDuration(entry.durationSeconds);
@@ -1122,13 +1168,15 @@ function renderRequestContents() {
   const timelines = requestTimelines(state.requests);
   const groups = new Map();
   [
-    ["active", "Active Requests", "Pending and linked, in arrival order", requestsEl],
+    ["active", "Active Requests", "Pendientes de enviar a VirtualDJ", requestsEl],
+    ...(state.operatingMode?.selected !== 'player' ? [["waiting", "En espera", "Turnos enviados a VirtualDJ · controles en la cola real", finishedRequestsEl]] : []),
     ["finished", "Completed / Skipped", "Only Undo can return them to the rotation", finishedRequestsEl]
   ].forEach(([key, title, detail, target]) => {
-    const section = document.createElement(key === "finished" ? "details" : "section");
+    const collapsible = key === "finished" || key === "waiting";
+    const section = document.createElement(collapsible ? "details" : "section");
     section.className = `request-group ${key}`;
-    if (key === "finished") section.open = bridgeFinishedExpanded;
-    const header = document.createElement(key === "finished" ? "summary" : "header");
+    if (collapsible) section.open = key === "finished" ? bridgeFinishedExpanded : bridgeWaitingExpanded;
+    const header = document.createElement(collapsible ? "summary" : "header");
     header.className = "request-group-head";
     const copy = document.createElement("div");
     const heading = document.createElement("h3");
@@ -1144,9 +1192,11 @@ function renderRequestContents() {
     list.className = "request-list";
     section.append(header, list);
     target.append(section);
-    if (key === "finished") {
+    if (collapsible) {
       section.addEventListener("toggle", () => {
-        bridgeFinishedExpanded = section.open;
+        if (!section.isConnected) return;
+        if (key === "finished") bridgeFinishedExpanded = section.open;
+        else bridgeWaitingExpanded = section.open;
       });
     }
     groups.set(key, { list, count, total: 0 });
@@ -1154,6 +1204,22 @@ function renderRequestContents() {
   const visibleRequests = state.operatingMode?.selected === 'bridge' ? [...state.requests].sort((a, b) =>
     (a.administrativePosition || Number.MAX_SAFE_INTEGER) - (b.administrativePosition || Number.MAX_SAFE_INTEGER)) : state.requests;
   visibleRequests.forEach((item, index) => {
+    if (item.cleared) return;
+    if (state.operatingMode?.selected === 'bridge' && !item.outcome && (item.sentToVirtualDJ || item.queued || item.queueUnverified)) {
+      const group=groups.get('waiting'), row=document.createElement('article'); row.className='request-card';row.dataset.requestId=item.id;row.dataset.noI18n='';
+      const arrival=timelines.arrival.get(item.id), entry=state.virtualDJ?.entries?.find(e=>e.linkedRequestId===item.id);
+      const head=document.createElement('strong');head.textContent=`#${arrival?.number || index+1} · ${guestDisplayName(item)} · ${item.song}`;
+      const detail=document.createElement('small');detail.textContent=[item.artist,entry ? `#${entry.position} · ${entry.phase || 'QUEUED'}` : item.pendingResolution ? '¿Qué ocurrió con esta canción?' : 'Esperando reconexión'].filter(Boolean).join(' · ');
+      row.append(head,detail);
+      if (item.pendingResolution) {
+        const actions = document.createElement('div'); actions.className = 'queue-actions';
+        actions.append(button('Ya cantó', 'ghost', () => markOutcome(item.id, 'completed')),
+          button('Omitida', 'ghost', () => markOutcome(item.id, 'skipped')),
+          button('Mantener afuera', 'ghost', () => dismissRequeue(item.id)));
+        row.append(actions);
+      }
+      group.list.append(row);group.count.textContent=++group.total;return;
+    }
     const fragment = template.content.cloneNode(true);
     const card = $(".request-card", fragment);
     card.dataset.requestId = item.id;
@@ -1229,7 +1295,7 @@ function renderRequestContents() {
       item.localState === "removed" ||
       item.localState === "removed-missing";
     const isTerminal =
-      item.localState === "completed" || item.localState === "skipped" || item.outcome === 'removed';
+      item.localState === "completed" || item.localState === "skipped" || Boolean(item.outcome);
     const details = $(".request-details", card);
     const detailsLabel = $("summary span", details);
     details.open = expandedRequestIds.has(item.id);
@@ -1459,7 +1525,7 @@ function renderRequestContents() {
       );
     }
     const outcomePanel = $(".outcome-panel", card);
-    if (!isTerminal) {
+    if (!isTerminal && state.operatingMode?.selected !== "bridge") {
       outcomePanel.append(
         button("✓ Completed", "success", () =>
           markOutcome(item.id, "completed")
@@ -1468,7 +1534,7 @@ function renderRequestContents() {
           markOutcome(item.id, "skipped")
         )
       );
-    } else {
+    } else if (isTerminal) {
       if (item.canRestoreToQueue && item.undoOriginalPosition) {
         outcomePanel.append(
           button(
@@ -1502,12 +1568,26 @@ function renderRequestContents() {
         element.disabled = true;
       });
     }
+    if (item.standby) { badge.textContent = "RESERVA / STANDBY"; card.classList.add("standby"); }
     const groupKey = isTerminal ? "finished" : "active";
     const group = groups.get(groupKey);
     group.total += 1;
     group.count.textContent = group.total;
     group.list.append(fragment);
   });
+  if (state.operatingMode?.selected === 'bridge') {
+    const group=groups.get('finished');
+    for(const entry of state.operations?.externalHistory || []) {
+      const row=document.createElement('article');row.className='request-card external-history';row.dataset.noI18n='';
+      const head=document.createElement('strong');head.textContent=entry.song || entry.title || 'VirtualDJ';
+      const detail=document.createElement('small');detail.textContent=[entry.artist,'Pista propia de VirtualDJ',entry.outcome==='completed'?'Completada':entry.outcome==='skipped'?'Omitida':'Retirada'].filter(Boolean).join(' · ');
+      const correction=button('Corregir estado','ghost',async()=>{
+        try{await api('/api/virtualdj/history/action',{method:'POST',body:JSON.stringify({virtualDJItemId:entry.virtualDJItemId,outcome:entry.outcome==='completed'?'skipped':'completed',commandId:crypto.randomUUID()})});await refresh();}
+        catch(error){showNotice(error.message,true);}
+      });
+      row.append(head,detail,correction);group.list.append(row);group.count.textContent=++group.total;
+    }
+  }
   groups.forEach((group) => {
     if (group.total) return;
     const empty = document.createElement("p");
@@ -1769,7 +1849,7 @@ function applyInterfacePreferences(preferences = {}) {
   const signature = JSON.stringify(publicPreferences);
   if (signature !== lastStarScreenPreferencesSignature) {
     lastStarScreenPreferencesSignature = signature;
-    starScreenPreferencesChannel.postMessage({ type: "star-screen-preferences", preferences: publicPreferences, publishedAt: Date.now() });
+    starScreenPreferencesChannel?.postMessage({ type: "star-screen-preferences", preferences: publicPreferences, publishedAt: Date.now() });
     try {
       const snapshot = JSON.parse(localStorage.getItem("guest-star:player-state") || "null");
       if (snapshot) localStorage.setItem("guest-star:player-state", JSON.stringify({ ...snapshot, starScreenPreferences: publicPreferences }));
@@ -1834,9 +1914,10 @@ function fillPreferences() {
     : "No password";
   $("#autoQueueExact").checked = Boolean(state.config.autoQueueExact);
   $("#uiLanguageSelect").value = state.config.uiLanguage === "en" ? "en" : "es";
-  $("#defaultStemEngine").value = ["auto", "spleeter", "demucs"].includes(state.config.defaultStemEngine)
-    ? state.config.defaultStemEngine
-    : "auto";
+  $("#defaultStemEngine").value = ["spleeter", "demucs", "gsvocalrt"].includes(state.config.selectedStemEngine)
+    ? state.config.selectedStemEngine
+    : "spleeter";
+  $("#defaultVocalGuidePercent").value = Math.round(Math.max(0, Math.min(0.2, Number(state.config.defaultVocalGuideLevel) || 0)) * 100);
   const interfacePreferences = state.config.interfacePreferences || {};
   $("#preferenceShowPreview").checked = interfacePreferences.showStarScreenPreview !== false;
   $("#preferenceShowWaveform").checked = interfacePreferences.showWaveform !== false;
@@ -1915,9 +1996,10 @@ function preferencesPayload() {
     autoQueueExact: $("#autoQueueExact").checked,
     audioOutputDeviceId: $("#preferencesAudioOutput").value,
     starScreenDisplayId: $("#preferencesStarScreenDisplay").value,
-    defaultStemEngine: ["auto", "spleeter", "demucs"].includes($("#defaultStemEngine").value)
+    defaultVocalGuideLevel: Math.max(0, Math.min(20, Number($("#defaultVocalGuidePercent").value) || 0)) / 100,
+    selectedStemEngine: ["spleeter", "demucs", "gsvocalrt"].includes($("#defaultStemEngine").value)
       ? $("#defaultStemEngine").value
-      : "auto",
+      : "spleeter",
     interfacePreferences: {
       showStarScreenPreview: $("#preferenceShowPreview").checked,
       showWaveform: $("#preferenceShowWaveform").checked,
@@ -2035,7 +2117,7 @@ function showHostForSelectedMode({ resetBridgeHistory = true } = {}) {
     playerPanel.open();
   } else if (selectedMode === "bridge") {
     if (state?.activity?.activityRunning) autoRestoredBridgeActivityId = activityId;
-    if (resetBridgeHistory) bridgeFinishedExpanded = false;
+    if (resetBridgeHistory) { bridgeFinishedExpanded = false; bridgeWaitingExpanded = false; }
     superhostPanel.close();
     playerPanel.close({ force: true });
     renderRequests();
@@ -2045,7 +2127,14 @@ function showHostForSelectedMode({ resetBridgeHistory = true } = {}) {
 }
 
 function requestHostEntry({ selectionConfirmed = false } = {}) {
-  if ((!selectionConfirmed && superhostPanel.isOpen()) || !state?.tenant?.activity || !state?.account?.current?.activityId) {
+  if (state?.account?.user?.role === "superhost" && !selectionConfirmed) {
+    if (mountedMode) { void navigateEntry('switch'); return; }
+    pendingHostEntry = true;
+    showEntrySelection();
+    $("#activitySelectionFields").hidden = false;
+    return;
+  }
+  if (!state?.tenant?.activity || !entryContextId(state)) {
     pendingHostEntry = true;
     fillSelection(true);
     if (!selectionDialog.open) selectionDialog.showModal();
@@ -2058,11 +2147,15 @@ function requestHostEntry({ selectionConfirmed = false } = {}) {
     return;
   }
   pendingHostEntry = false;
+  if (!mountedMode) { enterSelectedContext(); return; }
   showHostForSelectedMode();
 }
 
 function openSuperhostView() {
-  if (state?.account?.user?.role !== "superhost") return;
+  if (state?.account?.authenticated !== true || state.account.user?.role !== "superhost") return;
+  if (selectionDialog.open) selectionDialog.close();
+  if (playbackModeDialog.open) playbackModeDialog.close();
+  pendingActivityAction = "";
   pendingHostEntry = false;
   superhostInHostView = false;
   const activityId = String(state?.account?.current?.activityId || state?.activity?.activityId || "");
@@ -2078,17 +2171,19 @@ function openSuperhostView() {
 }
 
 function openPlaybackModeDialog(action = "") {
-  if (!state?.tenant?.activity || !state?.account?.current?.activityId) {
+  if (!state?.tenant?.activity || !entryContextId(state)) {
     showNotice("Selecciona el hotel, venue y actividad antes de elegir el modo.", true);
     return;
   }
-  if (state?.operatingMode?.locked) {
+  if (state?.operatingMode?.locked && state?.account?.user?.role!=='superhost' && mountedMode) {
     showNotice("El modo de reproducción está bloqueado hasta finalizar la actividad.", true);
     return;
   }
+  if(mountedMode){navigateEntry('mode');return;}
   pendingActivityAction = action;
   playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => {
     button.classList.toggle("selected", button.dataset.playbackMode === state?.operatingMode?.selected);
+    button.disabled=Boolean(state?.operatingMode?.locked && state?.account?.user?.role!=='superhost' && button.dataset.playbackMode!==state.operatingMode.selected);
   });
   if (!playbackModeDialog.open) playbackModeDialog.showModal();
 }
@@ -2099,23 +2194,14 @@ async function selectPlaybackMode(mode) {
       method: "POST",
       body: JSON.stringify({ mode })
     });
-    applyState(next);
-    if (playbackModeDialog.open) playbackModeDialog.close();
-    const action = pendingActivityAction;
-    const shouldEnterHost = pendingHostEntry || !superhostPanel.isOpen();
-    pendingActivityAction = "";
-    pendingHostEntry = false;
-    if (shouldEnterHost) showHostForSelectedMode();
-    showNotice(mode === "player"
-      ? "Player interno seleccionado. Puedes cambiarlo hasta iniciar la actividad."
-      : "Bridge con VirtualDJ seleccionado. Puedes cambiarlo hasta iniciar la actividad.");
-    if (action) await controlActivity(action);
+    location.replace('/operate?mode='+encodeURIComponent(mode)+'&context='+encodeURIComponent(entryContextId(next)));
   } catch (error) {
     showNotice(error.message, true);
   }
 }
 
 async function controlActivity(action) {
+  if (["start", "start-new"].includes(action) && !["scheduled", "in_progress"].includes(state?.tenant?.session?.status)) action = "open";
   if (activityBusy) {
     showNotice("An activity change is already in progress.");
     return;
@@ -2124,6 +2210,8 @@ async function controlActivity(action) {
     openPlaybackModeDialog(action);
     return;
   }
+  activityBusy = true;
+  try {
   if (
     ["reset", "archive", "finish", "start-new"].includes(action) &&
     !(await confirmAction({
@@ -2133,7 +2221,7 @@ async function controlActivity(action) {
           ? "Start a new activity?"
           : "Archive and clear the current queue?",
       detail: action === "finish"
-        ? "New requests will close, but the current queue and history will be preserved."
+        ? "New requests will close. Future VirtualDJ queue tracks will be removed; loaded decks and history stay intact."
         : action === "start-new"
           ? "The previous queue will be archived and the activity will start with an empty queue."
           : "All current requests will move to history. The permanent link and QR will not change.",
@@ -2146,27 +2234,41 @@ async function controlActivity(action) {
   ) {
     return;
   }
+  const preparation = state?.entryContext?.sessionType === "free" ? {} : action === "open" ? (["scheduled","in_progress"].includes(state?.tenant?.session?.status) ? {runId:state.tenant.session.runId} : await prepareSession(state,{submitFree:preparation=>api("/api/activity/open",{method:"POST",body:JSON.stringify(preparation)})})) : action === "finish" ? {runId:state?.tenant?.session?.runId} : {};
+  if (!preparation) { updateStatus(); return; }
+  if (preparation.scheduleSaved || preparation.sessionPrepared) {
+    if (preparation.sessionPrepared) applyState(preparation.confirmed);
+    showNotice(preparation.message);
+    return;
+  }
+  const previousActivity = {...state?.activity};
+  const previousAccepting = state?.activity?.accepting;
+  const optimisticAccepting = mountedMode === 'bridge' && ['open', 'close','finish'].includes(action);
   activityBusy = true;
+  if (optimisticAccepting) { bridgePendingAccepting = action === 'open'; state.activity.accepting = bridgePendingAccepting; }
+  if(mountedMode==='bridge' && ['start','finish'].includes(action)){state.activity.activityRunning=action==='start';state.activity[action==='start'?'activityStartedAt':'activityFinishedAt']=new Date().toISOString();bridgePendingLifecycle={activityId:state.activity.activityId,activityRunning:state.activity.activityRunning,activityStartedAt:state.activity.activityStartedAt,activityFinishedAt:state.activity.activityFinishedAt};}
   updateStatus();
   try {
-    applyState(
-      await api(`/api/activity/${action}`, { method: "POST", body: "{}" })
-    );
-    showNotice({
+    const confirmed=await api(`/api/activity/${action}`, {method:"POST",body:JSON.stringify(preparation)});
+    bridgePendingAccepting=null;bridgePendingLifecycle=null;applyState(confirmed);
+    showNotice(state?.entryContext?.sessionType === "free" ? (["start", "start-new", "open"].includes(action) ? "Sesión libre iniciada." : action === "finish" ? "Sesión libre finalizada; cola e historial conservados." : "Sesión libre actualizada.") : {
       start: "Activity started. The timer and end time are now running.",
       open: "Requests are now open.",
       close: "Requests are now closed.",
       reset: "Activity archived and local queue synchronized.",
       archive: "Queue archived and cleared. The permanent link and QR did not change.",
-      finish: "Activity finished. The current queue and history were preserved.",
+      finish: "Activity finished. Future queue cleanup is running; loaded decks and history are preserved.",
       "start-new": "A new activity started with an empty active queue."
     }[action]);
   } catch (error) {
+    bridgePendingAccepting = null;bridgePendingLifecycle=null;
+    if(mountedMode==='bridge')Object.assign(state.activity,previousActivity);
     showNotice(error.message, true);
   } finally {
-    activityBusy = false;
+    activityBusy = false; bridgePendingAccepting = null;bridgePendingLifecycle=null;
     updateStatus();
   }
+  } finally { activityBusy=false;updateStatus(); }
 }
 
 function option(select, value, label) {
@@ -2249,6 +2351,7 @@ function updateAuthUi() {
   if (!state) return;
   const authenticated = state.account?.authenticated === true;
   if (!authenticated) {
+    if (!mountedMode) entryInitialized = false;
     if (!loginDialog.open) {
       // Seed the remembered account only when the dialog first opens. Realtime
       // state updates must never replace text while somebody is signing in.
@@ -2262,6 +2365,7 @@ function updateAuthUi() {
     openPasswordDialog(true);
     return;
   }
+  if(!mountedMode){void initializeEntry();return;}
   if (state.account?.user?.role === "superhost") return;
   if (!state.account?.current?.activityId && !passwordDialog.open) {
     fillSelection(true);
@@ -2368,7 +2472,7 @@ $("#selectionForm").addEventListener("submit", async (event) => {
   error.classList.add("hidden");
   try {
     if (!$("#hotelSelect").value || !$("#venueSelect").value || !$("#activitySelect").value) return;
-    if (state?.activity?.activityRunning) {
+    if (state?.activity?.activityRunning && state?.account?.user?.role!=='superhost') {
       const current = state.account?.current || {};
       if (current.hotelId !== $("#hotelSelect").value || current.venueId !== $("#venueSelect").value || current.activityId !== $("#activitySelect").value) throw new Error("Finaliza la actividad antes de cambiar hotel, actividad o modo.");
     } else {
@@ -2384,17 +2488,21 @@ $("#selectionForm").addEventListener("submit", async (event) => {
     }
     selectionDialog.close();
     showNotice("This Bridge is ready for the selected activity.");
-    if (pendingHostEntry || state.account?.user?.role !== "superhost") requestHostEntry({ selectionConfirmed: true });
+    enterSelectedContext();
   } catch (selectionError) {
     error.textContent = selectionError.message;
     error.classList.remove("hidden");
   }
 });
 
-selectionDialog.addEventListener("cancel", () => { pendingHostEntry = false; });
+selectionDialog.addEventListener("cancel", () => {
+  pendingHostEntry = false;
+  if (!mountedMode && state?.account?.user?.role === "superhost") openSuperhostView();
+});
 $("#closeSelection").addEventListener("click", () => {
   pendingHostEntry = false;
-  if (state.account?.current?.activityId) selectionDialog.close();
+  if (state?.account?.user?.role === "superhost") openSuperhostView();
+  else if (state.account?.current?.activityId) selectionDialog.close();
 });
 $("#closePlaybackMode").addEventListener("click", () => {
   pendingActivityAction = "";
@@ -2405,12 +2513,11 @@ playbackModeDialog.querySelectorAll("[data-playback-mode]").forEach((button) => 
   button.addEventListener("click", () => void selectPlaybackMode(button.dataset.playbackMode));
 });
 $("#switchActivity").addEventListener("click", () => {
-  if (state?.activity?.activityRunning) {
+  if (state?.activity?.activityRunning && state?.account?.user?.role!=='superhost') {
     showNotice("Finaliza la actividad antes de cambiar hotel, actividad o modo.", true);
     return;
   }
-  fillSelection();
-  selectionDialog.showModal();
+  navigateEntry('switch');
 });
 
 async function logout() {
@@ -2522,7 +2629,9 @@ $("#settingsButton").addEventListener("click", () => {
   fillSettings();
   settingsDialog.showModal();
 });
+const playerMediaPreferences=installPlayerMediaPreferences({request:api,document});
 function openPreferences() {
+  void playerMediaPreferences.load();
   if (!state?.config) return;
   fillPreferences();
   if (!preferencesDialog.open) preferencesDialog.showModal();
@@ -2601,6 +2710,19 @@ $("#settingsForm").addEventListener("submit", async (event) => {
     showNotice(error.message, true);
   }
 });
+$("#defaultStemEngine").addEventListener("change", async (event) => {
+  const selector = event.currentTarget, status = $("#stemEnginePreferenceStatus");
+  const previous = state.config.selectedStemEngine;
+  selector.disabled = true;
+  try {
+    const result = await api("/api/player/stem-engine", { method: "POST", body: JSON.stringify({ selectedStemEngine: selector.value }) });
+    state.config.selectedStemEngine = result.selectedStemEngine;
+    status.textContent = selector.value === "demucs" ? "Demucs puede utilizar considerablemente más RAM y CPU." : "Motor guardado.";
+    if (result.activeEngine !== result.selectedStemEngine) status.textContent += " Se aplicará al siguiente procesamiento.";
+    await refresh();
+  } catch (error) { selector.value = previous; status.textContent = error.message; }
+  finally { selector.disabled = false; }
+});
 $("#preferencesForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -2663,7 +2785,36 @@ $("#testVdj").addEventListener("click", async () => {
   }
 });
 
+const activityAutomation=createActivityAutomation({act:async(action,body)=>{applyState(await api(`/api/activity/${action}`,{method:'POST',body:JSON.stringify(body)}));},reconcile:async()=>{applyState(await api('/api/activity/reconcile',{method:'POST',body:'{}'}));},notice:showNotice});
+window.addEventListener('focus',()=>activityAutomation.resume());
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)activityAutomation.resume();});
+
 function applyState(nextState) {
+  if(mountedMode==='bridge' && bridgePendingLifecycle && nextState.activity?.activityId===bridgePendingLifecycle.activityId)Object.assign(nextState.activity,bridgePendingLifecycle);
+  activityAutomation.update(nextState);
+  if (mountedMode === "bridge" && bridgePendingAccepting !== null && nextState.activity) nextState.activity.accepting = bridgePendingAccepting;
+  if (!mountedMode) {
+    state = nextState;
+    bridgeI18n.setLanguage(state.config?.uiLanguage || 'es');
+    updateAuthUi();
+    if (superhostPanel.isOpen() || state.account?.user?.role !== 'superhost' || !state.account?.authenticated) superhostPanel.sync(state);
+    updateStatus();
+    return;
+  }
+
+  const context = JSON.stringify([nextState.account?.current?.hotelId, nextState.account?.current?.venueId, nextState.account?.current?.activityId, nextState.activity?.activityStartedAt]);
+  if (context !== renderedActivityContext) {
+    renderedActivityContext = context;
+    bridgeFinishedExpanded = false; bridgeWaitingExpanded = false;
+    expandedRequestIds.clear();
+    bridgeOptimisticRequests.clear(); youtubePageOffsets.clear();
+    bridgeOperations.resetActivityContext();
+    if (document.getElementById("clearQueueDialog").open) document.getElementById("clearQueueDialog").close();
+  }
+  for (const item of nextState.requests || []) {
+    const pending = bridgeOptimisticRequests.get(item.id);
+    if (pending) Object.assign(item, pending.patch);
+  }
   bridgeOperations.captureFocus();
   storagePreferences.observeState(nextState);
   preserveBridgeScroll(() => {
@@ -2772,13 +2923,27 @@ function connectRealtime() {
   };
 }
 
-await refresh();
-const realtimeSource = connectRealtime();
-window.addEventListener("beforeunload", () => realtimeSource.close());
+if(workspaceRoute) {
+  state=await api('/api/state');
+  const params=new URLSearchParams(location.search),mode=params.get('mode');
+  if(!['player','bridge'].includes(mode) || state.operatingMode?.selected!==mode || entryContextId(state)!==params.get('context'))location.replace('/');
+  else {await mountWorkspace(mode);applyState(state);showHostForSelectedMode();}
+}else{
+  await api('/api/entry/prepare',{method:'POST',body:'{}'});
+  await refresh();
+}
+const realtimeSource=mountedMode ? connectRealtime() : null;
+window.addEventListener('beforeunload',()=>realtimeSource?.close());
 window.addEventListener("gueststar:native-audio-result", (event) => {
   if (["nativeAudioLoad", "nativeAudioStop"].includes(event.detail?.action)) storagePreferences.changed();
 });
 window.addEventListener("focus", syncWhenActive);
 window.addEventListener("focus", () => storagePreferences.changed());
 document.addEventListener("visibilitychange", syncWhenActive);
-window.setInterval(updateTimeDashboard, 1000);
+if(mountedMode)window.setInterval(updateTimeDashboard, 1000);
+
+$('#rememberedActivityChoice').addEventListener('click',()=>void useRememberedActivity());
+$('#resumeFreeActivity').addEventListener('click',async()=>{try{applyState(await api('/api/entry/free/resume',{method:'POST',body:'{}'}));selectionDialog.close();enterSelectedContext();}catch(error){showNotice(error.message,true);}});
+$('#chooseOtherActivity').addEventListener('click',()=>{$('#activitySelectionFields').hidden=false;fillSelection(true);});
+$('#chooseFreeMode').addEventListener('click',async()=>{try{applyState(await api('/api/entry/free',{method:'POST',body:'{}'}));selectionDialog.close();openPlaybackModeDialog();}catch(error){showNotice(error.message,true);}});
+$('#entrySelectActivity').addEventListener('click',showEntrySelection);

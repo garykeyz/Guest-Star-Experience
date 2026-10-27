@@ -4,6 +4,8 @@
 #import <CoreAudio/CoreAudio.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <WebKit/WebKit.h>
+#import "player_effect.h"
+#import "original_reader.h"
 
 #include <signal.h>
 #include <unistd.h>
@@ -226,6 +228,10 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 @property(nonatomic, copy) NSString *name;
 @property(nonatomic, weak) AVAudioEngine *engine;
 @property(nonatomic, strong) AVAudioPlayerNode *originalPlayer;
+@property(nonatomic, strong) AVAudioUnit *vocalRT;
+@property(nonatomic) NSUInteger vocalRTPlayRevision;
+@property(nonatomic, copy) NSString *stemEngine;
+@property(nonatomic) BOOL separationEnabled;
 @property(nonatomic, strong) AVAudioPlayerNode *instrumentalPlayer;
 @property(nonatomic, strong) AVAudioPlayerNode *vocalsPlayer;
 @property(nonatomic, strong) AVAudioMixerNode *originalMix;
@@ -252,6 +258,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 @property(nonatomic) float meter;
 @property(nonatomic) float autoGainDb;
 @property(nonatomic) float vocalLevel;
+@property(nonatomic, copy) void (^pendingSeekCompletion)(BOOL, NSString *);
 - (instancetype)initWithName:(NSString *)name engine:(AVAudioEngine *)engine destination:(AVAudioNode *)destination;
 - (void)loadSources:(NSArray<NSDictionary *> *)sources
             position:(NSTimeInterval)position
@@ -260,6 +267,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 - (void)integrateStemSources:(NSArray<NSDictionary *> *)sources completion:(GSAudioDeckLoadCompletion)completion;
 - (void)pause;
 - (void)seek:(NSTimeInterval)position;
+- (void)seek:(NSTimeInterval)position completion:(void (^)(BOOL, NSString *))completion;
+- (void)finishPendingSeek:(BOOL)ok error:(NSString *)error;
 - (void)cancelPendingLoadsAndStop;
 - (void)stopAndClear;
 - (void)setTempoPercent:(float)percent;
@@ -318,6 +327,10 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     _originalMix, _instrumentalMix, _vocalsMix, _inputMix,
     _autoGain, _timePitch, _equalizer, _masterMix
   ]) [engine attachNode:node];
+  if ([name isEqualToString:@"karaoke"] && [NSProcessInfo.processInfo.environment[@"GUEST_STAR_VOCALRT_P0"] isEqualToString:@"1"]) {
+    _vocalRT = GSVCreatePlayerEffect();
+    if (_vocalRT) [engine attachNode:_vocalRT];
+  }
   [engine connect:_originalPlayer to:_originalMix format:nil];
   [engine connect:_instrumentalPlayer to:_instrumentalMix format:nil];
   [engine connect:_vocalsPlayer to:_vocalsMix format:nil];
@@ -326,7 +339,11 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   [engine connect:_vocalsMix to:_inputMix format:nil];
   [engine connect:_inputMix to:_autoGain format:nil];
   [engine connect:_autoGain to:_timePitch format:nil];
-  [engine connect:_timePitch to:_equalizer format:nil];
+  if (_vocalRT) {
+    AVAudioFormat *stemFormat = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
+    [engine connect:_timePitch to:_vocalRT format:stemFormat];
+    [engine connect:_vocalRT to:_equalizer format:nil];
+  } else [engine connect:_timePitch to:_equalizer format:nil];
   [engine connect:_equalizer to:_masterMix format:nil];
   [engine connect:_masterMix to:destination format:nil];
   // The panel's waveform receives this native post-EQ level.  WebKit has no
@@ -348,6 +365,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
       GSLobbyWaveformCapture(&deck->_lobbyWaveform, channels, buffer.format.channelCount, buffer.frameLength);
     }
   }];
+  _separationEnabled = YES;
   _originalMix.outputVolume = 1.0f;
   _instrumentalMix.outputVolume = 0.0f;
   _vocalsMix.outputVolume = 0.0f;
@@ -478,6 +496,10 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 }
 
 - (void)prepareSource:(NSDictionary *)source completion:(void (^)(NSDictionary *prepared, NSError *error))completion {
+  if ([self.name isEqualToString:@"karaoke"] && [self.stemEngine isEqualToString:@"gsvocalrt"] && [source[@"slot"] isEqualToString:@"original"]) {
+    NSURL *url = [NSURL URLWithString:source[@"url"]];
+    if ([url.path hasPrefix:@"/api/player/media/"]) { GSVPrepareOriginalSource(url, completion); return; }
+  }
   NSString *slot = [source[@"slot"] isKindOfClass:NSString.class] ? source[@"slot"] : @"original";
   if ([slot isEqualToString:@"gsx"]) {
     [self prepareGSXSource:source completion:completion];
@@ -519,6 +541,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   self.lastSeekRevision = 0;
   const NSUInteger generation = self.generation;
   [self stopAndClear];
+  GSVPlayerEffectSelected(self.vocalRT, [self.stemEngine isEqualToString:@"gsvocalrt"]);
   if (sources.count == 0) {
     completion(NO, @"No hay una fuente de audio nativa para este reproductor.", 0);
     return;
@@ -541,6 +564,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
       NSFileManager *manager = NSFileManager.defaultManager;
       NSMutableSet<NSURL *> *urls = [NSMutableSet set];
       for (NSDictionary *entry in prepared) {
+        if ([entry[@"slot"] isEqualToString:@"vocalrt-original"])
+          for (GSVOriginalReader *reader in [entry[@"gsxReaders"] allValues]) [reader close];
         NSURL *downloaded = entry[@"downloaded"];
         NSURL *cache = entry[@"cache"];
         if (downloaded != nil) [urls addObject:downloaded];
@@ -570,6 +595,13 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     for (NSDictionary *entry in prepared) {
       NSString *slot = entry[@"slot"];
       NSDictionary<NSString *, GSXStemReader *> *readers = [entry[@"gsxReaders"] isKindOfClass:NSDictionary.class] ? entry[@"gsxReaders"] : nil;
+      if ([slot isEqualToString:@"vocalrt-original"] && readers[@"original"]) {
+        [self.gsxReaders addEntriesFromDictionary:readers];
+        self.originalMix.outputVolume = 1;
+        GSXStemReader *reader = readers[@"original"];
+        self.duration = reader.frameCount / reader.format.sampleRate;
+        continue;
+      }
       if ([slot isEqualToString:@"gsx"] && readers.count == 2) {
         [self.gsxReaders addEntriesFromDictionary:readers];
         self.instrumentalMix.outputVolume = 1.0f;
@@ -688,13 +720,13 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(lead * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
       if (generation != self.generation) return;
       if (seekRevision != self.lastSeekRevision || playing != self.playing) {
-        self.originalMix.outputVolume = 0;
-        self.instrumentalMix.outputVolume = 1;
-        self.vocalsMix.outputVolume = self.vocalLevel;
+        self.originalMix.outputVolume = self.separationEnabled ? 0 : 1;
+        self.instrumentalMix.outputVolume = self.separationEnabled ? 1 : 0;
+        self.vocalsMix.outputVolume = self.separationEnabled ? self.vocalLevel : 0;
       } else {
-        GSRampMixerVolume(self.originalMix, 0, 0.012);
-        GSRampMixerVolume(self.instrumentalMix, 1, 0.012);
-        GSRampMixerVolume(self.vocalsMix, self.vocalLevel, 0.012);
+        GSRampMixerVolume(self.originalMix, self.separationEnabled ? 0 : 1, 0.012);
+        GSRampMixerVolume(self.instrumentalMix, self.separationEnabled ? 1 : 0, 0.012);
+        GSRampMixerVolume(self.vocalsMix, self.separationEnabled ? self.vocalLevel : 0, 0.012);
       }
     });
     completion(YES, @"", self.duration);
@@ -702,11 +734,17 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 }
 
 - (BOOL)scheduleAt:(NSTimeInterval)position error:(NSError **)error {
+  self.vocalRTPlayRevision += 1;
+  GSVPlayerEffectPlaying(self.vocalRT, NO);
+  GSVPlayerEffectBoundary(self.vocalRT);
   NSTimeInterval bounded = MAX(0, MIN(position, self.duration));
   // Invalidate decoder callbacks before stop delivers old buffer completions.
   // Otherwise a completed old buffer can enqueue pre-seek PCM after stop.
   for (GSXStemReader *reader in self.gsxReaders.allValues) [reader invalidate];
   for (NSString *slot in [self activeSlots]) [[self playerForSlot:slot] stop];
+  // Player stop drops scheduled PCM, but TimePitch keeps its overlap/history.
+  // Clear this deck's tempo tail before scheduling the new source generation.
+  AudioUnitReset(self.timePitch.audioUnit, kAudioUnitScope_Global, 0);
   for (NSString *slot in self.files) {
     if (self.gsxReaders[slot] != nil) continue;
     AVAudioFile *file = self.files[slot];
@@ -717,6 +755,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     [player scheduleSegment:file startingFrame:start frameCount:frames atTime:nil completionHandler:nil];
   }
   for (NSString *slot in self.gsxReaders) {
+    if (bounded >= self.duration) continue;
     GSXStemReader *reader = self.gsxReaders[slot];
     NSError *decodeError = nil;
     if (![reader scheduleFromPosition:bounded player:[self playerForSlot:slot] error:&decodeError]) {
@@ -737,7 +776,9 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     if (error != NULL) *error = [NSError errorWithDomain:@"GuestStarNativeAudio" code:5 userInfo:@{ NSLocalizedDescriptionKey: @"El deck nativo aún no está preparado." }];
     return NO;
   }
-  if (![self scheduleAt:position error:error]) return NO;
+  GSVOriginalReader *streamReader = (GSVOriginalReader *)self.gsxReaders[@"original"];
+  BOOL ready = [streamReader isKindOfClass:GSVOriginalReader.class] && [streamReader isPreparedForPosition:position];
+  if (!ready && ![self scheduleAt:position error:error]) return NO;
   if (!self.engine.isRunning && ![self.engine startAndReturnError:error]) return NO;
   // A common host timestamp starts the vocal and instrumental nodes on the
   // same render boundary. Sequential -play calls can start on different pulls.
@@ -745,7 +786,27 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   AVAudioTime *startTime = slots.count > 1
       ? [AVAudioTime timeWithHostTime:mach_absolute_time() + [AVAudioTime hostTimeForSeconds:0.02]]
       : nil;
-  for (NSString *slot in slots) [[self playerForSlot:slot] playAtTime:startTime];
+  if ([streamReader isKindOfClass:GSVOriginalReader.class] && ![streamReader isPreparedForPosition:position]) {
+    const NSUInteger revision = ++self.vocalRTPlayRevision;
+    __weak GSAudioDeck *weakDeck = self;
+    [streamReader whenPreparedForPosition:position completion:^(BOOL prepared, NSError *failure) {
+      GSAudioDeck *deck = weakDeck;
+      if (!deck || deck.vocalRTPlayRevision != revision || !deck.playing) return;
+      if (!prepared) {
+        deck.playing = NO; GSVPlayerEffectPlaying(deck.vocalRT, NO);
+        [deck finishPendingSeek:NO error:failure.localizedDescription];
+        return;
+      }
+      deck.scheduledHostTime = mach_absolute_time();
+      GSVPlayerEffectPlaying(deck.vocalRT, YES);
+      for (NSString *slot in [deck activeSlots]) [[deck playerForSlot:slot] playAtTime:nil];
+      [deck finishPendingSeek:YES error:nil];
+    }];
+  } else {
+    GSVPlayerEffectPlaying(self.vocalRT, YES);
+    for (NSString *slot in slots) [[self playerForSlot:slot] playAtTime:startTime];
+    [self finishPendingSeek:YES error:nil];
+  }
   self.playing = YES;
   return YES;
 }
@@ -755,7 +816,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   // Derive the master timeline from samples actually rendered by the player.
   // NSDate alone runs through stalls, device changes and decoder starvation.
   NSTimeInterval latency = MAX(0, self.engine.outputNode.presentationLatency);
-  AVAudioPlayerNode *clockPlayer = self.files[@"original"] ? self.originalPlayer :
+  if (self.vocalRT && (self.files[@"original"] || self.gsxReaders[@"original"])) latency += self.vocalRT.AUAudioUnit.latency;
+  AVAudioPlayerNode *clockPlayer = (self.files[@"original"] || self.gsxReaders[@"original"]) ? self.originalPlayer :
       (self.files[@"instrumental"] || self.gsxReaders[@"instrumental"]) ? self.instrumentalPlayer : self.vocalsPlayer;
   AVAudioTime *renderTime = [clockPlayer lastRenderTime];
   AVAudioTime *playerTime = renderTime.hostTimeValid && renderTime.hostTime >= self.scheduledHostTime
@@ -772,6 +834,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     position = self.lastRenderedPosition;
   } else position = self.anchorPosition;
   if (position >= self.duration) {
+    GSVPlayerEffectPlaying(self.vocalRT, NO);
     self.playing = NO;
     for (NSString *slot in [self activeSlots]) [[self playerForSlot:slot] stop];
   }
@@ -779,24 +842,63 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 }
 
 - (void)pause {
+  [self finishPendingSeek:NO error:@"El seek fue sustituido por una pausa."];
+  self.vocalRTPlayRevision += 1;
   self.anchorPosition = [self currentPosition];
+  GSVPlayerEffectPlaying(self.vocalRT, NO);
   for (NSString *slot in [self activeSlots]) [[self playerForSlot:slot] pause];
   self.playing = NO;
 }
 
 - (void)seek:(NSTimeInterval)position {
+  [self seek:position completion:nil];
+}
+
+- (void)finishPendingSeek:(BOOL)ok error:(NSString *)error {
+  void (^completion)(BOOL, NSString *) = self.pendingSeekCompletion;
+  self.pendingSeekCompletion = nil;
+  if (completion) completion(ok, error ?: @"");
+}
+
+- (void)seek:(NSTimeInterval)position completion:(void (^)(BOOL, NSString *))completion {
+  [self finishPendingSeek:NO error:@"El seek fue sustituido por uno más reciente."];
   BOOL resume = self.playing;
   if (resume) [self pause];
+  self.pendingSeekCompletion = completion;
+  NSTimeInterval target = MAX(0, MIN(position, self.duration));
+  if (target >= self.duration) {
+    [self scheduleAt:target error:nil]; self.playing = NO;
+    [self finishPendingSeek:YES error:nil]; return;
+  }
+  NSError *error = nil;
   if (resume) {
-    NSError *error = nil;
-    [self playAtPosition:position error:&error];
-  } else [self scheduleAt:position error:nil];
+    if (![self playAtPosition:target error:&error]) [self finishPendingSeek:NO error:error.localizedDescription];
+  } else {
+    if (![self scheduleAt:target error:&error]) {
+      [self finishPendingSeek:NO error:error.localizedDescription]; return;
+    }
+    GSVOriginalReader *reader = (id)self.gsxReaders[@"original"];
+    if ([reader isKindOfClass:GSVOriginalReader.class] && ![reader isPreparedForPosition:target]) {
+      const NSUInteger revision = self.vocalRTPlayRevision;
+      __weak GSAudioDeck *weakDeck = self;
+      [reader whenPreparedForPosition:target completion:^(BOOL ready, NSError *failure) {
+        GSAudioDeck *deck = weakDeck;
+        if (deck && deck.vocalRTPlayRevision == revision) [deck finishPendingSeek:ready error:failure.localizedDescription];
+      }];
+    } else [self finishPendingSeek:YES error:nil];
+  }
 }
 
 - (void)stopAndClear {
+  [self finishPendingSeek:NO error:@"La fuente fue sustituida."];
+  self.vocalRTPlayRevision += 1;
+  GSVPlayerEffectPlaying(self.vocalRT, NO);
+  GSVPlayerEffectBoundary(self.vocalRT);
+  if (![self.stemEngine isEqualToString:@"gsvocalrt"]) GSVPlayerEffectSelected(self.vocalRT, NO);
   self.playing = NO;
   for (GSXStemReader *reader in self.gsxReaders.allValues) [reader invalidate];
   for (AVAudioPlayerNode *player in @[ self.originalPlayer, self.instrumentalPlayer, self.vocalsPlayer ]) [player stop];
+  AudioUnitReset(self.timePitch.audioUnit, kAudioUnitScope_Global, 0);
   [self.files removeAllObjects];
   for (GSXStemReader *reader in self.gsxReaders.allValues) [reader close];
   [self.gsxReaders removeAllObjects];
@@ -844,7 +946,21 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 // changing karaoke volume, tempo, pitch/key, EQ, fades or the selected output.
 - (void)setVocalLevel:(float)level {
   _vocalLevel = MAX(0.0f, MIN(1.0f, level));
-  GSRampMixerVolume(self.vocalsMix, _vocalLevel, 0.012);
+  GSVPlayerEffectGain(self.vocalRT, _vocalLevel);
+  if ([self.stemEngine isEqualToString:@"gsvocalrt"]) return; // Only the atomic effect gain; no unused mixer timers.
+  const BOOL hasStems = self.files[@"vocals"] != nil || self.gsxReaders[@"vocals"] != nil;
+  const BOOL hasOriginal = self.files[@"original"] != nil || self.gsxReaders[@"original"] != nil;
+  if (hasStems && hasOriginal) {
+    GSRampMixerVolume(self.originalMix, self.separationEnabled ? 0 : 1, 0.012);
+    GSRampMixerVolume(self.instrumentalMix, self.separationEnabled ? 1 : 0, 0.012);
+    GSRampMixerVolume(self.vocalsMix, self.separationEnabled ? _vocalLevel : 0, 0.012);
+  } else GSRampMixerVolume(self.vocalsMix, self.separationEnabled ? _vocalLevel : 1, 0.012);
+}
+
+- (void)setSeparationEnabled:(BOOL)enabled {
+  _separationEnabled = enabled;
+  GSVPlayerEffectEnabled(self.vocalRT, enabled);
+  [self setVocalLevel:self.vocalLevel];
 }
 
 - (void)setEqualizerLow:(float)low mid:(float)mid high:(float)high {
@@ -878,6 +994,11 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     @"outputLatency": @(MAX(0, self.engine.outputNode.presentationLatency)),
     @"sources": @(self.files.count + self.gsxReaders.count),
     @"sourceFormat": self.gsxReaders.count > 0 ? @"gsx" : @"legacy",
+    @"stemEngine": self.stemEngine ?: @"",
+    @"vocalGuideLevel": @(self.vocalLevel),
+    @"seekRevision": @(self.lastSeekRevision),
+    @"preparingSeek": @(self.pendingSeekCompletion != nil),
+    @"vocalRT": GSVPlayerEffectDiagnostics(self.vocalRT),
     @"hasVocalsSource": @(self.files[@"vocals"] != nil || self.gsxReaders[@"vocals"] != nil),
     @"vocalsGain": @(self.vocalsMix.outputVolume)
   };
@@ -907,6 +1028,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 @property(nonatomic) BOOL terminating;
 @property(nonatomic) BOOL terminationReplyPending;
 @property(nonatomic, strong) AVAudioEngine *nativeAudioEngine;
+@property(nonatomic) BOOL nativeAudioIdleSuspended;
 @property(nonatomic, strong) GSAudioDeck *karaokeAudioDeck;
 @property(nonatomic, strong) GSAudioDeck *backgroundAudioDeck;
 @property(nonatomic, strong) AVAudioMixerNode *nativeOutputMix;
@@ -1401,6 +1523,11 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     [self pauseNativeAudioDeckWithPayload:payload];
   } else if ([action isEqualToString:@"nativeAudioSeek"]) {
     [self seekNativeAudioDeckWithPayload:payload];
+  } else if ([action isEqualToString:@"nativeAudioVocalGain"]) {
+    // Gain-only, bounded control path. The effect owns continuous inference.
+    GSAudioDeck *deck = self.karaokeAudioDeck;
+    if (deck != nil && [payload[@"vocalLevel"] respondsToSelector:@selector(floatValue)])
+      [deck setVocalLevel:MAX(0.0f, MIN(1.0f, [payload[@"vocalLevel"] floatValue]))];
   } else if ([action isEqualToString:@"nativeAudioConfigure"]) {
     [self configureNativeAudioDeckWithPayload:payload];
   } else if ([action isEqualToString:@"nativeAudioMaster"]) {
@@ -1473,7 +1600,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 
 - (BOOL)ensureNativeAudioEngine:(NSError **)error {
   if (self.nativeAudioEngine != nil) {
-    if (self.nativeAudioEngine.isRunning || [self.nativeAudioEngine startAndReturnError:error]) return YES;
+    if (self.nativeAudioEngine.isRunning) return YES;
+    if ([self.nativeAudioEngine startAndReturnError:error]) { self.nativeAudioIdleSuspended = NO; return YES; }
     return NO;
   }
   AVAudioEngine *engine = [[AVAudioEngine alloc] init];
@@ -1546,6 +1674,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     @"audioContextCount": @0,
     @"timePitchNodeCount": @(self.nativeAudioEngine != nil ? 2 : 0),
     @"running": @(self.nativeAudioEngine.isRunning),
+    @"idleSuspended": @(self.nativeAudioIdleSuspended),
     @"masterDb": @(self.nativeMasterDb),
     @"outputDeviceId": self.nativeAudioOutputID ?: @"",
     @"decks": @[
@@ -1648,6 +1777,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   NSDictionary *eq = [payload[@"eq"] isKindOfClass:NSDictionary.class] ? payload[@"eq"] : @{};
   [deck setEqualizerLow:[eq[@"low"] floatValue] mid:[eq[@"mid"] floatValue] high:[eq[@"high"] floatValue]];
   NSTimeInterval position = MAX(0.0, [payload[@"position"] doubleValue]);
+  if (payload[@"separationEnabled"] != nil) [deck setSeparationEnabled:[payload[@"separationEnabled"] boolValue]];
+  deck.stemEngine = [payload[@"stemEngine"] isKindOfClass:NSString.class] ? payload[@"stemEngine"] : @"spleeter";
   [deck loadSources:sources position:position completion:^(BOOL ok, NSString *error, NSTimeInterval duration) {
     if (!ok) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:error]; return; }
     // loadSources applies each source's neutral transport gain.  Apply the
@@ -1702,6 +1833,9 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
   if (deck == nil) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioPause" error:deckError]; return; }
   [deck pause];
+  // Paused decks still leave the TimePitch graph rendering silence. Suspend
+  // rendering only when neither deck is audible; Play restarts this same graph.
+  [self pauseNativeAudioEngineIfIdle];
   [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioPause" detail:@{ @"deck": deck.name, @"position": @([deck currentPosition]) }];
 }
 
@@ -1716,19 +1850,30 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     return;
   }
   if (revision > 0) deck.lastSeekRevision = revision;
-  [deck seek:MAX(0.0, [payload[@"position"] doubleValue])];
-  [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioSeek" detail:@{ @"deck": deck.name, @"position": @([deck currentPosition]) }];
+  [deck seek:MAX(0.0, [payload[@"position"] doubleValue]) completion:^(BOOL ready, NSString *failure) {
+    if (!ready) {
+      [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioSeek" error:failure]; return;
+    }
+    [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioSeek" detail:@{
+      @"deck": deck.name, @"position": @([deck currentPosition]), @"seekRevision": @(revision)
+    }];
+  }];
 }
 
 - (void)configureNativeAudioDeckWithPayload:(NSDictionary *)payload {
   NSString *deckError = nil;
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
   if (deck == nil) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioConfigure" error:deckError]; return; }
+  if ([payload[@"stemEngine"] isKindOfClass:NSString.class]) {
+    deck.stemEngine = payload[@"stemEngine"];
+    GSVPlayerEffectSelected(deck.vocalRT, [deck.stemEngine isEqualToString:@"gsvocalrt"]);
+  }
   if (payload[@"tempoPercent"] != nil) [deck setTempoPercent:MAX(50.0f, MIN(150.0f, [payload[@"tempoPercent"] floatValue]))];
   if (payload[@"pitchSemitones"] != nil) [deck setPitchSemitones:MAX(-6.0f, MIN(6.0f, [payload[@"pitchSemitones"] floatValue]))];
   if (payload[@"volume"] != nil) [deck setVolume:MAX(0.0f, MIN(1.0f, [payload[@"volume"] floatValue]))];
   if (payload[@"autoGainDb"] != nil) [deck setAutoGainDb:MAX(-24.0f, MIN(12.0f, [payload[@"autoGainDb"] floatValue]))];
   if (payload[@"vocalLevel"] != nil) [deck setVocalLevel:MAX(0.0f, MIN(1.0f, [payload[@"vocalLevel"] floatValue]))];
+  if (payload[@"separationEnabled"] != nil) [deck setSeparationEnabled:[payload[@"separationEnabled"] boolValue]];
   NSDictionary *eq = [payload[@"eq"] isKindOfClass:NSDictionary.class] ? payload[@"eq"] : nil;
   if (eq != nil) [deck setEqualizerLow:[eq[@"low"] floatValue] mid:[eq[@"mid"] floatValue] high:[eq[@"high"] floatValue]];
   [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioConfigure" detail:@{ @"deck": deck.name, @"state": [deck state] }];
@@ -1739,7 +1884,15 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
   if (deck == nil) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioStop" error:deckError]; return; }
   [deck cancelPendingLoadsAndStop];
+  [self pauseNativeAudioEngineIfIdle];
   [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioStop" detail:@{ @"deck": deck.name }];
+}
+
+- (void)pauseNativeAudioEngineIfIdle {
+  if (self.nativeAudioEngine.isRunning && !self.karaokeAudioDeck.playing && !self.backgroundAudioDeck.playing) {
+    [self.nativeAudioEngine pause];
+    self.nativeAudioIdleSuspended = YES;
+  }
 }
 
 - (void)nativeAudioEngineConfigurationChanged:(NSNotification *)notification {
@@ -2208,6 +2361,21 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   if (window == self.starWindow) {
     [self restoreStarPresentation];
     [window orderOut:nil];
+    // A closed output is disposable. Keeping the hidden WKWebView retains its
+    // page, decoder and BroadcastChannel indefinitely. Reopening reconstructs
+    // the presentation from the Player's existing state; audio stays native.
+    [self.starWebView stopLoading];
+    self.starWebView.navigationDelegate = nil;
+    [self.starWebView removeFromSuperview];
+    self.starWebView = nil;
+    window.delegate = nil;
+    window.contentView = nil;
+    [window close];
+    self.starWindow = nil;
+    self.starURLString = nil;
+    [self dispatchEvent:@"gueststar:native-star-screen-closed"
+                detail:@{ @"preview": @(self.starPreview) }
+             inWebView:self.mainWebView];
     return NO;
   }
   return YES;
@@ -2290,6 +2458,10 @@ int main(int argc, const char *argv[]) {
   (void)argc;
   (void)argv;
   @autoreleasepool {
+    // Trained causal two-bus model; prepared once on its dedicated worker.
+    setenv("GUEST_STAR_VOCALRT_P0", "1", 1);
+    NSString *ownStemModel = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"bridge/stem-engine/gs-vocalrt/vocal-stream.onnx"];
+    setenv("GUEST_STAR_VOCALRT_MODEL", ownStemModel.UTF8String, 1);
     NSApplication *application = NSApplication.sharedApplication;
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
     GSAppDelegate *delegate = [[GSAppDelegate alloc] init];

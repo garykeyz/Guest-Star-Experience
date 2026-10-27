@@ -83,6 +83,12 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
       actualThreads: 2,
       osPriorityApplied: 19,
       updatedAt: "2026-07-29T20:11:00.000Z"
+    }],
+    requestFileLinks: [{
+      id: "request-1",
+      filePath: "/Music/Karaoke/song-v2.mp4",
+      source: "manual",
+      updatedAt: "2026-07-29T20:13:00.000Z"
     }]
   });
   assert.equal(state.activityId, "activity-1");
@@ -116,4 +122,7 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
   assert.equal(state.playerStemJobs[0].resourceState, "LIVE");
   assert.match(state.playerStemJobs[0].instrumentalPath, /instrumental\.m4a$/);
   assert.match(state.playerStemJobs[0].vocalsPath, /vocals\.m4a$/);
+  assert.equal(state.requestFileLinks.length, 1);
+  assert.equal(state.requestFileLinks[0].source, "manual");
+  assert.match(state.requestFileLinks[0].filePath, /song-v2\.mp4$/);
 });

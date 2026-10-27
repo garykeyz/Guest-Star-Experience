@@ -1,3 +1,8 @@
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {createVdjHostCommandGate} from '../src/virtualdj-host-intent.mjs';
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -7,8 +12,9 @@ import {
   buildKaraokeScript,
   duplicateKaraokeIndices,
   executeVdj,
-  insertKaraokeEntry,
+  insertKaraokeEntry as rawInsertKaraokeEntry,
   listKaraokeEntries,
+  moveKaraokeEntry,
   parseVdjDuration,
   queryVdj,
   removeDuplicateKaraokeEntries,
@@ -65,7 +71,7 @@ test("elimina el bucle repetido de VirtualDJ y conserva invitados distintos", as
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -92,6 +98,47 @@ test("construye una restauración en el turno exacto de karaoke", () => {
   );
   assert.match(script, /karaoke_add/);
   assert.equal((script.match(/browser_move -1/g) || []).length, 2);
+});
+
+test("mueve varias filas con primitivas +1 documentadas y verifica la identidad final", async (t) => {
+  const queue = ["One", "Two", "Three", "Four"].map((title, index) => ({
+    filepath: `/Music/${title}.mp4`, singer: `Singer ${index + 1}`, title, artist: "Artist", length: "3:00"
+  }));
+  let selected = 0;
+  let guardedMove = "";
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const script = Buffer.concat(chunks).toString("utf8");
+    if (request.url === "/execute") {
+      if (script.includes('browser_scroll "top"')) selected = 0;
+      selected += (script.match(/browser_scroll \+1/g) || []).length;
+      if (script.includes("browser_move")) {
+        guardedMove = script;
+        for (const step of script.matchAll(/browser_move ([+-]1)/g)) {
+          const destination = selected + (step[1] === "+1" ? 1 : -1);
+          [queue[selected], queue[destination]] = [queue[destination], queue[selected]];
+          selected = destination;
+        }
+      }
+      response.end("true");
+      return;
+    }
+    if (script === "file_count karaoke") response.end(String(queue.length));
+    else {
+      const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
+      const property = next?.[1] === "fullpath" ? "filepath" : next?.[1];
+      response.end(next ? queue[Number(next[2] || 0)]?.[property] || "" : "");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const config = { host: "127.0.0.1", port: server.address().port, password: "", timeoutMs: 1000 };
+  const before = await listKaraokeEntries(config);
+  const result = await moveKaraokeEntry(config, before[0], before[3]);
+  assert.equal((guardedMove.match(/browser_move \+1/g) || []).length, 2);
+  assert.doesNotMatch(guardedMove, /browser_move \+2/);
+  assert.deepEqual(result.entries.map(value => value.song), ["Two", "Three", "One", "Four"]);
 });
 
 test("lee duraciones exactas reportadas por VirtualDJ", () => {
@@ -207,7 +254,7 @@ test("reintenta consultas transitorias pero jamás repite un comando de escritur
 
   assert.deepEqual(await listKaraokeEntries(config), []);
   assert.equal(queryCalls, 3);
-  await assert.rejects(executeVdj(config, "karaoke_add \"/Music/Test.mp4\""), /503/);
+  await assert.rejects(manualPrimitive(intent=>executeVdj(config, "karaoke_add \"/Music/Test.mp4\"",{hostIntent:intent})), /503/);
   assert.equal(executeCalls, 1);
 });
 
@@ -251,7 +298,7 @@ test("retira solo la solicitud que coincide en archivo y cantante", async (t) =>
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -298,7 +345,7 @@ test("retira por cantante y título cuando VirtualDJ omite la ruta y altera el a
       const next = script.match(
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
-      response.end(next ? queue[0]?.[next[1]] || "" : "");
+      response.end(next ? queue[0]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -345,7 +392,7 @@ test("no elimina una fila por una ruta sola si el vínculo de cantante no coinci
       const next = script.match(
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
-      response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+      response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -391,7 +438,7 @@ test("avisa cuando VirtualDJ acepta el comando pero no retira la canción", asyn
       const next = script.match(
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
-      response.end(next ? queue[0]?.[next[1]] || "" : "");
+      response.end(next ? queue[0]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -443,7 +490,7 @@ test("lee la cola Karaoke completa respetando su orden", async (t) => {
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -503,7 +550,7 @@ test("lee Network Control en serie para evitar desconexiones por ráfagas", asyn
     if (script === "file_count karaoke") response.end("1");
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
-      response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+      response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
     active -= 1;
   });
@@ -547,7 +594,7 @@ test("repite una captura si la cola crece durante la lectura y devuelve las cuat
       return;
     }
     const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
-    response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+    response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -613,7 +660,7 @@ test("restaura una canción en su posición anterior y verifica el orden", async
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -667,7 +714,7 @@ test("no duplica una canción que VirtualDJ ya confirma en la cola", async (t) =
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -716,7 +763,7 @@ test("reconoce una fila legacy con G-code y no envía una segunda copia", async 
     if (script === "file_count karaoke") response.end(String(queue.length));
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
-      response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+      response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -761,7 +808,7 @@ test("si se pierde la respuesta del comando, el siguiente intento detecta la fil
     if (script === "file_count karaoke") response.end(String(queue.length));
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
-      response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+      response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -812,7 +859,7 @@ test("no duplica Mi Vida cuando VirtualDJ invierte título y artista", async (t)
     else {
       const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
       const index = Number(next?.[2] || 0);
-      response.end(next ? queue[index]?.[next[1]] || "" : "");
+      response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -867,7 +914,7 @@ test("reintenta hasta que VirtualDJ confirme una inserción demorada", async (t)
     }
     const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
     const index = Number(next?.[2] || 0);
-    response.end(next ? queue[index]?.[next[1]] || "" : "");
+    response.end(next ? queue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -926,7 +973,7 @@ test("una lectura técnica fallida después del comando no vuelve a agregar la c
       return;
     }
     const next = script.match(/^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/);
-    response.end(next ? queue[Number(next[2] || 0)]?.[next[1]] || "" : "");
+    response.end(next ? queue[Number(next[2] || 0)]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -991,3 +1038,6 @@ test("no confunde una respuesta inválida con una cola Karaoke vacía", async (t
     /did not return the Karaoke queue size/
   );
 });
+
+async function manualPrimitive(operation){const root=await mkdtemp(join(tmpdir(),'vdj-primitive-intent-'));try{return await createVdjHostCommandGate({path:join(root,'commands.json'),currentScope:()=> 'test-session'}).run({commandId:randomUUID(),origin:'HOST_SEND_TO_VDJ',userInitiated:true,subject:'test-song',signature:'test',scope:'test-session'},operation);}finally{await rm(root,{recursive:true,force:true});}}
+function insertKaraokeEntry(config,entry,index,options={}){return manualPrimitive(intent=>rawInsertKaraokeEntry(config,entry,index,{...options,hostIntent:intent}));}

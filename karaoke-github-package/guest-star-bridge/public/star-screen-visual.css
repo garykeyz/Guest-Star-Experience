@@ -562,3 +562,10 @@ body.star-screen-body.star-screen-access-on .star-screen-canvas .star-screen-inv
 
 /* Logos retain their original transparency and safe area. */
 .brand-logos img,.brandLogos img {border:0;border-radius:0;background:none;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}
+.star-screen-canvas .star-screen-lyrics{position:absolute;z-index:5;left:9%;right:9%;bottom:185px;display:grid;gap:15px;pointer-events:none;text-align:center;color:#fff;background:rgb(0 0 0 / .74);border-radius:18px;padding:24px 35px;text-shadow:0 2px 5px #000;box-shadow:0 8px 36px rgb(0 0 0 / .2)}
+.star-screen-canvas .star-screen-lyrics strong{font-size:51px;line-height:1.22;font-weight:700;color:var(--gs-accent-ink);overflow-wrap:anywhere}
+.star-screen-canvas .star-screen-lyrics span{font-size:36px;line-height:1.24;opacity:.8;overflow-wrap:anywhere}
+.star-screen-canvas .star-screen-lyrics small{font-size:18px;opacity:.6}
+.star-screen-canvas .star-screen-lyrics[hidden],.star-screen-canvas .star-screen-lyrics [hidden]{display:none!important}
+
+#starScreenLyricsPrevious{font-size:.8em;opacity:.45}.star-screen-lyrics .lyric-word-sung{opacity:.55;color:var(--gs-accent-ink,#8ae4ff)}.star-screen-lyrics .lyric-word-active{color:var(--gs-accent-ink,#8ae4ff);text-decoration:underline;text-underline-offset:.2em}.star-screen-lyrics .lyric-word-upcoming{color:inherit}

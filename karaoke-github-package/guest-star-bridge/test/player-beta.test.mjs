@@ -114,7 +114,6 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
     backgroundMusicVolume: 0.37,
     appsScriptUrl: `http://127.0.0.1:${servicePort}/exec`,
     virtualDJ: { host: "127.0.0.1", port: 9, password: "", timeoutMs: 500 },
-    requestIntervalSeconds: 120,
     scanIntervalSeconds: 120,
     autoQueueExact: false
   }, null, 2)}\n`);
@@ -156,6 +155,13 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
   assert.equal(state.tenant.share.publicUrl, "https://request.gstarxp.com/h/moon-palace");
 
   const backgroundTrack = state.backgroundMusic.tracks[0];
+  const initialScanAt = state.library.lastScanAt;
+  for (let i = 0; i < 5; i++) {
+    const browse = await fetch(`${url}/api/player/library?all=1&sort=artist&language=`).then(response => response.json());
+    assert.equal(browse.total, 1); assert.equal(browse.tracks[0].song, 'Vivir Mi Vida');
+  }
+  assert.equal((await fetch(`${url}/api/state`).then(response => response.json())).library.lastScanAt, initialScanAt,
+    'browsing the indexed library must not trigger a scan');
   const backgroundMedia = await fetch(`${url}/api/player/background/media/${encodeURIComponent(backgroundTrack.id)}`);
   assert.equal(backgroundMedia.status, 200);
   assert.equal((await backgroundMedia.arrayBuffer()).byteLength, 64);
@@ -248,6 +254,51 @@ test("el Player crea una fila local antes de iniciar la actividad y la conserva 
   );
   assert.ok(pullElapsedMs < 700,
     `public requests must not wait for YouTube/local maintenance (${pullElapsedMs.toFixed(1)} ms)`);
+
+  // Exercise the existing endpoint with five entries and a protected playback snapshot.
+  for (const singer of ["Maria", "Alex"]) {
+    const extra = await fetch(`${url}/api/player/local-requests`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackId: track.id, singer })
+    }).then(response => response.json());
+    assert.equal(extra.ok, true, extra.error || childError);
+  }
+  const beforeOrder = await fetch(`${url}/api/state`).then(response => response.json());
+  const fiveIds = beforeOrder.requests.map(item => item.id);
+  assert.equal(fiveIds.length, 5);
+  const saveRuntime = body => fetch(`${url}/api/player/runtime`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  }).then(response => response.json());
+  const playbackSnapshot = { currentRequestId: local.id, currentTimeSeconds: 87, scene: "karaoke", wasPlaying: true };
+  const activeRuntime = await saveRuntime({ queueOrder: fiveIds, playback: playbackSnapshot });
+  assert.equal(activeRuntime.ok, true, activeRuntime.error || childError);
+  const activeState = await fetch(`${url}/api/state`).then(response => response.json());
+  const firstOrder = [fiveIds[4], ...fiveIds.slice(0, 4)];
+  const secondOrder = [...fiveIds.slice(0, 3), fiveIds[4], fiveIds[3]];
+  for (const queueOrder of [firstOrder, secondOrder, firstOrder, secondOrder]) {
+    const result = await saveRuntime({ queueOrder });
+    assert.equal(result.ok, true, result.error || childError);
+    const after = await fetch(`${url}/api/state`).then(response => response.json());
+    assert.deepEqual(after.playerRuntime.queueOrder, queueOrder);
+    assert.deepEqual(after.playerRuntime.playback, activeState.playerRuntime.playback,
+      "order-only updates must preserve the current ID, position, scene and playing snapshot");
+    const identities = requests => requests.map(({id, singer, song, artist, trackId, filePath}) =>
+      ({id, singer, song, artist, trackId, filePath})).sort((a,b) => a.id.localeCompare(b.id));
+    assert.deepEqual(identities(after.requests), identities(activeState.requests));
+  }
+
+  const beforeLibraryAdd = await fetch(`${url}/api/state`).then(response => response.json());
+  const secondTrack = await fetch(`${url}/api/player/library?query=perreo&all=1`).then(response => response.json()).then(data => data.tracks[0]);
+  const queuedB = await fetch(`${url}/api/player/local-requests`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trackId: secondTrack.id, singer: 'Biblioteca B' })
+  }).then(response => response.json());
+  assert.equal(queuedB.ok, true, queuedB.error || childError);
+  const afterLibraryAdd = await fetch(`${url}/api/state`).then(response => response.json());
+  assert.deepEqual(afterLibraryAdd.playerRuntime.playback, beforeLibraryAdd.playerRuntime.playback,
+    'adding B from the library preserves every playback field of A, including timestamp');
+  assert.deepEqual(afterLibraryAdd.playerRuntime.queueOrder, [...beforeLibraryAdd.playerRuntime.queueOrder, queuedB.item.id]);
+  assert.equal(afterLibraryAdd.requests.find(item => item.id === queuedB.item.id).song, 'Yo Perreo Sola');
 
   const completed = await fetch(`${url}/api/player/requests/${encodeURIComponent(local.id)}/outcome`, {
     method: "POST",

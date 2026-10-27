@@ -195,6 +195,7 @@ export function updateBridgeRequest(
     artist: extra.artist,
     expectedRevision: extra.expectedRevision,
     eventOrigin: extra.eventOrigin,
+    bridgeLifecycle: extra.bridgeLifecycle,
     beforeRequestId: extra.beforeRequestId
   });
 }
@@ -218,7 +219,8 @@ export function searchKaraokeYouTube(
   song,
   artist,
   language = "",
-  languageCode = ""
+  languageCode = "",
+  candidateLimit = 6
 ) {
   return v4AppsScriptAction(config, "youtubeSearchV4", {
     hotelId: config.lastHotelId,
@@ -227,7 +229,8 @@ export function searchKaraokeYouTube(
     song,
     artist,
     language,
-    languageCode
+    languageCode,
+    candidateLimit
   });
 }
 
@@ -267,4 +270,10 @@ export async function controlActivity(config, action, source = "bridge") {
     }
     throw error;
   }
+}
+
+// Lyrics-only reuse of the existing credentialed service; no auth changes.
+export function sharedLyricsRequest(config, action, payload={}) {
+  if(!['lyricsLookup','lyricsPublish','lyricsReview'].includes(action))throw new Error('Invalid lyrics action');
+  return postPayload(config,{action,authToken:config.authToken,deviceToken:config.deviceToken||'',...payload},5000);
 }

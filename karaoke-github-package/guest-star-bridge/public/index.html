@@ -5,21 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#100715" />
     <meta name="google" content="notranslate" />
-    <link rel="icon" href="/favicon.svg?v=4.6" type="image/svg+xml" />
+    <link rel="icon" href="/branding/favicon-32.png?v=20261013" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/favicon.ico?v=20261013" sizes="any" />
+    <link rel="apple-touch-icon" href="/branding/apple-touch-icon.png?v=20261013" sizes="180x180" />
     <title>Guest Star</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/player-beta.css" />
     <link rel="stylesheet" href="/adaptive-host.css" />
     <link rel="stylesheet" href="/host-console.css" />
+    <link rel="stylesheet" href="/player-lyrics.css" />
     <link rel="stylesheet" href="/bridge-operations.css" />
+    <link rel="stylesheet" href="/prepare-session.css" />
     <link rel="stylesheet" href="/superhost-branding.css" />
+    <link rel="stylesheet" href="/operations-dashboard.css" />
   </head>
-  <body>
+  <body class="entry-shell">
     <div class="glow glow-one"></div>
     <div class="glow glow-two"></div>
     <header class="topbar">
       <div>
-        <p class="eyebrow notranslate" translate="no" data-brand>✦ GUEST STAR EXPERIENCE</p>
+        <p class="eyebrow notranslate" translate="no" data-brand><img class="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></p>
         <h1 class="notranslate" translate="no" data-brand>Guest Star</h1>
         <p class="subtitle">Solicitudes · Biblioteca local · Player interno · Bridge VirtualDJ</p>
       </div>
@@ -39,6 +44,11 @@
       </div>
     </header>
 
+    <section id="entryShell" class="entry-neutral"><p>Selecciona una actividad y cómo quieres trabajar.</p><button id="entrySelectActivity" type="button" class="button ghost">Seleccionar actividad</button></section>
+    <section id="operationsDock" hidden aria-label="Master y cobertura de la actividad">
+      <div id="masterDock"></div><div><div id="liveCoverage" role="status"></div><div class="coverage-dock-actions"><button id="coverageCloseRequests" class="button ghost" hidden type="button"></button></div></div>
+    </section>
+    <dialog id="clearQueueDialog" aria-labelledby="clearQueueTitle"><h2 id="clearQueueTitle">¿Limpiar cola?</h2><p>Se eliminarán todas las solicitudes y el historial de la sesión actual, incluidas Completadas y Omitidas, además de las pistas en espera de VirtualDJ. La canción en curso continuará. La actividad y su programación se conservan.</p><div class="button-row"><button id="cancelClearQueue" type="button" class="button ghost">CANCELAR</button><button id="confirmClearQueue" type="button" class="button danger">SÍ, LIMPIAR COLA</button></div></dialog>
     <main>
       <section id="playerWorkspace" class="player-workspace hidden" aria-live="polite">
         <header class="player-hero">
@@ -131,6 +141,19 @@
                 <button class="button danger" id="playerRemove"><span>Quitar</span><kbd>⇧X</kbd></button>
               </div>
               <div class="player-audio-controls"><button class="button ghost" id="playerMute">Audio</button><label class="player-karaoke-volume" for="playerVolume"><span>Volumen karaoke</span><input id="playerVolume" class="player-range" type="range" min="0" max="1" value="1" step="0.05" aria-label="Volumen del audio karaoke" /><output id="playerVolumeValue">100%</output></label><small>Atajos: ⇧↑/⇧↓ cambian el turno seleccionado</small></div>
+              <label class="player-source-label">Fuente del Player <select id="playerSourceSelect" aria-label="Fuente de audio o video del Player"><option value="">Fuente seleccionada</option></select></label>
+              <section class="player-lyrics" id="playerLyrics" aria-label="Letras sincronizadas">
+                <header><strong>LETRAS</strong><span id="playerLyricsStatus" role="status">Selecciona una pista</span></header>
+                <div class="player-lyrics-preview" id="playerLyricsPreview" hidden><small id="playerLyricsPrevious"></small><strong id="playerLyricsCurrent"></strong><span id="playerLyricsNext"></span></div>
+                <div class="player-lyrics-actions">
+                  <button class="button ghost" type="button" id="playerLyricsAnalyze" disabled>Analizar letras</button>
+                  <button class="button ghost" type="button" id="playerLyricsCancel" hidden>Cancelar</button>
+                  <button class="button ghost" type="button" id="playerLyricsEdit">Ver / Editar letra completa</button>
+                  <a class="button ghost" id="playerLyricsDownload" download="letras.lrc" hidden>Descargar LRC</a>
+                  <label><input type="checkbox" id="playerLyricsVisible" disabled /> Mostrar en Star Screen</label>
+                </div>
+                <small id="playerLyricsProgress"></small>
+              </section>
               <section class="player-audio-mixer-console" aria-label="Audio / Mixer">
                 <header class="player-audio-mixer-heading"><strong>AUDIO / MIXER</strong><span>Karaoke y Background independientes</span></header>
               <section class="player-musical-controls" aria-label="Tempo y tonalidad del karaoke">
@@ -165,7 +188,7 @@
                 </section>
                 <section class="player-stems-live" aria-label="Controles Stems IA">
                   <header><strong>STEMS IA</strong><span id="playerStemQuickStatus">Selecciona una pista</span></header>
-                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control"><span>Voz guía IA</span><input id="playerVocalLevel" class="player-range" type="range" min="0" max="1" value="0" step="0.01" disabled /><output id="playerVocalLevelValue">0%</output></label>
+                  <label for="playerVocalLevel" id="playerVocalControl" class="player-vocal-control"><span>Vocal</span><input title="0% acompañamiento · 100% acompañamiento con voz normal" id="playerVocalLevel" class="player-range" type="range" min="0" max="1" value="0" step="0.01" disabled /><output id="playerVocalLevelValue">0%</output></label>
                 </section>
                 <section class="player-background-live" aria-label="Música de fondo / Background Music">
                   <header><span>MÚSICA DE FONDO / BACKGROUND MUSIC</span><strong id="playerBackgroundSong">Sin música configurada</strong><small><b id="playerBackgroundArtist">Selecciona una fuente.</b> · <em id="playerBackgroundStatus">En espera</em></small></header>
@@ -179,6 +202,7 @@
             </div>
           </section>
           <aside class="player-side-rail" aria-label="Fila y Plan B del Player">
+            <div id="playerQueueAdministrativeSlot"></div>
             <section class="player-queue-card">
               <header><div><p class="eyebrow">FILA DEL PLAYER</p><h3>Solicitudes activas</h3><small>Arrastra ⠿ para reordenar. Abre las opciones de cada turno.</small></div></header>
               <div id="playerQueue" class="player-queue-list"></div>
@@ -302,6 +326,7 @@
 
       <section id="notice" class="notice hidden" role="status"></section>
       <section id="bridgeOperations" class="bridge-operations" aria-label="VirtualDJ direct controls" data-no-i18n></section>
+      <section id="queueAdministrativeActions" class="queue-administrative-actions"><button id="clearPendingQueue" class="button ghost" type="button" data-no-i18n>Limpiar cola</button></section>
       <section class="live-queue-workspace" aria-label="Live Karaoke operation">
         <section id="requests" class="request-groups" aria-live="polite"></section>
         <section id="vdjQueuePanel" class="vdj-queue-panel">
@@ -322,7 +347,7 @@
     <dialog id="preferencesDialog" class="preferences-dialog">
       <form id="preferencesForm">
         <header>
-          <div><p class="eyebrow">PREFERENCIAS DE GUEST STAR</p><h2>Preferencias</h2><p>Configuración general de este usuario y este Mac.</p></div>
+          <div><p class="eyebrow" data-brand><img class="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></p><h2>Preferencias</h2><p>Configuración general de este usuario y este Mac.</p></div>
           <button type="button" class="close-button" id="closePreferences" aria-label="Cerrar">×</button>
         </header>
 
@@ -385,14 +410,25 @@
             <p id="starScreenPreferenceStatus" class="settings-help" role="status"></p>
           </section>
 
+          <section class="preferences-section" id="playerMediaPreferences" aria-label="Medios del Player">
+            <p class="eyebrow">PLAYER / MEDIOS</p><h3>Audio y video locales</h3>
+            <label>Carpetas de AUDIO</label><div id="playerAudioFolders"></div><button type="button" class="button ghost" id="playerAudioChoose">Elegir carpeta de audio</button><button type="button" class="button ghost" id="playerAudioAdd">Escribir ruta de audio</button>
+            <label>Carpetas de VIDEO</label><div id="playerVideoFolders"></div><button type="button" class="button ghost" id="playerVideoChoose">Elegir carpeta de video</button><button type="button" class="button ghost" id="playerVideoAdd">Escribir ruta de video</button>
+            <label for="playerMediaPriority">Selección automática</label><select id="playerMediaPriority"><option value="auto">Automático</option><option value="audio">Priorizar AUDIO</option><option value="video">Priorizar VIDEO</option></select>
+            <p class="settings-help">Las carpetas Karaoke existentes siguen disponibles. La prioridad se aplica al cargar una pista; puedes elegir otra fuente desde Player.</p><button type="button" class="button ghost" id="playerMediaSave">Guardar medios del Player</button><p id="playerMediaStatus" role="status"></p>
+          </section>
           <section class="preferences-section" aria-labelledby="preferencesPlayerTitle">
-            <div><p class="eyebrow">IA / PLAYER</p><h3 id="preferencesPlayerTitle">Comportamiento predeterminado</h3></div>
-            <label for="defaultStemEngine">Motor IA predeterminado</label>
+            <div><p class="eyebrow">AUDIO / STEMS</p><h3 id="preferencesPlayerTitle">Separación vocal</h3></div>
+            <label for="defaultStemEngine">Motor de separación vocal</label>
             <select id="defaultStemEngine">
-              <option value="auto">Auto — rápido primero, calidad cuando sea seguro</option>
-              <option value="spleeter">Rápido — Spleeter</option>
-              <option value="demucs">Alta calidad — Demucs</option>
+              <option value="spleeter">Spleeter</option>
+              <option value="demucs">Demucs</option>
+              <option value="gsvocalrt">GS-VocalRT</option>
             </select>
+            <p id="stemEnginePreferenceStatus" class="settings-help" role="status"></p>
+            <label for="defaultVocalGuidePercent">Voz guía inicial (%)</label>
+            <input id="defaultVocalGuidePercent" type="number" min="0" max="20" step="1" value="0" />
+            <p class="settings-help">Cada pista comienza con el instrumental al frente. Ajusta la voz en vivo con el slider.</p>
             <label>Karaoke library folders</label>
             <div id="folderList" class="folder-list"></div>
             <div class="button-row left">
@@ -581,7 +617,7 @@
 
     <dialog id="loginDialog" class="auth-dialog">
       <form id="loginForm">
-        <p class="eyebrow"><span>WELCOME TO</span> <span class="notranslate" translate="no" data-brand>GUEST STAR</span> · <span id="bridgeVersion">v—</span></p>
+        <p class="eyebrow"><span>WELCOME TO</span> <span class="notranslate" translate="no" data-brand><img class="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></span> · <span id="bridgeVersion">v—</span></p>
         <h2>Sign in</h2>
         <p>Use the account created for you by the Superhost.</p>
         <label for="loginUsername">Username or email</label>
@@ -613,6 +649,13 @@
           <div><p class="eyebrow">BRIDGE ASSIGNMENT</p><h2>Select your activity</h2></div>
           <button type="button" class="close-button" id="closeSelection" aria-label="Close">×</button>
         </header>
+        <div class="entry-choice-list">
+          <button id="rememberedActivityChoice" type="button" class="button ghost" hidden><strong>Continuar con actividad recordada</strong><small id="rememberedActivityLabel"></small></button>
+          <button id="resumeFreeActivity" type="button" class="button ghost" hidden><strong>Reanudar Modo libre en curso</strong><small>Conservar fila, tiempo y modo de reproducción</small></button>
+          <button id="chooseOtherActivity" type="button" class="button ghost">Elegir otra actividad</button>
+          <button id="chooseFreeMode" type="button" class="button ghost">Modo libre · fuera de actividad</button>
+        </div>
+        <div id="activitySelectionFields" hidden>
         <label for="hotelSelect">Hotel</label>
         <select id="hotelSelect" required class="hotelSelectControl" aria-label="Hotel"></select>
         <div id="hotelChoiceGrid" class="hotel-choice-grid" role="group" aria-label="Hotel"></div>
@@ -627,17 +670,18 @@
         </label>
         <p id="selectionError" class="form-error hidden"></p>
         <button type="submit" class="button primary">Use This Activity</button>
+        </div>
       </form>
     </dialog>
 
     <dialog id="playbackModeDialog" class="playback-mode-dialog">
       <form method="dialog">
-        <header><div><p class="eyebrow">MODO DE REPRODUCCIÓN</p><h2>¿Cómo funcionará esta actividad?</h2><p>Puedes cambiar entre Player y Bridge hasta iniciar la actividad. Una vez iniciada, el modo quedará bloqueado hasta finalizar.</p></div><button type="button" class="close-button" id="closePlaybackMode" aria-label="Cerrar">×</button></header>
+        <header><div><p class="eyebrow">MODO DE REPRODUCCIÓN</p><h2>¿Cómo quieres trabajar?</h2><p>Seleccionar el modo no inicia la actividad.</p></div><button type="button" class="close-button" id="closePlaybackMode" aria-label="Cerrar">×</button></header>
         <div class="playback-mode-options">
-          <button type="button" class="playback-mode-option player" data-playback-mode="player"><span>▶</span><div><strong>Player interno</strong><p>Guest Star reproduce los videos locales y controla Star Screen sin depender de otro programa.</p><small>RECOMENDADO</small></div></button>
-          <button type="button" class="playback-mode-option bridge" data-playback-mode="bridge"><span>VDJ</span><div><strong>Bridge con VirtualDJ</strong><p>Guest Star administra solicitudes y sincroniza la cola externa de VirtualDJ.</p><small>MODO COMPATIBILIDAD</small></div></button>
+          <button type="button" class="playback-mode-option player" data-playback-mode="player"><span>▶</span><div><strong>Player interno</strong><p>Guest Star reproduce los videos locales y controla Star Screen sin depender de otro programa.</p></div></button>
+          <button type="button" class="playback-mode-option bridge" data-playback-mode="bridge"><span>VDJ</span><div><strong>Bridge con VirtualDJ</strong><p>Guest Star administra solicitudes y sincroniza la cola externa de VirtualDJ.</p></div></button>
         </div>
-        <div class="mode-warning"><strong>Bloqueo de seguridad</strong><p>Seleccionar o abrir un modo no inicia la actividad. Solo se bloqueará al pulsar Iniciar actividad y permanecerá bloqueado mientras esté en curso.</p></div>
+        
       </form>
     </dialog>
 
@@ -752,7 +796,27 @@
 
     <script src="/vendor/qrcode.js"></script>
     <script type="module" src="/app.js"></script>
-    <script type="module" src="/adaptive-host.js"></script>
-    <script type="module" src="/lobby-waveform-publisher.js"></script>
-  </body>
+  <dialog id="playerLyricEditor" class="player-lyric-editor">
+   <header><div><span class="lyric-editor-eyebrow">GUEST STAR · KARAOKE</span><h2>Letra / Editor</h2></div><button type="button" id="lyricEditorClose" class="button ghost">Cerrar</button></header>
+   <section class="lyric-visual" aria-label="Editor visual de palabras">
+    <div class="lyric-editor-row"><span>CANCIÓN COMPLETA</span><span id="lyricEditorNow">Escucha y corrige mientras suena</span></div>
+    <div class="lyric-wave-wrap lyric-wave-overview"><canvas id="lyricOverviewCanvas" width="1200" height="62" aria-label="Vista general de la canción; haz clic para ir a esa parte"></canvas><div id="lyricOverviewWindow" aria-hidden="true"></div><div id="lyricOverviewPlayhead" class="lyric-playhead" aria-hidden="true"></div></div>
+    <div class="lyric-editor-row lyric-editor-detail-head"><span>PALABRAS Y AUDIO</span><label class="lyric-follow"><input id="lyricVisualFollow" type="checkbox" checked /> Seguir reproducción</label></div>
+    <div class="lyric-wave-wrap lyric-wave-detail"><canvas id="lyricVisualCanvas" width="1600" height="220" aria-label="Waveform y palabras; arrastra un bloque para ajustar su sincronización"></canvas><div id="lyricDetailPlayhead" class="lyric-playhead" aria-hidden="true"></div></div>
+    <div class="lyric-editor-navigation"><label>Zoom <input id="lyricVisualZoom" type="range" min="1" max="32" value="12" aria-label="Ampliar waveform" /></label><label class="lyric-scroll-label">Desplazar <input id="lyricVisualScroll" type="range" min="0" max="0" value="0" step="0.05" aria-label="Desplazar waveform" /></label></div>
+    <div class="lyric-editor-transport"><button type="button" id="lyricEditorPlayPause" class="button ghost">▶ Reproducir</button><span id="lyricVisualTime" aria-live="off"></span><span id="lyricEditorNext" aria-live="off"></span></div>
+   </section>
+   <label class="lyric-editor-text-label" for="lyricEditorText">LETRA</label>
+   <textarea id="lyricEditorText" aria-label="Letra de la canción" spellcheck="true" placeholder="Escribe o corrige la letra aquí…"></textarea>
+   <div class="lyric-editor-footer"><span id="lyricEditorStatus" role="status"></span><div class="button-row"><button type="button" id="lyricEditorSave" class="button primary">Guardar</button><button type="button" id="lyricEditorReanalyze" class="button ghost">Reanalizar</button></div></div>
+   <details class="lyric-editor-advanced"><summary>Opciones avanzadas</summary>
+    <details><summary>Acciones de palabra</summary><div class="button-row"><button type="button" id="lyricVisualAdd" class="button ghost">Añadir</button><button type="button" id="lyricVisualDelete" class="button ghost">Eliminar</button><button type="button" id="lyricVisualSplit" class="button ghost">Dividir palabra</button><button type="button" id="lyricVisualMerge" class="button ghost">Unir con siguiente</button><button type="button" id="lyricVisualSplitLine" class="button ghost">Dividir línea</button><button type="button" id="lyricVisualMergeLine" class="button ghost">Unir líneas</button></div></details>
+    <label><input type="checkbox" id="lyricEditorReviewed" /> Revisé toda la letra y su sincronización</label>
+    <button type="button" id="lyricEditorAlign" class="button ghost">Realinear texto contra audio</button>
+    <details><summary>Historial de versiones</summary><label>Versión <select id="lyricEditorVersions"></select></label><button type="button" id="lyricEditorRestore" class="button ghost">Restaurar versión</button></details>
+    <details><summary>Compartir letra autorizada con Guest Star</summary><p>Comparte únicamente contenido que tengas derecho a distribuir.</p><select id="lyricShareKind"><option value="own">Letra propia</option><option value="public-domain">Dominio público</option><option value="licensed">Licencia para compartir</option></select><input id="lyricShareBasis" placeholder="Describe la autorización o licencia" aria-label="Autorización para compartir"/><label><input type="checkbox" id="lyricShareAllow"/> Confirmo que puedo compartir esta letra</label><button type="button" class="button ghost" id="lyricEditorShare">Compartir versión</button></details>
+    <details><summary>Comparar referencia externa autorizada</summary><p>La referencia ayuda a revisar palabras; el audio determina sus tiempos.</p><input id="lyricReferenceUrl" placeholder="URL HTTPS de la referencia"/><textarea id="lyricReferenceText" aria-label="Texto de referencia autorizado" style="height:120px"></textarea><button type="button" id="lyricEditorReference" class="button ghost">Comparar texto autorizado</button></details>
+   </details>
+  </dialog>
+</body>
 </html>

@@ -26,12 +26,27 @@ test("construye una app Cocoa/WebKit Universal con identidad propia", () => {
   assert.match(buildSource, /"-arch",\s*"arm64"/);
   assert.match(buildSource, /"-arch",\s*"x86_64"/);
   assert.match(buildSource, /"-framework",\s*"Cocoa"/);
+  assert.match(buildSource, /"-framework",\s*"CoreAudio"/);
+  assert.match(buildSource, /"-framework",\s*"AVFoundation"/);
+  assert.match(buildSource, /"-framework",\s*"AudioToolbox"/);
   assert.match(buildSource, /"-framework",\s*"WebKit"/);
   assert.match(buildSource, /LSArchitecturePriority.*arm64.*x86_64/s);
   assert.match(buildSource, /CFBundleExecutable": "GuestStarBridge"/);
   assert.match(buildSource, /BUNDLE_ID = "com\.gstarxp\.guest-star"/);
   assert.match(nativeHostSource, /#import <Cocoa\/Cocoa\.h>/);
   assert.match(nativeHostSource, /#import <WebKit\/WebKit\.h>/);
+  assert.match(nativeHostSource, /#import <CoreAudio\/CoreAudio\.h>/);
+  assert.match(nativeHostSource, /#import <AVFoundation\/AVFoundation\.h>/);
+  assert.match(nativeHostSource, /AVAudioEngine/);
+  assert.match(nativeHostSource, /AVAudioUnitTimePitch/);
+  assert.match(nativeHostSource, /setVocalLevel/);
+  assert.match(nativeHostSource, /vocalsMix\.outputVolume/);
+  assert.match(nativeHostSource, /payload\[@"vocalLevel"\]/);
+  assert.match(nativeHostSource, /scheduledTimerWithTimeInterval:0\.25/);
+  assert.match(nativeHostSource, /requestID\.length > 0/);
+  assert.match(nativeHostSource, /listAudioOutputs/);
+  assert.match(nativeHostSource, /setAudioOutput/);
+  assert.match(nativeHostSource, /kAudioHardwarePropertyDefaultOutputDevice/);
   assert.match(nativeHostSource, /setActivationPolicy:NSApplicationActivationPolicyRegular/);
   assert.match(nativeHostSource, /self\.mainWindow\.title = @"Guest Star"/);
   assert.match(nativeHostSource, /WKWebViewConfiguration/);
@@ -50,7 +65,7 @@ test("ofrece menú nativo Guest Star y Preferencias con Comando-coma", () => {
   assert.match(nativeHostSource, /GSOpenPreferencesEventName/);
   assert.match(nativeHostSource, /dispatchEvent:GSOpenPreferencesEventName/);
   assert.match(nativeHostSource, /addMenuWithTitle:@"Actividad"/);
-  assert.match(nativeHostSource, /Bridge \(VirtualDJ\)/);
+  assert.match(nativeHostSource, /Modo Host/);
   assert.match(nativeHostSource, /openLiveEvent:/);
   assert.match(nativeHostSource, /switchActivity:/);
   assert.match(nativeHostSource, /openAdministration:/);
@@ -76,11 +91,22 @@ test("Star Screen reutiliza una sola ventana, respeta pantalla y recupera foco",
   assert.match(nativeHostSource, /updateStarScreenDisplayWithPayload:/);
   assert.match(nativeHostSource, /NSApplicationDidChangeScreenParametersNotification/);
   assert.match(nativeHostSource, /requestedScreen \?: \[self primaryScreen\]/);
+  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| NSScreen\.screens\.count <= 1/);
+  assert.match(nativeHostSource, /NSWindowCollectionBehaviorDefault/);
   assert.match(nativeHostSource, /contentAspectRatio = NSMakeSize\(16, 9\)/);
   assert.match(nativeHostSource, /9\.0 \/ 16\.0/);
   assert.match(nativeHostSource, /makeKeyAndOrderFront:nil/);
   assert.match(nativeHostSource, /orderFrontRegardless/);
+  assert.match(nativeHostSource, /if \(self\.starWindow\.miniaturized\) \[self\.starWindow deminiaturize:nil\]/);
   assert.match(nativeHostSource, /@"reused": @\(reused\)/);
+});
+
+test("Star Screen es flotante con una sola pantalla y conserva la salida externa", () => {
+  assert.match(nativeHostSource, /BOOL floatingWindow = preview \|\| NSScreen\.screens\.count <= 1/);
+  assert.match(
+    nativeHostSource,
+    /if \(floatingWindow\) \{[\s\S]*?NSWindowStyleMaskTitled[\s\S]*?NSWindowStyleMaskClosable[\s\S]*?NSWindowStyleMaskMiniaturizable[\s\S]*?NSWindowStyleMaskResizable[\s\S]*?\} else \{[\s\S]*?NSWindowStyleMaskBorderless[\s\S]*?NSWindowCollectionBehaviorCanJoinAllSpaces[\s\S]*?NSWindowCollectionBehaviorFullScreenAuxiliary[\s\S]*?setFrame:screen\.frame/
+  );
 });
 
 test("incluye y ejercita Spleeter rápido y Demucs HQ en el motor Universal", () => {
@@ -109,12 +135,15 @@ test("incluye y ejercita Spleeter rápido y Demucs HQ en el motor Universal", ()
   assert.match(engineInstallSource, /lipo "\$ffprobe_arm64" -verify_arch arm64/);
   assert.match(engineInstallSource, /lipo "\$ffprobe_x64" -verify_arch x86_64/);
   assert.match(engineSmokeSource, /--input-wav=/);
+  assert.match(engineSmokeSource, /--engine=/);
   assert.match(engineSmokeSource, /--output-vocals-wav=/);
   assert.match(engineSmokeSource, /--output-accompaniment-wav=/);
   assert.match(engineInstallSource, /stems-engine-smoke\.mjs/);
   assert.match(workflowSource, /install-stem-engine-macos\.sh/);
   assert.match(workflowSource, /--stem-engine-root "\$RUNNER_TEMP\/guest-star-stem-engine"/);
   assert.match(buildSource, /lib\/libonnxruntime\.dylib/);
+  assert.match(buildSource, /smoke_test_packaged_stem_engine/);
+  assert.match(buildSource, /destination \/ "scripts"/);
 });
 
 test("firma y valida plist, frameworks, binario final, DMG y ZIP", () => {
@@ -127,6 +156,8 @@ test("firma y valida plist, frameworks, binario final, DMG y ZIP", () => {
   assert.match(buildSource, /\["plutil", "-lint"/);
   assert.match(workflowSource, /xcrun clang/);
   assert.match(workflowSource, /-framework Cocoa/);
+  assert.match(workflowSource, /-framework AVFoundation/);
+  assert.match(workflowSource, /-framework AudioToolbox/);
   assert.match(workflowSource, /-framework WebKit/);
   assert.match(workflowSource, /lipo[^\n]*native_host[^\n]*-verify_arch arm64 x86_64/);
   assert.match(workflowSource, /otool -L[^\n]*native_host/);
@@ -137,13 +168,17 @@ test("firma y valida plist, frameworks, binario final, DMG y ZIP", () => {
   assert.match(buildSource, /hdiutil/);
   assert.match(buildSource, /hdiutil",\s*"verify/);
   assert.match(buildSource, /unzip",\s*"-tq/);
+  assert.match(buildSource, /def create_pkg/);
+  assert.match(buildSource, /"--install-location",\s*"\/Applications"/);
+  assert.match(buildSource, /GuestStar-\{version\}\.pkg/);
+  assert.match(buildSource, /pkgutil", "--payload-files"/);
   assert.doesNotMatch(buildSource, /pycdlib/);
 });
 
 test("selecciona automáticamente el runtime correcto en cada Mac", () => {
   assert.match(shellSource, /arm64\) RUNTIME=.*node-arm64\/node/);
   assert.match(shellSource, /x86_64\) RUNTIME=.*node-x64\/node/);
-  assert.match(shellSource, /APP_VERSION="4\.4\.1"/);
+  assert.match(shellSource, /APP_VERSION="4\.5"/);
   assert.match(shellSource, /GUEST_STAR_PORT=8787 \/usr\/bin\/nohup/);
   assert.match(shellSource, /puerto local 8787 está ocupado por otra aplicación/);
   assert.match(shellSource, /\.bundle-build/);
@@ -171,7 +206,7 @@ test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudfl
   assert.match(workflowSource, /validate:\s*\n\s*runs-on: ubuntu-latest/);
   assert.match(workflowSource, /npm ci --ignore-scripts/);
   assert.match(workflowSource, /npm audit --audit-level=low/);
-  assert.match(workflowSource, /Test Bridge and Apps Script regression suite/);
+  assert.match(workflowSource, /Test Bridge regression suite/);
   assert.match(workflowSource, /npx tsc --noEmit/);
   assert.match(workflowSource, /npm run build/);
   assert.match(workflowSource, /npm run test:http/);

@@ -1,3 +1,6 @@
+import {createVdjOverlayHttp,projectVdjDisplay} from './vdj-overlay.mjs';
+import {createVdjHostCommandGate,assertVdjHostIntent} from './virtualdj-host-intent.mjs';
+import { clearConfirmedFutureQueue } from './virtualdj-finish.mjs';
 import { createDiagnosticPreferences, verifyDiagnosticIdentity, testerRoles, diagnosticError, diagnosticServiceRequest } from './diagnostic-preferences.mjs';
 import { constants as fsConstants, createReadStream, existsSync, watch } from "node:fs";
 import { access, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -26,8 +29,9 @@ import {
   signOutBridge,
   syncExternalVirtualDjEntries,
   updateBridgeConfig,
-  updateBridgeRequest,
-  v4AppsScriptAction
+  updateBridgeRequest as updateBridgeRequestRemote,
+  v4AppsScriptAction,
+  sharedLyricsRequest
 } from "./apps-script.mjs";
 import {
   buildActivitySummary,
@@ -36,6 +40,7 @@ import {
 } from "./activity-summary.mjs";
 import { assignGuestAliases, virtualDjSingerLabel } from "./guest-alias.mjs";
 import { loadConfig, publicConfig, ROOT, sanitizeConfig, saveConfig } from "./config.mjs";
+import {activityContextKey, createActivityContextStore} from './activity-context.mjs';
 import { clearBridgeSecrets } from "./keychain.mjs";
 import { selectHitSuggestions } from "./hit-suggestions.mjs";
 import {
@@ -80,7 +85,20 @@ import {
 } from "./gsx-stems.mjs";
 import { inspectSongStorage, revealSongStorageLocation } from "./storage-usage.mjs";
 import { LoudnessAnalysisStore } from "./loudness-normalization.mjs";
-import { createVirtualDjOperations } from './virtualdj-operations.mjs';
+import { AudioAnalysisSampler, ANALYSIS_SAMPLE_RATE } from './audio-analysis-sample.mjs';
+import { stemVerificationFingerprint } from './stem-verification-fingerprint.mjs';
+import {LyricsExtractor, toLRC} from './lyrics.mjs';
+import {PlayerWaveformCache} from './player-waveform.mjs';
+import {playerMediaType,playerMediaFolders,playerSourceCandidates} from './player-media.mjs';
+
+// Public Node API; preserve the bundle/runtime and entry point so the native
+// supervisor can still verify ownership before terminating its own helper.
+// A short title also fits macOS argv storage without truncating server.mjs.
+if (process.env.GUEST_STAR_NATIVE_HOST === '1') {
+  const bundledRuntime = process.execPath.match(/Guest Star(?: Experience| Bridge)?\.app\/Contents\/Resources\/runtime\/[^/]+/);
+  if (bundledRuntime) process.title = `GuestStarHelper ${bundledRuntime[0]} src/server.mjs`;
+}
+import { readVdjQueueSignature, readVdjMeter, createVirtualDjOperations } from './virtualdj-operations.mjs';
 import { orderRequestViews } from "./request-order.mjs";
 import { isOnlineGuestRequest } from "./request-source.mjs";
 import {
@@ -93,6 +111,7 @@ import {
   normalizeVdjSinger,
   queryVdj,
   removeKaraokeEntry,
+  sameKaraokeIdentity,
   vdjLocalPathCandidates,
   visibleVdjSinger
 } from "./virtualdj.mjs";
@@ -131,6 +150,8 @@ const MIME = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
   ".json": "application/json; charset=utf-8",
   ".mp4": "video/mp4",
   ".m4v": "video/x-m4v",
@@ -274,6 +295,7 @@ let stemEngineAvailable = false;
 let stemFfmpegPath = "";
 let stemFfprobePath = "";
 let loudnessAnalysisStore = null;
+const audioAnalysisSampler = new AudioAnalysisSampler();
 let stemCapabilities = {
   spleeter: { available: false, status: "not_installed", message: "", cli: "", vocalsModel: "", accompanimentModel: "" },
   demucs: { available: false, status: "not_installed", message: "", cli: DEMUCS_ENGINE_CLI }
@@ -289,6 +311,11 @@ let activeStemVerificationChild = null;
 let activeStemChild = null;
 let activeStemJobId = "";
 let activeStemEngine = "";
+let activeStemVerificationEngine = "";
+let nativeStemLease = "";
+function selectedStemEngine() { return config.selectedStemEngine; }
+function nextStemEngine() { return activeStemEngine || activeStemVerificationEngine || selectedStemEngine(); }
+function stemEngineName(engine) { return ({ spleeter: "Spleeter", demucs: "Demucs", gsvocalrt: "GS-VocalRT" })[engine] || engine; }
 let activeStemInterrupt = "";
 let stemWorkerRunning = false;
 let stemWorkerPaused = false;
@@ -323,6 +350,17 @@ let systemMemoryPressureRefresh = null;
 let requests = [];
 let scanning = false;
 let syncing = false;
+let activitySelectionBusy = false;
+let freeModeSession = null;
+let entryModeResolved = false;
+let resolveEntryBootstrap;
+const entryBootstrapReady = new Promise(resolve => { resolveEntryBootstrap = resolve; });
+const currentContextSelection = () => freeModeSession ? {activityId:freeModeSession.sessionId,hotelId:"",venueId:""} : config;
+let syncOperation = null, maintenanceOperation = null;
+const activityContexts = createActivityContextStore(resolve(ROOT, 'data', 'activity-contexts'));
+let resumableFreeSession = await activityContexts.latestActiveFreeSession();
+const superhostModeOverrides = new Map();
+const superhostCanOverride = () => identityState.authenticated && identityState.user?.role === 'superhost' && hasV4Session(config);
 let syncAgain = false;
 let syncMaintenanceRunning = false;
 let syncMaintenanceAgain = false;
@@ -370,6 +408,7 @@ const knownExternalEntries = new Map();
 const externalQueueMisses = new Map();
 const reconciliationDiagnostics = [];
 const youtubeCache = new Map();
+const youtubeQueryCache = new Map();
 const youtubeSearchAt = new Map();
 const youtubeSearches = new Map();
 const hitYoutubeCache = new Map();
@@ -388,7 +427,7 @@ let vdjQueueCheckPromise = null;
 let vdjQueueHasSnapshot = false;
 let vdjQueueCount = 0;
 let lastVdjQueueAt = null;
-let vdjQueueEntries = [];
+let vdjQueueEntries = [...(storedQueueState.operationsState.queueIdentities || [])];
 let vdjQueueConsecutiveFailures = 0;
 let vdjAvailablePaths = new Set();
 let vdjRequestFilePaths = new Map();
@@ -408,38 +447,104 @@ function requireSignedInBridge() {
   }
 }
 
+function updateBridgeRequest(config, id, status, fileName, extra = {}) {
+  return updateBridgeRequestRemote(config, id, status, fileName, {
+    ...extra, bridgeLifecycle: operatingMode === 'bridge'
+  });
+}
+
 function effectiveRequestOutcome(item) {
   const id = String(item?.id || "").trim();
-  return outcomeRecoveries.get(id)?.outcome || requestOutcome(item?.status) ||
+  if (operationsState?.clearedIds?.includes(id)) return 'removed';
+  const recovery = outcomeRecoveries.get(id);
+  if (operatingMode === "bridge" && recovery?.returnedAt && Number(item?.stateRevision || 0) <= recovery.returnedRevision) return "";
+  return recovery?.outcome || requestOutcome(item?.status) ||
     (operatingMode === 'bridge' && normalizeText(item?.status) === 'eliminada' ? 'removed' : '');
 }
 
+let operationsState = storedQueueState.operationsState;
+let operationsContextVerified = false;
+function ensureOperationsContext() {
+  if (!operationsContextVerified) return operationsState;
+  const context = `${activityState.activityId}:${activityState.activityStartedAt}`;
+  if (operationsState.context !== context) operationsState = {context, closedAt:'', reserveIds:[], clearedIds:[], externalHistory:[]};
+  return operationsState;
+}
+function operationalPhase(entry) {
+  const deck = vdjOperations.view().decks.find(d => normalizeVdjPath(d.filePath) === normalizeVdjPath(entry.filePath));
+  return deck?.playing ? 'PLAYING' : deck?.loaded ? 'LOADED' : 'QUEUED';
+}
+async function recordExternalOutcome(entry, outcome) {
+  ensureOperationsContext();
+  if (operationsState.externalHistory.some(i => i.virtualDJItemId === entry.virtualDJItemId)) return;
+  vdjOperations.invalidate(`vdj:${entry.virtualDJItemId}`);
+  if(outcome==='skipped') requestReservePromotion();
+  operationsState.externalHistory.push({...entry, outcome, status:outcome.toUpperCase(), markedAt:new Date().toISOString()});
+  knownExternalEntries.delete(entry.virtualDJItemId);
+  externalQueueMisses.delete(entry.virtualDJItemId);
+  await persistQueuedEntries();
+}
+async function observeTerminal(event) {
+  if (activitySelectionBusy || clearOperationsBusy) return;
+  if (event.requestId.startsWith('vdj:')) {
+    const entry = vdjQueueEntries.find(i => `vdj:${i.virtualDJItemId}` === event.requestId) || knownExternalEntries.get(event.requestId.slice(4));
+    if (entry) {
+      try { await removeKaraokeEntry(config.virtualDJ,entry); } catch(error) { sheetError=`Finished external track could not be retired: ${errorMessage(error)}`; }
+      await recordExternalOutcome(entry, event.outcome || 'completed');
+    }
+    return;
+  }
+  const item = requests.find(i => i.id === event.requestId);
+  if (!item || effectiveRequestOutcome(item) || queueLocks.has(item.id)) return;
+  if (bridgeFeatures.playedCompareAndSet !== true || !(item.stateRevision > 0)) return;
+  await setRequestOutcome(item.id, event.outcome || 'completed', {origin:'VDJ_EVENT', version:item.stateRevision, removeVDJ:true});
+}
 const vdjOperations = createVirtualDjOperations({
   getConfig: () => config.virtualDJ,
-  enabled: () => operatingMode === 'bridge',
+  enabled: () => entryModeResolved && !activitySelectionBusy && operatingMode === 'bridge',
   changed: () => broadcastState(),
+  headLoaded: ({filePath,singer}) => {
+    const same=[...new Map([...vdjQueueEntries,...queuedEntries.values()].filter(e=>e.virtualDJItemId&&normalizeVdjPath(e.filePath)===normalizeVdjPath(filePath)&&e.singer===singer).map(e=>[e.virtualDJItemId,e])).values()];
+    if(same.length!==1)return;
+    // VDJ may blank Singer during its native LOAD transition. Keep the same
+    // observed occurrence ID locally; this never writes metadata back to VDJ.
+    ensureOperationsContext().loadedVdjHead={scope:activityContextKey(currentContextSelection(),activityState.activityStartedAt),filePath,singer,virtualDJItemId:same[0].virtualDJItemId};
+    void persistQueuedEntries().catch(()=>{});
+  },
   identify: (filePath) => {
     if (vdjQueueEntries.filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(filePath)).length > 1) return null;
     const matches = [...queuedEntries.values()].filter(entry => normalizeVdjPath(entry.filePath) === normalizeVdjPath(filePath));
+    if (matches.length === 0) {
+      const physical = vdjQueueEntries.filter(i => normalizeVdjPath(i.filePath) === normalizeVdjPath(filePath));
+      return physical.length === 1 && !physical[0].linkedRequestId ? {id:`vdj:${physical[0].virtualDJItemId}`} : null;
+    }
     if (matches.length !== 1) return null;
     const item = requests.find(entry => entry.id === matches[0].id);
     if (!item || effectiveRequestOutcome(item) || suppressedQueueIds.has(item.id)) return null;
     return { id: item.id, version: Number(item.stateRevision) || 0 };
   },
-  played: async event => {
-    const item = requests.find(entry => entry.id === event.requestId);
-    if (!item || effectiveRequestOutcome(item) || queueLocks.has(item.id)) return;
-    // Old services without request revisions cannot guarantee remote manual
-    // precedence: automation stays off instead of guessing.
-    if (bridgeFeatures.playedCompareAndSet !== true || !Number.isInteger(item.stateRevision) || item.stateRevision <= 0) return;
-    await setRequestOutcome(item.id, 'completed', { origin: 'VDJ_EVENT', version: event.version, removeVDJ: false });
-  }
+  played: observeTerminal,
+  terminal: observeTerminal
 });
 
 let vdjQueueOperationBusy = false;
+let meterRead = null;
+let clearOperationsBusy = false;
 const vdjQueueCommands = new Map();
 const administrativeCommands = new Map();
 const outcomeOperations = new Map();
+const hostVdjCommands = createVdjHostCommandGate({
+  path:resolve(ROOT,'data','vdj-host-commands.json'),
+  currentScope:()=>entryModeResolved && !activitySelectionBusy && operatingMode==='bridge' && !clearOperationsBusy && !finishTransitionPending && !finishCleanupPromise ? activityContextKey(currentContextSelection(),activityState.activityStartedAt) : ''
+});
+function runHostVdjCommand(body,origin,subject,operation) {
+  requireSignedInBridge();
+  if(!['host','superhost'].includes(String(identityState.user?.role || '')))throw new Error('A Host account is required for this VDJ song write.');
+  if(body.origin!==origin || body.userInitiated!==true)throw new Error('An explicit manual Host action is required for this VDJ song write.');
+  return hostVdjCommands.run({commandId:body.commandId,origin,userInitiated:true,subject,
+    scope:activityContextKey(currentContextSelection(),activityState.activityStartedAt),signature:JSON.stringify(body)},operation);
+}
+
 async function runAdministrativeCommand(body, operation) {
   const id = String(body.commandId || '');
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('A stable command ID is required.');
@@ -464,7 +569,7 @@ async function runVdjQueueOperation(body, operation) {
     if (prior.signature !== signature) throw new Error('Command ID was reused.');
     return prior.promise;
   }
-  if (vdjQueueOperationBusy || queueLocks.size) throw new Error('The queue is already being updated.');
+  if (clearOperationsBusy || vdjQueueOperationBusy || queueLocks.size) throw new Error('The queue is already being updated.');
   vdjQueueOperationBusy = true;
   if (vdjQueueCommands.size >= 256) vdjQueueCommands.delete(vdjQueueCommands.keys().next().value);
   const promise = Promise.resolve().then(operation).finally(async () => {
@@ -681,7 +786,7 @@ async function updateFavorite(body = {}) {
 }
 
 function guestStarConfigured() {
-  return Boolean(config.appsScriptUrl && hasV4Session(config));
+  return !freeModeSession && Boolean(config.appsScriptUrl && hasV4Session(config));
 }
 
 function json(response, status, data) {
@@ -758,7 +863,7 @@ function serverDiagnosticSnapshot(clientSnapshot = {}) {
       backgroundReadyState: Math.max(0, Math.min(4, Number(clientSnapshot?.audio?.backgroundReadyState) || 0))
     },
     stems: {
-      defaultMode: config.defaultStemEngine,
+      defaultMode: config.selectedStemEngine,
       source: ["spleeter", "demucs", "original"].includes(clientSnapshot?.stems?.source)
         ? clientSnapshot.stems.source
         : "",
@@ -853,7 +958,7 @@ function recordReconciliation(details = {}) {
   };
   reconciliationDiagnostics.push(entry);
   if (reconciliationDiagnostics.length > 100) reconciliationDiagnostics.shift();
-  console.info(JSON.stringify({ event: "queue_reconciliation", ...entry }));
+
   return entry;
 }
 
@@ -918,7 +1023,7 @@ function playerStemJobView(id) {
     Date.parse(right.intentUpdatedAt || right.requestedAt || "") -
     Date.parse(left.intentUpdatedAt || left.requestedAt || "")
   )[0];
-  const intent = normalizeStemEngine(latestIntentJob?.intent, latestIntentJob?.engine || "auto");
+  const intent = selectedStemEngine();
   const byEngine = Object.fromEntries(jobs.map((entry) => [entry.engine, entry]));
   const cache = {
     spleeter: byEngine.spleeter?.status === "ready" &&
@@ -926,7 +1031,7 @@ function playerStemJobView(id) {
     demucs: byEngine.demucs?.status === "ready" &&
       Boolean(byEngine.demucs.gsxPath || (byEngine.demucs.instrumentalPath && byEngine.demucs.vocalsPath))
   };
-  const source = stemSourceForIntent({ intent, cache });
+  const source = ["spleeter", "demucs"].includes(intent) && cache[intent] ? intent : "original";
   const selectedJob = source === "original" ? null : byEngine[source];
   const requiredJob = intent === "auto" ? byEngine.spleeter : byEngine[intent];
   const improvementJob = intent === "auto" ? byEngine.demucs : null;
@@ -982,7 +1087,31 @@ function playerStemJobView(id) {
   };
 }
 
-function matchesForRequest(item, youtubeResults = youtubeCache.get(item.id) || [], limit = 3) {
+// Matching is pure for one library generation and request/candidate metadata.
+// Keep Player projections unchanged; Bridge reuses expensive local searches.
+let matchLibraryGeneration = null;
+const bridgeMatchCache = new Map();
+const candidateGenerations = new WeakMap();
+let candidateGeneration = 0;
+function matchingMemo(item, candidates, kind, compute) {
+  if (operatingMode !== 'bridge' && tenantState.session?.playbackSource !== 'bridge') return compute();
+  if (matchLibraryGeneration !== libraryFiles) { bridgeMatchCache.clear(); matchLibraryGeneration = libraryFiles; }
+  if (!candidateGenerations.has(candidates)) candidateGenerations.set(candidates, ++candidateGeneration);
+  const key = JSON.stringify([item.id,item.song,item.artist,item.languageCode||item.language,item.durationSeconds,kind,candidateGenerations.get(candidates)]);
+  if (bridgeMatchCache.has(key)) return bridgeMatchCache.get(key);
+  const result=compute();
+  if(bridgeMatchCache.size>=2048)bridgeMatchCache.delete(bridgeMatchCache.keys().next().value);
+  bridgeMatchCache.set(key,result);return result;
+}
+const noYoutubeCandidates = Object.freeze([]);
+function matchesForRequest(item, candidates = youtubeCache.get(item.id) || noYoutubeCandidates, limit = 3) {
+  return matchingMemo(item,candidates,`matches:${limit}`,()=>computeMatchesForRequest(item,candidates,limit));
+}
+function youtubeOptionsForRequest(item, matches) {
+  const candidates=youtubeCache.get(item.id)||noYoutubeCandidates;
+  return matchingMemo(item,candidates,'youtube',()=>computeYoutubeOptionsForRequest(item,matches));
+}
+function computeMatchesForRequest(item, youtubeResults = youtubeCache.get(item.id) || [], limit = 3) {
   return findMatches(
     libraryFiles,
     item.song,
@@ -996,7 +1125,7 @@ function matchesForRequest(item, youtubeResults = youtubeCache.get(item.id) || [
   );
 }
 
-function youtubeOptionsForRequest(item, matches) {
+function computeYoutubeOptionsForRequest(item, matches) {
   return (youtubeCache.get(item.id) || []).map((option) => {
     const related = findMatches(
       libraryFiles,
@@ -1045,8 +1174,10 @@ function requestView(item) {
   );
   const pendingInsertion = pendingInsertions.get(item.id) || null;
   const transientMissing = transientQueueMissingIds.has(item.id);
+  const sentToVirtualDJ = !suppressedQueueIds.has(item.id) &&
+    (queuedEntries.has(item.id) || queuedIds.has(item.id) || removedExternallyIds.has(item.id) || sheetMarksVirtualDj(item));
   const isQueued =
-    !suppressedQueueIds.has(item.id) && queuedIds.has(item.id);
+    !suppressedQueueIds.has(item.id) && !removedExternallyIds.has(item.id) && queuedIds.has(item.id);
   const removedExternally =
     !suppressedQueueIds.has(item.id) && removedExternallyIds.has(item.id);
   const queueUnverified =
@@ -1095,6 +1226,8 @@ function requestView(item) {
   return {
     ...item,
     outcome: "",
+    sentToVirtualDJ,
+    pendingResolution: sentToVirtualDJ && removedExternally,
     queued: isQueued,
     removedExternally,
     queueUnverified,
@@ -1229,20 +1362,20 @@ function normalizedActivity(data = {}) {
   return {
     accepting:
       source.accepting === undefined
-        ? activityState.accepting
+        ? (sameActivity ? activityState.accepting : true)
         : source.accepting !== false,
-    activityHours: numberOr(source.activityHours, activityState.activityHours),
+    activityHours: numberOr(source.activityHours, sameActivity ? activityState.activityHours : 2),
     transitionSeconds: safeTransitionSeconds(
       source.transitionSeconds,
-      activityState.transitionSeconds
+      sameActivity ? activityState.transitionSeconds : 30
     ),
     accumulatedSeconds: Math.max(
       0,
-      numberOr(source.accumulatedSeconds, activityState.accumulatedSeconds)
+      numberOr(source.accumulatedSeconds, sameActivity ? activityState.accumulatedSeconds : 0)
     ),
     remainingSeconds: Math.max(
       0,
-      numberOr(source.remainingSeconds, activityState.remainingSeconds)
+      numberOr(source.remainingSeconds, sameActivity ? activityState.remainingSeconds : 0)
     ),
     activityStartedAt,
     activityFinishedAt,
@@ -1252,12 +1385,12 @@ function normalizedActivity(data = {}) {
         : source.activityRunning !== false && Boolean(activityStartedAt) && !activityFinishedAt,
     stateRevision: Math.max(
       0,
-      numberOr(source.stateRevision, activityState.stateRevision)
+      numberOr(source.stateRevision, sameActivity ? activityState.stateRevision : 0)
     ),
     activityId,
-    updatedAt: String(source.updatedAt ?? activityState.updatedAt ?? ""),
-    lastAction: String(source.lastAction ?? activityState.lastAction ?? ""),
-    lastSource: String(source.lastSource ?? activityState.lastSource ?? ""),
+    updatedAt: String(source.updatedAt ?? (sameActivity ? activityState.updatedAt : "") ?? ""),
+    lastAction: String(source.lastAction ?? (sameActivity ? activityState.lastAction : "") ?? ""),
+    lastSource: String(source.lastSource ?? (sameActivity ? activityState.lastSource : "") ?? ""),
     playbackMode: ["player", "bridge"].includes(String(source.playbackMode || "").toLowerCase())
       ? String(source.playbackMode).toLowerCase()
       : ["player", "bridge"].includes(String(source.lastSource || "").toLowerCase())
@@ -1307,20 +1440,23 @@ function clearTransientCaches() {
 }
 
 function applyActivityState(data) {
+  if (data?.state || data?.activity || data?.activityId || data?.activityRunning !== undefined) operationsContextVerified = true;
   const wasRunning = activityState.activityRunning;
   const next = normalizedActivity(data);
+  if((operatingMode==='bridge'||tenantState.session?.playbackSource==='bridge') && next.activityId===activityState.activityId && Number(next.stateRevision)<Number(activityState.stateRevision))return;
   if (data?.activity?.showStarScreenQueueCount !== undefined) {
     next.showStarScreenQueueCount = data.activity.showStarScreenQueueCount !== false;
   }
   activityState = next;
   if (activityState.activityRunning) {
+    const override=superhostModeOverrides.get(activityContextKey(currentContextSelection(),activityState.activityStartedAt));
     const persistedMode =
       String(persistedActiveActivityState.activityId || "") === String(activityState.activityId || "")
         ? String(persistedActiveActivityState.playbackMode || "")
         : "";
     // The remote activity is authoritative. A persisted active-session mode
     // may fill an older remote record, but lastSelectedMode never may.
-    operatingMode = activityState.playbackMode || persistedMode || operatingMode || "";
+    operatingMode = override || activityState.playbackMode || persistedMode || operatingMode || "";
     activityState.playbackMode = operatingMode;
   } else if (wasRunning) {
     operatingMode = "";
@@ -1329,7 +1465,7 @@ function applyActivityState(data) {
     if (data.playerRuntime && typeof data.playerRuntime === "object" && !playerRuntimeDirty) {
       remotePlayerRuntime = data.playerRuntime;
       if (Array.isArray(data.playerRuntime.queueOrder)) {
-        playerOrder = [...new Set(data.playerRuntime.queueOrder.map(String).filter(Boolean))];
+        playerOrder = [...new Set(data.playerRuntime.queueOrder.map(String).filter(id => id && !operationsState.clearedIds.includes(id)))];
       }
       if (
         data.playerRuntime.queueVisibility &&
@@ -1340,10 +1476,10 @@ function applyActivityState(data) {
           Object.entries(data.playerRuntime.queueVisibility)
             .slice(0, 1000)
             .map(([id, visible]) => [String(id).trim().slice(0, 160), visible !== false])
-            .filter(([id]) => id)
+            .filter(([id]) => id && !operationsState.clearedIds.includes(id))
         );
       }
-      const remotePlayback = data.playerRuntime.playback;
+      const remotePlayback = cleanPlayerRuntimeUpdate({playback:data.playerRuntime.playback}).playback;
       if (remotePlayback && typeof remotePlayback === "object") {
         playerPlayback = {
           currentRequestId: String(remotePlayback.currentRequestId || ""),
@@ -1354,12 +1490,17 @@ function applyActivityState(data) {
         };
       }
     }
+    const contextChanged = Boolean(data.activity && (data.activity.activityId !== tenantState.activity?.activityId || data.hotel?.hotelId !== tenantState.hotel?.hotelId || data.venue?.venueId !== tenantState.venue?.venueId));
+    if (contextChanged) tenantState = { hotel:null, venue:null, activity:null, branding:null, schedules:[], upcomingActivities:[], permissions:{}, share:null, kioskAccess:null };
     tenantState = {
+      previousQueueCount: data.previousQueueCount===undefined ? tenantState.previousQueueCount : Number(data.previousQueueCount)||0,
+      session: Object.hasOwn(data,'session') ? data.session || null : tenantState.session,
+      finalExperience: Object.hasOwn(data,'finalExperience') ? data.finalExperience || null : tenantState.finalExperience,
       hotel: data.hotel || tenantState.hotel,
       branding: data.branding || tenantState.branding,
       venue: data.venue || tenantState.venue,
       activity: data.activity || tenantState.activity,
-      kioskAccess: data.kioskAccess || null,
+      kioskAccess: Object.hasOwn(data,'kioskAccess') ? data.kioskAccess || null : tenantState.kioskAccess,
       schedules: Array.isArray(data.schedules) ? data.schedules : tenantState.schedules,
       permissions: data.permissions || tenantState.permissions || {},
       share: data.share || tenantState.share,
@@ -1427,6 +1568,7 @@ function seedKnownExternalEntries(data = {}) {
     if (String(item?.sourceType || "").trim().toLowerCase() !== "virtualdj_external") {
       continue;
     }
+    if (operationsState.clearedIds.includes(String(item.id))) continue;
     if (sheetMarksOutsideVirtualDj(item)) continue;
     const virtualDJItemId = String(item?.virtualDJItemId || "").trim();
     if (!virtualDJItemId || knownExternalEntries.has(virtualDJItemId)) continue;
@@ -1501,9 +1643,44 @@ function trackingEntryFromRequest(item) {
   };
 }
 
+let activityMutationBusy=false;
+let finishTransitionPending=false;
+let finishCleanupPromise=null;
+async function cleanupFinishedBridgeQueue(data) {
+  const session=data?.session||tenantState.session;
+  if(session?.playbackSource!=='bridge'||session?.status!=='finished'||!session.runId||(!Object.hasOwn(session,'autoFinish')&&!data.cleanupRequested))return;
+  const scope=[session.hotelId,session.venueId,session.activityId,session.runId].join(':');
+  if(finishCleanupPromise)return finishCleanupPromise;
+  if(operationsState.finishCleanup?.scope===scope && operationsState.finishCleanup.done)return;
+  if(operationsState.finishCleanup?.scope!==scope)operationsState.finishCleanup={scope,consumed:[],done:false};
+  const valid=()=>config.lastHotelId===session.hotelId&&config.lastActivityId===session.activityId&&config.lastVenueId===session.venueId&&tenantState.session?.runId===session.runId&&tenantState.session?.status==='finished';
+  finishCleanupPromise=(async()=>{
+    clearOperationsBusy=true;
+    await Promise.allSettled([...vdjQueueCommands.values(),...administrativeCommands.values()].map(item=>item.promise).concat([maintenanceOperation,vdjQueueCheckPromise]));
+    if(!valid())return;
+    const pending=[...queuedEntries.values()].filter(entry=>!operationsState.finishCleanup.consumed.includes(entry.id));
+    await persistQueuedEntries();
+    const result=await clearConfirmedFutureQueue({config:config.virtualDJ,entries:pending,valid,
+      consume:async entry=>{operationsState.finishCleanup.consumed.push(entry.id);await persistQueuedEntries();},
+      removed:async entry=>{removedExternallyIds.add(entry.id);queuedIds.delete(entry.id);await persistQueuedEntries();}});
+    if(valid()){operationsState.finishCleanup.done=true;operationsState.finishCleanup.result=result;await persistQueuedEntries();broadcastState();}
+  })().finally(()=>{finishCleanupPromise=null;clearOperationsBusy=false;});
+  return finishCleanupPromise;
+}
+
+async function flushPendingQueueClear() {
+  if(freeModeSession || !operationsState.pendingClearIds?.length)return;
+  for(const id of [...operationsState.pendingClearIds]) {
+    const result=await updateBridgeRequestRemote(config,id,'Cancelada','',{bridgeLifecycle:false,eventOrigin:'QUEUE_CLEAR',virtualDJItemId:'',queuePosition:0,syncState:'cleared',lastSeenAt:''});
+    if(result?.ok===false || result?.request?.status!=='Cancelada')throw new Error(result?.code || 'Guest Star did not confirm request deletion.');
+    operationsState.pendingClearIds=operationsState.pendingClearIds.filter(value=>value!==id);
+    await persistQueuedEntries();
+  }
+}
+
 async function persistQueuedEntries(activityId = activityState.activityId) {
   queueActivityId = String(activityId || queueActivityId || "");
-  await saveQueueState(
+  const saved = await saveQueueState(
     queueActivityId,
     queuedEntries.values(),
     suppressedQueueIds.values(),
@@ -1524,17 +1701,43 @@ async function persistQueuedEntries(activityId = activityState.activityId) {
           activityStartedAt: activityState.activityStartedAt,
           playbackMode: operatingMode
         }
-      : {}
+      : {},
+    operationsState
   );
+  if (queueActivityId && queueActivityId === activityState.activityId) await activityContexts.save(activityContextKey(currentContextSelection(), activityState.activityStartedAt), saved);
+  if (freeModeSession) {
+    if (activityState.activityRunning && operatingMode) resumableFreeSession={sessionId:freeModeSession.sessionId,activityStartedAt:activityState.activityStartedAt,playbackMode:operatingMode};
+    else if (resumableFreeSession?.sessionId===freeModeSession.sessionId) resumableFreeSession=null;
+  }
+}
+
+async function restoreSelectedContext(selection,nextStartedAt) {
+  const saved=await activityContexts.load(activityContextKey(selection,nextStartedAt));
+  // Preserve physical VirtualDJ rows; detach only the previous activity's links.
+  vdjOperations.resetContext();
+  for(const [map,values,key] of [[queuedEntries,saved.entries,'id'],[requestFileLinks,saved.requestFileLinks,'id'],[outcomeRecoveries,saved.recoveries,'id'],[playerLocalRequests,saved.playerRequests,'id'],[playerStemJobs,saved.playerStemJobs,'requestId']]) {
+    map.clear();for(const value of values)map.set(value[key],value);
+  }
+  for(const [set,values] of [[queuedIds,saved.entries.map(e=>e.id)],[suppressedQueueIds,saved.suppressedIds],[removedExternallyIds,saved.removedIds]]){set.clear();values.forEach(v=>set.add(v));}
+  pendingInsertions.clear();queuePresenceMisses.clear();transientQueueMissingIds.clear();vdjQueuePositions.clear();knownExternalEntries.clear();externalQueueMisses.clear();
+  operationsState=saved.operationsState;playerOrder=saved.playerOrder;playerPlayback=saved.playerPlayback;
+  playerQueueVisibility=new Map(Object.entries(saved.playerQueueVisibility));remotePlayerRuntime=null;playerRuntimeDirty=false;
+  operatingMode='';queueActivityId=selection.activityId;
+  vdjQueueEntries=vdjQueueEntries.map(e=>({...e,linkedRequestId:'',sourceType:'virtualdj_external'}));externalQueueEntries=vdjQueueEntries;
+  vdjQueueHasSnapshot=false;vdjQueueCount=0;lastVdjQueueAt=null;
+  lastQueueSignature='';queueSignatureAt=0;fullQueueObservedAt=0;
 }
 
 function cleanPlayerRuntimeUpdate(body = {}) {
   const requestedOrder = Array.isArray(body.queueOrder)
-    ? [...new Set(body.queueOrder.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 1000)
+    ? [...new Set(body.queueOrder.map((id) => String(id || "").trim()).filter(id => id && !operationsState.clearedIds.includes(id)))].slice(0, 1000)
     : null;
-  const sourcePlayback = body.playback && typeof body.playback === "object"
+  const incomingPlayback = body.playback && typeof body.playback === "object"
     ? body.playback
     : null;
+  const sourcePlayback = incomingPlayback && operationsState.clearedIds.includes(String(incomingPlayback.currentRequestId || "").trim())
+    ? {currentRequestId:'',currentTimeSeconds:0,scene:'lobby',wasPlaying:false}
+    : incomingPlayback;
   const currentTimeSeconds = Number(sourcePlayback?.currentTimeSeconds);
   const queueVisibility = body.queueVisibility &&
     typeof body.queueVisibility === "object" &&
@@ -1542,7 +1745,7 @@ function cleanPlayerRuntimeUpdate(body = {}) {
     ? Object.fromEntries(
         Object.entries(body.queueVisibility).slice(0, 1000)
           .map(([id, visible]) => [String(id || "").trim().slice(0, 160), visible !== false])
-          .filter(([id]) => id)
+          .filter(([id]) => id && !operationsState.clearedIds.includes(id))
       )
     : null;
   return {
@@ -1583,7 +1786,7 @@ async function pushPlayerRuntimeRemote() {
 }
 
 async function updatePlayerRuntime(body = {}) {
-  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+  if (operatingMode !== "player" || (!config.lastActivityId && !freeModeSession) || !tenantState.activity) {
     throw new Error("Player state can only change after selecting an activity in Player mode.");
   }
   const clean = cleanPlayerRuntimeUpdate(body);
@@ -1878,6 +2081,7 @@ function actualQueueEntryFromRequest(item, actualEntries, claimedIndices) {
 }
 
 async function reconcileVirtualDjQueue(force = false) {
+  if (!entryModeResolved || activitySelectionBusy || clearOperationsBusy) return;
   if (operatingMode !== "bridge") return;
   if (vdjQueueOperationBusy) return;
   if (vdjQueueCheckPromise) return vdjQueueCheckPromise;
@@ -1888,11 +2092,38 @@ async function reconcileVirtualDjQueue(force = false) {
     try {
       // Every physical row in VirtualDJ is authoritative. Never remove a row
       // merely because its singer and metadata look like another row.
-      const rawActualEntries = await listKaraokeEntries(config.virtualDJ);
+      const observationContext = activityContextKey(currentContextSelection(), activityState.activityStartedAt);
+      const physicalEntries = await listKaraokeEntries(config.virtualDJ);
+      if (operatingMode !== "bridge" || activitySelectionBusy || observationContext !== activityContextKey(currentContextSelection(), activityState.activityStartedAt)) return;
+      // Retire only the protected rows from this clear, not later requests for
+      // the same song. Drop each marker once its physical row has disappeared.
+      const retiredRows = [...(operationsState.clearedVdjEntries || [])];
+      const stillPresent = [];
+      const rawActualEntries = physicalEntries.filter(row => {
+        const index = retiredRows.findIndex(retired => sameKaraokeIdentity(row, retired));
+        if (index < 0) return true;
+        stillPresent.push(retiredRows.splice(index, 1)[0]);
+        return false;
+      });
+      if (stillPresent.length !== (operationsState.clearedVdjEntries || []).length) {
+        operationsState.clearedVdjEntries = stillPresent;
+        await persistQueuedEntries();
+      }
+      const previousIds = new Set(vdjQueueEntries.map(entry => entry.virtualDJItemId));
+      const retiredIds = new Set(ensureOperationsContext().externalHistory.map(entry => entry.virtualDJItemId));
+      const proof=operationsState.loadedVdjHead;
+      if(proof && proof.scope===observationContext) {
+        const same=rawActualEntries.filter(e=>normalizeVdjPath(e.filePath)===normalizeVdjPath(proof.filePath));
+        const head=rawActualEntries[0];
+        if(same.length===1 && head===same[0] && !head.singer && normalizeVdjPath(await queryVdj(config.virtualDJ,'deck 1 get_filepath'))===normalizeVdjPath(proof.filePath))head.virtualDJItemId=proof.virtualDJItemId;
+        else if(!same.length || head!==same[0] || (head.singer && head.singer!==proof.singer))operationsState.loadedVdjHead=null;
+      }
       const actualEntries = stabilizeVirtualDjEntries(
         rawActualEntries,
         vdjQueueEntries
-      );
+      ).map(entry => retiredIds.has(entry.virtualDJItemId) && !previousIds.has(entry.virtualDJItemId)
+        ? {...entry, virtualDJItemId:`${entry.virtualDJItemId}-${randomUUID().slice(0,8)}`}
+        : entry);
       const libraryIndex = localLibraryPathIndex(libraryFiles);
       const inspectedEntries = await Promise.all(
         actualEntries.map(async (entry) => {
@@ -1910,6 +2141,7 @@ async function reconcileVirtualDjQueue(force = false) {
           };
         })
       );
+      if (operatingMode !== "bridge" || activitySelectionBusy || observationContext !== activityContextKey(currentContextSelection(), activityState.activityStartedAt)) return;
       vdjQueueEntries = inspectedEntries;
       vdjAvailablePaths = new Set(
         inspectedEntries
@@ -1951,7 +2183,7 @@ async function reconcileVirtualDjQueue(force = false) {
       const tracked = [...trackedById.values()];
       const reconciliation = reconcileTrackedQueue(
         tracked,
-        inspectedEntries.map((entry) => ({
+        inspectedEntries.map(e=>!e.singer && e.virtualDJItemId===operationsState.loadedVdjHead?.virtualDJItemId ? {...e,singer:operationsState.loadedVdjHead.singer} : e).map((entry) => ({
           ...entry,
           knownExternal: knownExternalEntries.has(entry.virtualDJItemId)
         }))
@@ -1998,8 +2230,9 @@ async function reconcileVirtualDjQueue(force = false) {
             insertedAt: entry.insertedAt || new Date().toISOString(),
             lastSeenAt: new Date().toISOString()
           };
+          const meaningful = value => JSON.stringify({ ...value, lastSeenAt: '', expectedSinger: '', queuePosition: null });
+          if (meaningful(queuedEntries.get(entry.id)) !== meaningful(linkedEntry)) adopted = true;
           queuedEntries.set(entry.id, linkedEntry);
-          adopted = true;
           queuedIds.add(entry.id);
           pendingInsertions.delete(entry.id);
           nextPositions.set(entry.id, actual.index);
@@ -2056,7 +2289,7 @@ async function reconcileVirtualDjQueue(force = false) {
         }
         queuedIds.delete(entry.id);
         pendingInsertions.delete(entry.id);
-        if (!removedExternallyIds.has(entry.id) || item?.status !== "Fuera de VirtualDJ") {
+        if (!removedExternallyIds.has(entry.id)) {
           newlyMissing.push(entry.id);
         }
         removedExternallyIds.add(entry.id);
@@ -2084,13 +2317,18 @@ async function reconcileVirtualDjQueue(force = false) {
           ? "public_request"
           : "virtualdj_external"
       }));
+      vdjOperations.noteQueue(vdjQueueEntries.map(e=>e.linkedRequestId || `vdj:${e.virtualDJItemId}`));
       externalQueueEntries = vdjQueueEntries.filter(
         (entry) => entry.sourceType === "virtualdj_external"
       );
+      const queueIdentities = externalQueueEntries.map(({index,virtualDJItemId,filePath,singer,song,artist,durationSeconds}) => ({index,virtualDJItemId,filePath,singer,song,artist,durationSeconds}));
+      const identitiesChanged = JSON.stringify(queueIdentities) !== JSON.stringify(operationsState.queueIdentities || []);
+      operationsState.queueIdentities = queueIdentities;
       const currentExternalIds = new Set(
         externalQueueEntries.map((entry) => entry.virtualDJItemId)
       );
       externalQueueEntries.forEach((entry) => {
+        if (operationsState.externalHistory.some(item => item.virtualDJItemId === entry.virtualDJItemId)) return;
         knownExternalEntries.set(entry.virtualDJItemId, entry);
         externalQueueMisses.set(entry.virtualDJItemId, 0);
       });
@@ -2101,49 +2339,32 @@ async function reconcileVirtualDjQueue(force = false) {
         externalQueueMisses.set(virtualDJItemId, misses);
         if (misses >= 3) {
           confirmedMissingExternalIds.push(virtualDJItemId);
-          knownExternalEntries.delete(virtualDJItemId);
-          externalQueueMisses.delete(virtualDJItemId);
+          // Retain verified misses while audio continues after physical removal.
+          // Recording its eventual terminal outcome clears this small pending map.
         }
       }
       lastVdjQueueAt = new Date().toISOString();
       vdjQueueConsecutiveFailures = 0;
       vdjError = "";
-      if (adopted || newlyMissing.length || restored.length) {
+      if (adopted || newlyMissing.length || restored.length || identitiesChanged) {
         await persistQueuedEntries();
       }
       broadcastState();
 
-      for (const id of newlyMissing) {
-        const item = requests.find((entry) => entry.id === id);
-        if (!item) continue;
-        item.status = "Fuera de VirtualDJ";
-        try {
-          await updateBridgeRequest(
-            config,
-            id,
-            item.status,
-            basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
-            {
-              durationSeconds: item.durationSeconds,
-              virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
-              syncState: "confirmed_missing"
-            }
-          );
-        } catch {
-          // La tarjeta local conserva la pregunta y la hoja se reintentará después.
-        }
-      }
+      // Absence is observation only. Without a verified natural playback end,
+      // the Host must decide the outcome; an empty queue cannot mean skipped.
       for (const id of restored) {
         const item = requests.find((entry) => entry.id === id);
-        if (!item) continue;
+        if (!item || effectiveRequestOutcome(item) || queueLocks.has(id)) continue;
         item.status = "Agregada a VirtualDJ";
         try {
-          await updateBridgeRequest(
+          const updated = await updateBridgeRequest(
             config,
             id,
             item.status,
             basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
             {
+              ...(bridgeFeatures.versionedMetadata === true && item.stateRevision > 0 ? {expectedRevision:item.stateRevision} : {}),
               durationSeconds: item.durationSeconds,
               virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
               queuePosition: vdjQueuePositions.get(id),
@@ -2151,6 +2372,8 @@ async function reconcileVirtualDjQueue(force = false) {
               lastSeenAt: new Date().toISOString()
             }
           );
+          const current=requests.find(request=>request.id===id);
+          if (current && updated?.request?.stateRevision) current.stateRevision=Math.max(Number(current.stateRevision)||0,Number(updated.request.stateRevision));
         } catch {
           // La cola real de VirtualDJ sigue siendo la fuente de verdad.
         }
@@ -2160,12 +2383,13 @@ async function reconcileVirtualDjQueue(force = false) {
         const item = requests.find((entry) => entry.id === id);
         if (!item) continue;
         try {
-          await updateBridgeRequest(
+          const updated = await updateBridgeRequest(
             config,
             id,
             item.status,
             basename(queuedEntries.get(id)?.filePath || item.fileName || ""),
             {
+              ...(bridgeFeatures.versionedMetadata === true && item.stateRevision > 0 ? {expectedRevision:item.stateRevision} : {}),
               durationSeconds: item.durationSeconds,
               virtualDJItemId: queuedEntries.get(id)?.virtualDJItemId || "",
               queuePosition: vdjQueuePositions.get(id),
@@ -2173,6 +2397,8 @@ async function reconcileVirtualDjQueue(force = false) {
               lastSeenAt: new Date().toISOString()
             }
           );
+          const current=requests.find(request=>request.id===id);
+          if (current && updated?.request?.stateRevision) current.stateRevision=Math.max(Number(current.stateRevision)||0,Number(updated.request.stateRevision));
         } catch {
           // La duración exacta local permanece visible y se reintentará.
         }
@@ -2207,6 +2433,7 @@ async function reconcileVirtualDjQueue(force = false) {
         }
       }
     } catch (error) {
+      queuePresenceMisses.clear(); externalQueueMisses.clear();
       vdjQueueConsecutiveFailures += 1;
       if (!vdjQueueHasSnapshot || vdjQueueConsecutiveFailures >= 3) {
         vdjError = `The Karaoke queue could not be checked: ${errorMessage(error)}`;
@@ -2218,15 +2445,21 @@ async function reconcileVirtualDjQueue(force = false) {
     await vdjQueueCheckPromise;
   } finally {
     vdjQueueCheckPromise = null;
+    if (!clearOperationsBusy && !vdjError && vdjQueueConsecutiveFailures === 0 && !vdjQueueOperationBusy) { await promoteReserveIfNeeded(); }
     broadcastState();
   }
 }
 
 function stateView() {
+  ensureOperationsContext();
   const requestViews = orderRequestViews([
     ...requests.map(requestView),
     ...[...playerLocalRequests.values()].map(playerLocalRequestView)
-  ]);
+  ].filter(item => !operationsState.clearedIds.includes(item.id)) ).map(i => {
+    const entry=queuedEntries.get(i.id), phase=i.outcome ? i.outcome.toUpperCase() : entry ? operationalPhase(entry) : 'PENDING';
+    const inFlight=!i.outcome && ['LOADED','PLAYING'].includes(phase);
+    return {...i,phase,queued:i.queued || inFlight,cleared:operationsState.clearedIds.includes(i.id),standby:operationsState.reserveIds.includes(i.id)};
+  });
   const activePlayerIds = requestViews
     .filter((item) =>
       !item.outcome &&
@@ -2247,28 +2480,14 @@ function stateView() {
       .filter((item) => Number.isInteger(item.queuePosition))
       .map((item) => [item.queuePosition, item])
   );
-  const verifiedQueue = vdjQueueHasSnapshot
-    ? vdjQueueEntries.map((entry) => {
-        const request = requestsByQueuePosition.get(entry.index + 1);
-        return {
-          durationSeconds:
-            Number(entry.durationSeconds) > 0
-              ? Number(entry.durationSeconds)
-              : Number(request?.durationSeconds) || 240,
-          transitionSeconds: safeTransitionSeconds(
-            request?.transitionSeconds,
-            activityState.transitionSeconds
-          )
-        };
-      })
-    : null;
-  const activitySummary = buildActivitySummary(
-    activityState,
-    requestViews,
-    Date.now(),
-    verifiedQueue,
-    { currentPlayback: playerPlayback }
-  );
+  const deck1 = vdjOperations.view().decks.find(d => d.deck === 1);
+  const currentPlayback = operatingMode === 'bridge' ? {...deck1, observedAt:vdjOperations.view().observedAt, playing:deck1?.playing === true} : {...playerPlayback, playing:playerPlayback.wasPlaying === true};
+  const verifiedQueue = operatingMode === 'bridge' ? (vdjQueueHasSnapshot ? vdjQueueEntries.filter(e => {
+    const r = requestViews.find(i => i.id === e.linkedRequestId);
+    return !r?.outcome && !operationsState.externalHistory.some(i => i.virtualDJItemId === e.virtualDJItemId);
+  }).map(e => ({...e, id:e.linkedRequestId || `vdj:${e.virtualDJItemId}`, coverageEligible:e.localAvailable !== false || vdjOperations.view().decks.some(d=>d.loaded && normalizeVdjPath(d.filePath)===normalizeVdjPath(e.filePath)), transitionSeconds: requestViews.find(i => i.id === e.linkedRequestId)?.transitionSeconds ?? activityState.transitionSeconds})) : null)
+    : requestViews.filter(i => !i.outcome && !i.standby && i.localAvailable && (!i.stem || i.stem.status === 'ready'));
+  const activitySummary = buildActivitySummary(activityState, [...requestViews, ...operationsState.externalHistory], Date.now(), verifiedQueue, {currentPlayback, reserveIds:operationsState.reserveIds});
   if (vdjQueueCount > 0) activitySummary.suggestHits = false;
   const hitSuggestions = activitySummary.suggestHits
     ? selectHitSuggestions(requests, libraryFiles, activityState.activityId, 6)
@@ -2287,6 +2506,7 @@ function stateView() {
     version: BRIDGE_VERSION,
     build: bundleBuild,
     config: { ...publicConfig(config), diagnostics: diagnosticPreferencesView() },
+    entryContext: {sessionType:freeModeSession ? 'free' : config.lastActivityId ? 'scheduled' : 'none',sessionId:freeModeSession?.sessionId || '',activeActivityId:freeModeSession ? null : config.lastActivityId || null,rememberedActivity:config.rememberedActivity || null,resumableFreeSession:superhostCanOverride() && resumableFreeSession ? {sessionId:resumableFreeSession.sessionId,activityStartedAt:resumableFreeSession.activityStartedAt,playbackMode:resumableFreeSession.playbackMode} : null},
     account: {
       authenticated: identityState.authenticated && hasV4Session(config),
       user: identityState.user,
@@ -2305,8 +2525,8 @@ function stateView() {
       // Auto Start may create a real running occurrence before this Mac has
       // chosen its renderer. The first selection completes recovery; once a
       // mode exists it remains locked until the occurrence finishes.
-      locked: Boolean(activityState.activityRunning && operatingMode),
-      canChange: !activityState.activityRunning || !operatingMode
+      locked: Boolean(activityState.activityRunning && operatingMode && !superhostCanOverride()),
+      canChange: superhostCanOverride() || !activityState.activityRunning || !operatingMode
     },
     playerRuntime: {
       ...(remotePlayerRuntime && typeof remotePlayerRuntime === "object"
@@ -2317,11 +2537,15 @@ function stateView() {
       playback: { ...playerPlayback }
     },
     stemEngine: {
+      selectedStemEngine: selectedStemEngine(),
+      activeEngine: nativeStemLease || nextStemEngine(),
+      pendingChange: Boolean((nativeStemLease || nextStemEngine()) !== selectedStemEngine()),
+      vocalRT: { enabled: process.env.GUEST_STAR_VOCALRT_P0 === "1", selected: selectedStemEngine() === "gsvocalrt", prototype: false, model: "vocal-stream-v1", sampleRate: 44100, stems: 2 },
       available: stemEngineAvailable,
       status: stemEngineStatus.status,
       message: stemEngineStatus.message,
       source: stemEngineStatus.source,
-      defaultEngine: normalizeStemEngine(config.defaultStemEngine, "auto"),
+      defaultEngine: selectedStemEngine(),
       engines: {
         spleeter: {
           available: stemCapabilities.spleeter.available,
@@ -2348,7 +2572,7 @@ function stateView() {
       pausedForLivePlayback: stemWorkerPaused,
       activeRequestId: playerStemJobs.get(activeStemJobId)?.requestId || "",
       activeJobId: activeStemJobId,
-      activeEngine: activeStemEngine,
+      processingEngine: activeStemEngine,
       jobs: [...new Set([...playerStemJobs.values()].map((job) => job.requestId))]
         .map((id) => ({ id, ...playerStemJobView(id) }))
     },
@@ -2360,8 +2584,9 @@ function stateView() {
       ).slice(-8).reverse()
     },
     activitySummary,
+    operations: {...operationsState, currentPlayback, coverageQueue:verifiedQueue},
     library: {
-      count: libraryFiles.length,
+      count: operatingMode==='player'?playerIndexedFiles().length:libraryFiles.length,
       lastScanAt,
       scanning,
       realtime: libraryWatchers.length > 0,
@@ -2395,7 +2620,8 @@ function stateView() {
       entries: vdjQueueEntries.map((entry) => ({
         virtualDJItemId: entry.virtualDJItemId,
         position: entry.index + 1,
-        singer: visibleVdjSinger(entry.singer) || "No singer",
+        phase: operationalPhase(entry),
+        singer: visibleVdjSinger(entry.singer || (operationsState.loadedVdjHead?.virtualDJItemId===entry.virtualDJItemId ? operationsState.loadedVdjHead.singer : "")) || "No singer",
         song:
           entry.song || basename(entry.filePath || "") || "Untitled track",
         artist: entry.artist || "",
@@ -2561,6 +2787,7 @@ async function scanNow() {
   broadcastState();
   try {
     libraryFiles = await scanLibrary(config.libraryFolders);
+    await scanPlayerFolders();
     lastScanAt = new Date().toISOString();
   } catch (error) {
     libraryError = errorMessage(error);
@@ -2573,7 +2800,6 @@ async function scanNow() {
   await reportLocalStates();
   await prepareMissingYoutube();
   await autoLinkSafeMatches();
-  if (operatingMode === "bridge") await autoQueueExactMatches();
   broadcastState();
   if (scanAgain) {
     scanAgain = false;
@@ -2603,7 +2829,13 @@ async function scanBackgroundMusicNow() {
   backgroundMusicError = errors.join(" ");
 }
 
-async function syncNow() {
+function syncNow() {
+  if (activitySelectionBusy || clearOperationsBusy) return Promise.resolve();
+  if (syncOperation) return syncOperation;
+  syncOperation = performSyncNow().finally(()=>{syncOperation=null;});
+  return syncOperation;
+}
+async function performSyncNow() {
   if (!guestStarConfigured()) return;
   if (syncing) {
     syncAgain = true;
@@ -2615,19 +2847,48 @@ async function syncNow() {
   broadcastState();
   try {
     const previousRealtimeMode = operatingMode;
+    await flushPendingQueueClear();
     const data = await fetchBridgeQueue(config);
     scheduleCloudScheduleWake(data);
     const nextActivity = normalizedActivity(data);
-    const receivedRequests = bridgeRequests(data);
+    const activityChanged = Boolean(
+      !freeModeSession && queueActivityId && nextActivity.activityId &&
+      queueActivityId !== nextActivity.activityId
+    );
+    if (activityChanged) {
+      // A saved free/other activity may be the last global queue on disk.
+      // Restore the selected activity before reconciling its remote rows.
+      await restoreSelectedContext({
+        hotelId: String(data.hotel?.hotelId || config.lastHotelId || ''),
+        venueId: String(data.venue?.venueId || config.lastVenueId || ''),
+        activityId: nextActivity.activityId
+      }, nextActivity.activityStartedAt);
+      requests = [];
+      clearTransientCaches();
+    }
+    const receivedRequests = bridgeRequests(data).filter(item => !operationsState.clearedIds.includes(item.id));
     const duplicateRequests = receivedRequests.filter((item) => item.duplicateOf);
     const nextRequests = receivedRequests.filter((item) => !item.duplicateOf);
-    const activityChanged =
-      queueActivityId &&
-      nextActivity.activityId &&
-      queueActivityId !== nextActivity.activityId;
     await reconcileDeletedRequests(nextRequests, nextActivity);
-    if (activityChanged) clearTransientCaches();
     seedKnownExternalEntries(data);
+    // A fetch started before a Host action may finish after it. Preserve the
+    // current request during mutations and reject older remote revisions.
+    if (!activityChanged && operatingMode === 'bridge') {
+      const previous = new Map(requests.map(item => [item.id, item]));
+      for (let index = 0; index < nextRequests.length; index++) {
+        const current = previous.get(nextRequests[index].id);
+        if (current && (queueLocks.has(current.id) || outcomeOperations.has(current.id) ||
+            Number(current.stateRevision || 0) > Number(nextRequests[index].stateRevision || 0))) {
+          nextRequests[index] = current;
+        }
+      }
+    }
+    if (!activityChanged && operatingMode === 'bridge') {
+      const received = new Set(nextRequests.map(item => item.id));
+      for (const current of requests) {
+        if (!operationsState.clearedIds.includes(current.id) && !received.has(current.id) && (queuedEntries.has(current.id) || outcomeRecoveries.has(current.id))) nextRequests.push(current);
+      }
+    }
     requests = nextRequests;
     for (const item of requests) {
       if (effectiveRequestOutcome(item)) continue;
@@ -2640,6 +2901,7 @@ async function syncNow() {
     }
     refreshLocalAvailability();
     applyActivityState(data);
+    if(data.session?.status==='finished' && data.session?.playbackSource==='bridge')void cleanupFinishedBridgeQueue(data).catch(error=>{vdjError=errorMessage(error);broadcastState();});
     if (cloudRealtimeSocket && previousRealtimeMode !== operatingMode) {
       restartCloudRealtime();
     }
@@ -2688,7 +2950,13 @@ async function syncNow() {
   }
 }
 
-async function runSyncMaintenance() {
+function runSyncMaintenance() {
+  if (activitySelectionBusy || clearOperationsBusy) return Promise.resolve();
+  if (maintenanceOperation) return maintenanceOperation;
+  maintenanceOperation = performSyncMaintenance().finally(()=>{maintenanceOperation=null;});
+  return maintenanceOperation;
+}
+async function performSyncMaintenance() {
   if (!guestStarConfigured()) return;
   if (syncMaintenanceRunning) {
     syncMaintenanceAgain = true;
@@ -2701,7 +2969,6 @@ async function runSyncMaintenance() {
     await prepareMissingYoutube();
     if (operatingMode === "bridge") {
       await prepareHitSuggestionYoutube();
-      await autoQueueExactMatches();
     }
   } catch (error) {
     if (!sheetError) sheetError = errorMessage(error);
@@ -2827,27 +3094,12 @@ async function canAccessStemPath(filePath, executable = false) {
 }
 
 async function stemEngineFingerprint() {
-  const entries = [
-    resolve(STEM_ENGINE_ROOT, "package.json"),
-    stemFfmpegPath,
-    stemFfprobePath,
-    resolve(STEM_ENGINE_ROOT, "bin", "sherpa-onnx-offline-source-separation"),
-    resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16", "vocals.fp16.onnx"),
-    resolve(STEM_ENGINE_ROOT, "models", "sherpa-onnx-spleeter-2stems-fp16", "accompaniment.fp16.onnx"),
-    DEMUCS_ENGINE_CLI,
-    resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "htdemucs.onnx")
-  ];
-  const fingerprint = createHash("sha256");
-  fingerprint.update(`${bundleBuild}|${process.arch}|${STEM_ENGINE_SOURCE}|`);
-  for (const filePath of entries) {
-    try {
-      const info = await stat(filePath);
-      fingerprint.update(`${filePath}|${info.size}|${info.mtimeMs}|`);
-    } catch {
-      fingerprint.update(`${filePath}|missing|`);
-    }
-  }
-  return fingerprint.digest("hex");
+  return stemVerificationFingerprint({
+    engineRoot: STEM_ENGINE_ROOT,
+    smokeScript: STEM_ENGINE_SMOKE_SCRIPT,
+    toolPaths: [stemFfmpegPath, stemFfprobePath].filter(Boolean),
+    identity: `${process.arch}|${process.platform}|${process.version}|${process.versions.modules}|${release()}|${STEM_ENGINE_SOURCE}`
+  });
 }
 
 async function loadStemEngineVerification() {
@@ -2874,7 +3126,9 @@ async function saveStemEngineVerification(engines) {
 }
 
 function updateStemEngineSummary() {
-  const engines = [stemCapabilities.spleeter, stemCapabilities.demucs];
+  const selected = selectedStemEngine();
+  const ownReady = process.env.GUEST_STAR_VOCALRT_P0 === "1" && existsSync(process.env.GUEST_STAR_VOCALRT_MODEL || resolve(STEM_ENGINE_ROOT, "gs-vocalrt/vocal-stream.onnx"));
+  const engines = [selected === "gsvocalrt" ? stemCapability(ownReady ? "ready" : "model_missing", ownReady ? "Separación vocal en vivo lista." : "No se pudo iniciar GS-VocalRT.") : stemCapabilities[selected]];
   stemEngineAvailable = engines.some((engine) => engine.available);
   const status = stemEngineAvailable ? "ready" : [
     "model_missing", "not_executable", "not_installed", "temporary_error", "checking"
@@ -2882,8 +3136,8 @@ function updateStemEngineSummary() {
   stemEngineStatus = {
     status,
     message: stemEngineAvailable
-      ? "Motores IA verificados y listos."
-      : stemStatusMessage(status),
+      ? `${stemEngineName(selected)} listo.`
+      : stemStatusMessage(status, selected),
     source: STEM_ENGINE_SOURCE
   };
   diagnostics.setHealth("Spleeter", stemCapabilities.spleeter.available ? "IDLE" : "OFFLINE");
@@ -2940,7 +3194,7 @@ async function refreshStemEngineCapability() {
     if (engine === "spleeter" && !(vocalsModel && accompanimentModel)) return "model_missing";
     if (engine === "demucs" && !demucsModel) return "model_missing";
     if (!structurallyReady) return "not_installed";
-    return verified[engine]?.status === "ready" ? "ready" : "checking";
+    return "ready"; // No model preloading: preparation validates selected output.
   };
   const spleeterStatus = statusFor("spleeter", spleeterExecutable);
   const demucsStatus = statusFor("demucs", demucsExecutable);
@@ -2959,16 +3213,18 @@ async function refreshStemEngineCapability() {
 }
 
 async function verifyStemEngineCapability() {
+  if (nativeStemLease || stemWorkerRunning || selectedStemEngine() === "gsvocalrt") return;
   if (stemEngineVerificationRunning || stemResourceState !== "IDLE" || !["checking", "ready"].includes(stemEngineStatus.status)) return;
   const engines = Object.entries(stemCapabilities)
-    .filter(([, capability]) => capability.status === "checking")
+    .filter(([engine, capability]) => engine === selectedStemEngine() && capability.status === "checking")
     .map(([engine]) => engine);
   if (!engines.length) return;
   stemEngineVerificationRunning = true;
   const verification = await loadStemEngineVerification();
   try {
     for (const engine of engines) {
-      if (stemWorkerPaused) break;
+      if (stemWorkerPaused || engine !== selectedStemEngine() || nativeStemLease) break;
+      activeStemVerificationEngine = engine;
       const result = await new Promise((resolveVerification) => {
         const child = spawn(process.execPath, [
           STEM_ENGINE_SMOKE_SCRIPT, STEM_ENGINE_ROOT, `--engine=${engine}`
@@ -3034,6 +3290,7 @@ async function verifyStemEngineCapability() {
   } finally {
     activeStemVerificationChild = null;
     stemEngineVerificationRunning = false;
+    activeStemVerificationEngine = "";
     void processStemQueue();
   }
 }
@@ -3210,6 +3467,7 @@ function interruptActiveDemucs(reason) {
 }
 
 async function runStemCommand(command, args, job, phase, onOutput = null) {
+  if (nativeStemLease || !["spleeter", "demucs"].includes(job.engine)) throw new Error("El motor de stems está ocupado.");
   if (!playerStemJobs.has(job.id)) throw new Error("Stem preparation was cancelled.");
   job.phase = phase;
   job.updatedAt = new Date().toISOString();
@@ -3286,7 +3544,7 @@ function requestStemIntent(requestId) {
   return requestStemJobs(requestId).sort((left, right) =>
     Date.parse(right.intentUpdatedAt || right.requestedAt || "") -
     Date.parse(left.intentUpdatedAt || left.requestedAt || "")
-  )[0]?.intent || normalizeStemEngine(config.defaultStemEngine, "auto");
+  )[0]?.intent || normalizeStemEngine(config.selectedStemEngine, "auto");
 }
 
 function setRequestStemIntent(requestId, intent, timestamp = new Date().toISOString()) {
@@ -3639,7 +3897,7 @@ function readyStemJobsForRequest(requestId) {
 
 function addReadyRequestToPlayerOrder(requestId) {
   const id = String(requestId || "");
-  if (!id || playerOrder.includes(id)) return;
+  if (!id || operationsState.clearedIds.includes(id) || playerOrder.includes(id)) return;
   playerOrder.push(id);
   playerRuntimeDirty = true;
 }
@@ -3651,7 +3909,7 @@ function lockStemSourceForPlayback(requestId, reason = "runtime", preferredSourc
   const preferred = ["spleeter", "demucs"].includes(preferredSource) && ready.has(preferredSource)
     ? preferredSource
     : "";
-  const desired = preferred || (ready.has("demucs") ? "demucs" : ready.has("spleeter") ? "spleeter" : "original");
+  const desired = preferred || (ready.has(selectedStemEngine()) ? selectedStemEngine() : "original");
   if (activeStemPlaybackLock?.requestId === id) {
     if (desired !== "original" && desired !== activeStemPlaybackLock.source) {
       recordStemBreadcrumb("STEM_HOT_SWAP_BLOCKED", {
@@ -3679,19 +3937,20 @@ function refreshQueuedStemEtas() {
 }
 
 async function processStemQueue() {
-  if (stemWorkerRunning || !stemEngineAvailable) return;
+  if (stemWorkerRunning || stemEngineVerificationRunning || nativeStemLease || selectedStemEngine() === "gsvocalrt" || !stemEngineAvailable) return;
   updateStemResourceState();
   if (stemWorkerPaused || stemResourceState === "PRESSURE") return;
   stemWorkerRunning = true;
   try {
     while (!stemWorkerPaused && stemResourceState !== "PRESSURE") {
       refreshQueuedStemEtas();
-      const job = prioritizeStemJobs([...playerStemJobs.values()])[0];
+      if (nativeStemLease || selectedStemEngine() === "gsvocalrt") break;
+      const job = prioritizeStemJobs([...playerStemJobs.values()].filter(job => job.engine === selectedStemEngine()))[0];
       if (!job) break;
       if (!stemCapabilities[job.engine]?.available) {
         job.status = job.opportunistic ? "deferred" : "failed";
         job.phase = job.opportunistic ? "Mejora diferida · motor no disponible" : "Motor no disponible";
-        job.error = `The ${job.engine} engine is not installed on this Mac.`;
+        job.error = `No se pudo iniciar ${stemEngineName(job.engine)}.`;
         job.updatedAt = new Date().toISOString();
         await persistQueuedEntries();
         continue;
@@ -3762,12 +4021,12 @@ async function processStemQueue() {
           job.phase = job.opportunistic
             ? "Spleeter sigue listo · mejora HQ no completada"
             : "No se pudo preparar";
-          job.error = errorMessage(error);
+          job.error = `No se pudo iniciar ${stemEngineName(job.engine)}.`;
           recordStemBreadcrumb(`${prefix}_ERROR`, {
             engine: job.engine,
             jobId: job.jobId,
             elapsedMs: job.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
-            summary: job.error,
+            summary: errorMessage(error),
             context: { command: error?.command || "", exitCode: error?.exitCode ?? null, signal: error?.signal || "" }
           }, { severity: job.opportunistic ? "WARNING" : "ERROR", createIncident: !job.opportunistic });
         }
@@ -3786,9 +4045,10 @@ async function processStemQueue() {
   }
 }
 
-async function enqueueStemRequest(id, requestedEngine = config.defaultStemEngine) {
+async function enqueueStemRequest(id, requestedEngine = config.selectedStemEngine) {
   const requestId = String(id || "");
-  const intent = normalizeStemEngine(requestedEngine, normalizeStemEngine(config.defaultStemEngine, "auto"));
+  const intent = selectedStemEngine();
+  if (intent === "gsvocalrt") return { ok: true, intent, streaming: true, engine: nextStemEngine() };
   const filePath = await playerFileForRequest(requestId);
   const context = await trackStemContext(filePath);
   recordStemBreadcrumb(intent === "auto" ? "STEMS_AUTO_SELECTED" : "STEMS_ENGINE_SELECTED", {
@@ -3797,29 +4057,10 @@ async function enqueueStemRequest(id, requestedEngine = config.defaultStemEngine
   });
 
   let cacheHit = false;
-  if (intent === "auto") {
-    const demucsCache = await lookupStemCache(context, "demucs", requestId);
-    if (demucsCache.valid) {
-      upsertStemJob({ requestId, filePath, engine: "demucs", intent, context, cache: demucsCache });
-      cacheHit = true;
-    } else {
-      const spleeterCache = await lookupStemCache(context, "spleeter", requestId);
-      if (!spleeterCache.valid && !stemCapabilities.spleeter.available) {
-        throw new Error("AUTO requires the Spleeter fast engine or a valid cached stem on this Mac.");
-      }
-      upsertStemJob({ requestId, filePath, engine: "spleeter", intent, context, cache: spleeterCache });
-      cacheHit = spleeterCache.valid;
-      await queueAutoDemucsUpgrade(requestId, filePath, context);
-    }
-  } else {
-    const cache = await lookupStemCache(context, intent, requestId);
-    if (!cache.valid && !stemCapabilities[intent]?.available) {
-      throw new Error(`The ${intent} Stems engine is not installed on this Mac.`);
-    }
-    upsertStemJob({ requestId, filePath, engine: intent, intent, context, cache });
-    cacheHit = cache.valid;
-    if (intent === "spleeter") deferAutoDemucs(requestId);
-  }
+  const cache = await lookupStemCache(context, intent, requestId);
+  if (!cache.valid && !stemCapabilities[intent]?.available) throw new Error(`No se pudo iniciar ${stemEngineName(intent)}.`);
+  upsertStemJob({ requestId, filePath, engine: intent, intent, context, cache });
+  cacheHit = cache.valid;
   setRequestStemIntent(requestId, intent);
   // Stems are an enhancement, never admission control for the live queue.
   // A fast or HQ job can continue in the background, but it cannot make the
@@ -3829,14 +4070,6 @@ async function enqueueStemRequest(id, requestedEngine = config.defaultStemEngine
   await persistQueuedEntries();
   broadcastState();
 
-  const requiredFastJob = playerStemJobs.get(stemJobKey(requestId, "spleeter"));
-  if (
-    activeStemEngine === "demucs" &&
-    requiredFastJob?.status === "queued" &&
-    requiredFastJob.required !== false
-  ) {
-    interruptActiveDemucs("preempted_by_required_spleeter");
-  }
   void processStemQueue();
   return { ok: true, stem: playerStemJobView(requestId), cached: cacheHit, intent };
 }
@@ -3903,6 +4136,34 @@ async function servePlayerGSXDescriptor(response, id, requestedEngine = "") {
   });
 }
 
+let playerExtraFiles=[];
+const playerSourceOverrides=new Map();
+const playerResolvedSources=new Map();
+const playerSourceRevisions=new Map();
+const playerSourcePreferencesPath=resolve(ROOT,'data','player-source-preferences.json');
+try {for(const [id,file] of Object.entries(JSON.parse(await readFile(playerSourcePreferencesPath,'utf8'))))playerSourceOverrides.set(id,String(file));}catch{}
+async function assertPlayerFile(file){
+ const target=await realpath(String(file||''));if(!(await stat(target)).isFile()||(!playerMediaType(target)&&extname(target).toLowerCase()!=='.lrc'))throw new Error('Unsupported Player media.');
+ for(const folder of playerMediaFolders(config)){try{const root=await realpath(folder);if(target.startsWith(root+sep))return target;}catch{}}
+ throw new Error('Media is outside the Player folders.');
+}
+async function scanPlayerFolders(){
+ const configured=[...(config.playerAudioFolders||[]),...(config.playerVideoFolders||[])];
+ const extra=configured.filter(f=>!config.libraryFolders.includes(f));
+ playerExtraFiles=(await scanLibrary(extra)).filter(f=>{const type=playerMediaType(f);const roots=type==='audio'?config.playerAudioFolders:config.playerVideoFolders;return type&&roots.some(root=>resolve(f).startsWith(resolve(root)+sep));});
+}
+function playerIndexedFiles(){return [...new Set([...libraryFiles,...playerExtraFiles])].filter(f=>playerMediaType(f));}
+async function playerCandidateFiles(file){
+ const candidates=playerSourceCandidates(file,playerIndexedFiles(),config.playerMediaPriority).slice(0,30);
+ const paths=await Promise.all(candidates.map(async f=>{try{return await assertPlayerFile(f);}catch{return ''}}));return [...new Set(paths.filter(Boolean))];
+}
+async function playerSourceView(id,{prepare=false}={}){
+ const previous=playerResolvedSources.get(id);if(prepare&&!playerSourceOverrides.has(id))playerResolvedSources.delete(id);
+ const file=await playerFileForRequest(id);playerResolvedSources.set(id,file);const requestedBase=playerLocalRequests.get(id)?.filePath||queuedEntries.get(id)?.filePath;let original=requestedBase;try{if(original)original=await realpath(original);}catch{}
+ if(prepare&&((previous&&previous!==file)||(!previous&&original&&original!==file)))playerSourceRevisions.set(id,(playerSourceRevisions.get(id)||0)+1);
+ let stemsCompatible=false;try{await assertAllowedFile(file);stemsCompatible=!playerSourceRevisions.get(id);}catch{}
+ return {stemsCompatible,sourceUrl:`/api/player/media/${encodeURIComponent(id)}?sourceRevision=${playerSourceRevisions.get(id)||0}`,sourceRevision:playerSourceRevisions.get(id)||0,priority:config.playerMediaPriority,selectedToken:Buffer.from(file).toString('base64url'),candidates:(await playerCandidateFiles(file)).slice(0,20).map(f=>({token:Buffer.from(f).toString('base64url'),label:basename(f),mediaType:playerMediaType(f),selected:f===file}))};
+}
 function decodeMediaToken(token) {
   try {
     return Buffer.from(String(token || ""), "base64url").toString("utf8");
@@ -3913,19 +4174,42 @@ function decodeMediaToken(token) {
 
 async function playerFileForRequest(id) {
   const localRequest = playerLocalRequests.get(id);
-  if (localRequest) return assertAllowedFile(localRequest.filePath);
+  if(playerSourceOverrides.has(id)){try{return await assertPlayerFile(playerSourceOverrides.get(id));}catch{playerSourceOverrides.delete(id);}}
+  if(playerResolvedSources.has(id))return assertPlayerFile(playerResolvedSources.get(id));
+  if (localRequest){const file=await assertPlayerFile(localRequest.filePath);return assertPlayerFile((await playerCandidateFiles(file))[0]||file);}
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
   const exact = findMatches(libraryFiles, item.song, item.artist, item.languageCode || item.language, 1)[0];
-  return firstAllowedFile([
-    queuedEntries.get(id)?.filePath || "",
-    vdjRequestFilePaths.get(id) || "",
-    exact?.exact ? exact.filePath : ""
-  ]);
+  const base=await firstAllowedFile([queuedEntries.get(id)?.filePath||'',vdjRequestFilePaths.get(id)||'',exact?.exact?exact.filePath:'']);
+  if(operatingMode!=='player')return base;
+  return assertPlayerFile((await playerCandidateFiles(base))[0]||base);
 }
+
+const lyricsExtractor = new LyricsExtractor({
+  cacheRoot: resolve(ROOT, 'data', 'lyrics-cache'),
+  runnerPath: resolve(ROOT, 'lyrics-engine', 'gs-lyrics'),
+  modelPath: resolve(ROOT, 'lyrics-engine', 'ggml-tiny.bin'),
+  alignerPath:resolve(ROOT,'lyrics-engine','gs-lyrics-align'),
+  sharedRequest:(action,payload)=>sharedLyricsRequest(config,action,payload),
+  get ffmpegPath() { return stemFfmpegPath || resolve(STEM_ENGINE_ROOT, 'node_modules', 'ffmpeg-static', 'ffmpeg'); },
+  authorize: assertPlayerFile
+});
+const playerWaveforms = new PlayerWaveformCache({root:resolve(ROOT,'data','waveform-cache'),identityStore:lyricsExtractor.identityStore});
+lyricsExtractor.identityStore.waveformRoot=playerWaveforms.root;
+// Capability refresh owns FFmpeg discovery; resolve the current path per job.
+lyricsExtractor.transcribe = (file, options) => {
+  lyricsExtractor.ffmpegPath = stemFfmpegPath || resolve(STEM_ENGINE_ROOT, 'node_modules', 'ffmpeg-static', 'ffmpeg');
+  return lyricsExtractor.runNative(file, options);
+};
 
 async function servePlayerMedia(request, response, id) {
   const filePath = await playerFileForRequest(id);
+  if (new URL(request.url, "http://127.0.0.1").searchParams.get("nativeSource") === "1") {
+    if (process.env.GUEST_STAR_VOCALRT_P0 !== "1") { json(response, 404, { ok: false }); return; }
+    const origin = String(request.headers.origin || "");
+    if (origin && origin !== `http://${String(request.headers.host || "")}`) { json(response, 403, { ok: false }); return; }
+    json(response, 200, { nativeSource: true, path: filePath }); return;
+  }
   await streamPlayerMedia(request, response, filePath);
 }
 
@@ -3948,7 +4232,7 @@ function playerLibrarySearch(query = "", options = {}) {
       sourceUrl: request.sourceUrl || previous.sourceUrl || ''
     });
   }
-  return queryIndexedLibrary(libraryFiles, (filePath) => {
+  return queryIndexedLibrary(playerIndexedFiles(), (filePath) => {
     const fallback = mediaMetadata(filePath);
     const known = metadataByPath.get(filePath) || {};
     return {
@@ -3965,7 +4249,7 @@ function playerLibrarySearch(query = "", options = {}) {
 
 async function servePlayerLibraryMedia(request, response, token) {
   const decoded = decodeMediaToken(token);
-  const filePath = await assertAllowedFile(decoded);
+  const filePath = await assertPlayerFile(decoded);
   await streamPlayerMedia(request, response, filePath);
 }
 
@@ -4015,12 +4299,13 @@ async function analyzePlayerLoudness(kind, id, { force = false } = {}) {
 }
 
 async function createPlayerLocalRequest(body = {}) {
-  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+  if (operatingMode !== "player" || (!config.lastActivityId && !freeModeSession) || !tenantState.activity) {
     throw new Error("Select an activity and Player mode before adding a local singer.");
   }
   const singer = String(body.singer || "").trim().slice(0, 100);
   if (!singer) throw new Error("Enter the singer's name.");
-  const filePath = await assertAllowedFile(decodeMediaToken(body.trackId));
+  const selected = await assertPlayerFile(decodeMediaToken(body.trackId));
+  const filePath = await assertPlayerFile((await playerCandidateFiles(selected))[0] || selected);
   const metadata = mediaMetadata(filePath);
   const item = {
     id: `player-local-${randomUUID()}`,
@@ -4040,7 +4325,8 @@ async function createPlayerLocalRequest(body = {}) {
   // Queue the existing cache/Spleeter/Demucs plan automatically.  This work is
   // explicitly detached from adding the singer: an unavailable engine or a
   // long job must not delay either the queue or playback.
-  if (stemEngineAvailable) {
+  let legacyStemFolder=false;try{await assertAllowedFile(filePath);legacyStemFolder=true;}catch{}
+  if (stemEngineAvailable && legacyStemFolder) {
     void enqueueStemRequest(item.id, "auto").catch((error) => {
       recordStemBreadcrumb("STEMS_AUTO_QUEUE_FAILED", {
         summary: errorMessage(error),
@@ -4173,7 +4459,9 @@ async function unlinkRequestFile(id) {
   return { ok: true, unlinked: true, physicalRowPreserved: queuedIds.has(id), warning };
 }
 
-async function queueRequest(id, requestedPath) {
+async function queueRequest(id, requestedPath, hostIntent) {
+  assertVdjHostIntent(hostIntent,'enqueue');
+  if(finishTransitionPending||finishCleanupPromise)throw new Error("The activity is finishing; future queue changes are blocked.");
   if (operatingMode !== "bridge") {
     throw new Error("This activity is not operating in Bridge mode.");
   }
@@ -4240,7 +4528,8 @@ async function queueRequest(id, requestedPath) {
       result = await insertKaraokeEntry(
         config.virtualDJ,
         insertionEntry,
-        Number.MAX_SAFE_INTEGER
+        Number.MAX_SAFE_INTEGER,
+        {hostIntent}
       );
     } catch (error) {
       if (error?.commandAccepted !== true) throw error;
@@ -4267,6 +4556,7 @@ async function queueRequest(id, requestedPath) {
         "VirtualDJ received the command but did not confirm the song in the queue."
       );
     }
+    void vdjOperations.loadExistingQueueHead().catch(()=>{});
     const actualEntry = stabilizeVirtualDjEntries(
       [{ ...result.entry, index: result.index }],
       vdjQueueEntries
@@ -4290,13 +4580,15 @@ async function queueRequest(id, requestedPath) {
       : "Agregada a VirtualDJ";
     let warning = "";
     try {
-      await updateBridgeRequest(config, id, item.status, basename(filePath), {
+      const updated = await updateBridgeRequest(config, id, item.status, basename(filePath), {
         durationSeconds: item.durationSeconds,
         virtualDJItemId: queuedEntry?.virtualDJItemId || "",
         queuePosition: result.index,
         syncState: "confirmed",
         lastSeenAt: new Date().toISOString()
       });
+      const current=requests.find(request=>request.id===id);
+      if (current && updated?.request?.stateRevision) current.stateRevision=Math.max(Number(current.stateRevision)||0,Number(updated.request.stateRevision));
     } catch (error) {
       warning = `The song entered VirtualDJ, but Guest Star did not confirm the update: ${errorMessage(error)}`;
     }
@@ -4318,7 +4610,8 @@ async function queueRequest(id, requestedPath) {
   }
 }
 
-async function replaceQueuedRequest(id, requestedPath) {
+async function replaceQueuedRequest(id, requestedPath, hostIntent) {
+  assertVdjHostIntent(hostIntent,'enqueue');
   if (operatingMode !== "bridge") {
     throw new Error("This activity is not operating in Bridge mode.");
   }
@@ -4368,31 +4661,12 @@ async function replaceQueuedRequest(id, requestedPath) {
     const originalPosition = Number.isInteger(removal.index)
       ? removal.index
       : vdjQueuePositions.get(id) || 0;
-    let result;
-    try {
-      result = await insertKaraokeEntry(config.virtualDJ, {
-        ...trackingEntryFromRequest(item),
-        filePath: nextFilePath
-      }, originalPosition);
-    } catch (error) {
-      let restored = false;
-      try {
-        const rollback = await insertKaraokeEntry(
-          config.virtualDJ,
-          current,
-          originalPosition
-        );
-        restored = rollback.verified === true;
-      } catch {
-        restored = false;
-      }
-      throw new Error(
-        restored
-          ? `The replacement failed and the original VirtualDJ row was restored: ${errorMessage(error)}`
-          : `The replacement failed and the original row could not be restored automatically: ${errorMessage(error)}`
-      );
-    }
+    const result = await insertKaraokeEntry(config.virtualDJ, {
+      ...trackingEntryFromRequest(item),filePath:nextFilePath
+    },originalPosition,{hostIntent});
+    // A failed replacement never authorizes an automatic rollback insertion.
 
+    void vdjOperations.loadExistingQueueHead().catch(()=>{});
     const actualEntry = stabilizeVirtualDjEntries(
       [{ ...result.entry, index: result.index }],
       vdjQueueEntries
@@ -4475,16 +4749,16 @@ async function removeQueuedRequest(id) {
     }
 
     queuedIds.delete(id);
-    removedExternallyIds.delete(id);
+    removedExternallyIds.add(id);
     removeQueuePosition(id);
-    queuedEntries.delete(id);
-    suppressedQueueIds.add(id);
+    queuedEntries.set(id, entry);
+    suppressedQueueIds.delete(id);
     pendingInsertions.delete(id);
     queuePresenceMisses.delete(id);
     transientQueueMissingIds.delete(id);
     await persistQueuedEntries();
     vdjError = "";
-    item.status = "Retirada de rotación";
+    item.status = "Fuera de VirtualDJ";
     let warning =
       result.reason === "not-found"
         ? "The song was no longer in VirtualDJ; the local status was updated."
@@ -4514,26 +4788,11 @@ async function removeQueuedRequest(id) {
   }
 }
 
-async function dismissRequeue(id) {
-  const item = requests.find((entry) => entry.id === id);
-  if (!item) throw new Error("The request is no longer available.");
-  queuedIds.delete(id);
-  removedExternallyIds.delete(id);
-  removeQueuePosition(id);
-  queuedEntries.delete(id);
-  suppressedQueueIds.add(id);
-  pendingInsertions.delete(id);
-  queuePresenceMisses.delete(id);
-  transientQueueMissingIds.delete(id);
-  await persistQueuedEntries();
-  item.status = "Fuera de VirtualDJ";
-  let warning = "";
-  try {
-    await updateBridgeRequest(config, id, item.status, "");
-  } catch (error) {
-    warning = `The decision was saved locally, but Guest Star did not confirm the update: ${errorMessage(error)}`;
+async function dismissRequeue(id, outcome) {
+  if (!['completed', 'skipped'].includes(outcome)) {
+    throw new Error('¿Esta canción ya fue cantada o fue omitida?');
   }
-  return { ok: true, warning };
+  return setRequestOutcome(id, outcome, { removeVDJ: false });
 }
 
 async function setRequestOutcome(id, outcome, options = {}) {
@@ -4559,7 +4818,7 @@ async function commitRequestOutcome(id, outcome, { origin = 'USER_ACTION', versi
   }
   if (queueLocks.has(id)) throw new Error("This request is already being processed.");
   if (origin === 'VDJ_EVENT' && (effectiveRequestOutcome(item) || item.stateRevision !== version)) return { ok: true, ignored: true };
-  if (effectiveRequestOutcome(item) === outcome) return { ok: true, alreadyMarked: true, outcome, status: item.status };
+  if (effectiveRequestOutcome(item)) return { ok: true, alreadyMarked: true, outcome: effectiveRequestOutcome(item), status: item.status };
   queueLocks.add(id);
   const status = outcome === "completed" ? "Ya cantó" : outcome === 'skipped' ? "Saltado" : 'Eliminada';
   try {
@@ -4601,8 +4860,9 @@ async function commitRequestOutcome(id, outcome, { origin = 'USER_ACTION', versi
     queuePresenceMisses.delete(id);
     transientQueueMissingIds.delete(id);
     item.status = status;
-    await persistQueuedEntries();
+    if (outcome === "skipped") requestReservePromotion();
     broadcastState();
+    await persistQueuedEntries();
 
     try {
       const data = remoteResult || await updateBridgeRequest(
@@ -4641,7 +4901,7 @@ async function commitRequestOutcome(id, outcome, { origin = 'USER_ACTION', versi
     };
   } finally {
     queueLocks.delete(id);
-    await reconcileVirtualDjQueue(true);
+    if (!vdjQueueCheckPromise) void reconcileVirtualDjQueue(true).catch(error => { vdjError = errorMessage(error); broadcastState(); });
   }
 }
 
@@ -4656,6 +4916,7 @@ async function setPlayerRequestOutcome(id, outcome) {
     if (queueLocks.has(id)) throw new Error("This request is already being processed.");
     queueLocks.add(id);
     try {
+      if(outcome==="skipped") requestReservePromotion();
       localItem.outcome = outcome;
       localItem.status = outcome === "completed" ? "Ya cantó" : outcome === "skipped" ? "Saltado" : "Retirada del Player";
       localItem.markedAt = new Date().toISOString();
@@ -4682,6 +4943,7 @@ async function setPlayerRequestOutcome(id, outcome) {
       };
     } finally {
       queueLocks.delete(id);
+      if (outcome === "skipped") await promoteReserveIfNeeded();
     }
   }
   const item = requests.find((entry) => entry.id === id);
@@ -4692,6 +4954,7 @@ async function setPlayerRequestOutcome(id, outcome) {
   const status = outcome === "completed" ? "Ya cantó" : outcome === "skipped" ? "Saltado" : "Retirada del Player";
   try {
     const entry = queuedEntries.get(id) || queuedEntryFromRequest(item);
+    if(outcome==="skipped") requestReservePromotion();
     outcomeRecoveries.set(id, { id, outcome, previousStatus: item.status || "Pendiente", originalPosition: null, markedAt: new Date().toISOString(), entry: entry || null, playerMode: true });
     queuedIds.delete(id);
     removedExternallyIds.delete(id);
@@ -4723,8 +4986,30 @@ async function setPlayerRequestOutcome(id, outcome) {
     return { ok: true, status, outcome, singer: item.singer, song: item.song, playerMode: true, warning };
   } finally {
     queueLocks.delete(id);
+    if (outcome === "skipped") await promoteReserveIfNeeded();
   }
 }
+
+function requestReservePromotion() {
+  const operations=ensureOperationsContext();
+  if(activityState.accepting===false && operations.reserveIds.length) operations.pendingPromotions=Math.min(3,(operations.pendingPromotions||0)+1);
+}
+async function promoteReserveIfNeeded() { if(ensureOperationsContext().pendingPromotions>0) await promoteReserve(); }
+async function promoteReserve() {
+  ensureOperationsContext();
+  if (operatingMode === "bridge" || clearOperationsBusy || activityState.accepting !== false || !operationsState.reserveIds.length || reservePromotionBusy) return;
+  reservePromotionBusy = true;
+  const id = operationsState.reserveIds[0];
+  try {
+    const item = requests.find(i => i.id === id) || playerLocalRequests.get(id);
+    if (!item || effectiveRequestOutcome(item)) { operationsState.reserveIds.shift(); await persistQueuedEntries(); return; }
+    operationsState.reserveIds = operationsState.reserveIds.filter(value => value !== id);
+    operationsState.pendingPromotions=Math.max(0,(operationsState.pendingPromotions||0)-1);
+    await persistQueuedEntries(); broadcastState();
+  } catch (error) { sheetError = `Reserve not promoted: ${errorMessage(error)}`; }
+  finally { reservePromotionBusy = false; }
+}
+let reservePromotionBusy = false;
 
 async function undoPlayerRequestOutcome(id) {
   if (operatingMode !== "player" || !activityState.activityRunning) {
@@ -4778,7 +5063,8 @@ async function undoPlayerRequestOutcome(id) {
   return { ok: true, id, status: item.status, playerMode: true };
 }
 
-async function undoRequestOutcome(id, placement) {
+async function undoRequestOutcome(id, placement, hostIntent) {
+  if(placement!=='pending')assertVdjHostIntent(hostIntent,'enqueue');
   if (operatingMode !== "bridge") {
     throw new Error("Use the internal Player history for this activity.");
   }
@@ -4820,15 +5106,22 @@ async function undoRequestOutcome(id, placement) {
       );
     }
 
-    const pendingStatus = "Fuera de VirtualDJ";
+    if (placement === 'pending' && entry) {
+      // Read/remove by persistent request mapping even before the first UI
+      // queue snapshot after restart. Never leave a known row behind.
+      const removal = await removeKaraokeEntry(config.virtualDJ, entry);
+      if (!removal.removed && removal.reason !== 'not-found') throw new Error('VirtualDJ did not confirm removal. The terminal decision remains saved.');
+    }
+    const pendingStatus = "Pendiente";
     const pendingUpdate = await updateBridgeRequest(
       config,
       id,
       pendingStatus,
       basename(entry?.filePath || item.fileName || ""),
-      { durationSeconds: item.durationSeconds }
+      { durationSeconds: item.durationSeconds, eventOrigin: 'USER_RETURN' }
     );
     if (pendingUpdate?.state) applyActivityState(pendingUpdate);
+    if (pendingUpdate?.request?.stateRevision) item.stateRevision = Number(pendingUpdate.request.stateRevision);
     item.status = pendingStatus;
     queuedIds.delete(id);
     removedExternallyIds.delete(id);
@@ -4848,8 +5141,10 @@ async function undoRequestOutcome(id, placement) {
       const restored = await insertKaraokeEntry(
         config.virtualDJ,
         entry,
-        desiredPosition
+        desiredPosition,
+        {hostIntent}
       );
+      void vdjOperations.loadExistingQueueHead().catch(()=>{});
       restoredPosition = restored.index;
       queuedEntries.set(id, entry);
       queuedIds.add(id);
@@ -4864,10 +5159,12 @@ async function undoRequestOutcome(id, placement) {
         { durationSeconds: item.durationSeconds }
       );
       if (queuedUpdate?.state) applyActivityState(queuedUpdate);
+      if (queuedUpdate?.request?.stateRevision) item.stateRevision = Number(queuedUpdate.request.stateRevision);
     }
 
-    outcomeRecoveries.delete(id);
+    outcomeRecoveries.set(id, { id, outcome: "", returnedAt: new Date().toISOString(), returnedRevision: Number(item.stateRevision) || 0, entry: entry || null });
     await persistQueuedEntries();
+    broadcastState();
     return {
       ok: true,
       placement,
@@ -4949,7 +5246,8 @@ async function prepareHitSuggestionYoutube() {
   broadcastState();
 }
 
-async function queueHitSuggestion(body = {}) {
+async function queueHitSuggestion(body = {},hostIntent) {
+  assertVdjHostIntent(hostIntent,'enqueue');
   const automaticSuggestions = selectHitSuggestions(
     requests,
     libraryFiles,
@@ -4993,8 +5291,10 @@ async function queueHitSuggestion(body = {}) {
   const filePath = await assertAllowedFile(suggestion.filePath);
   const result = await executeVdj(
     config.virtualDJ,
-    buildKaraokeScript(filePath, singer)
+    buildKaraokeScript(filePath, singer),
+    {hostIntent}
   );
+  void vdjOperations.loadExistingQueueHead().catch(()=>{});
   vdjQueueHasSnapshot = false;
   await reconcileVirtualDjQueue(true);
   return {
@@ -5006,29 +5306,6 @@ async function queueHitSuggestion(body = {}) {
   };
 }
 
-async function autoQueueExactMatches() {
-  if (vdjQueueOperationBusy) return;
-  if (!config.autoQueueExact) return;
-  for (const item of requests) {
-    if (effectiveRequestOutcome(item)) continue;
-    if (
-      queuedIds.has(item.id) ||
-      removedExternallyIds.has(item.id) ||
-      suppressedQueueIds.has(item.id) ||
-      pendingInsertions.has(item.id) ||
-      queueLocks.has(item.id)
-    ) {
-      continue;
-    }
-    const top = matchesForRequest(item, youtubeCache.get(item.id) || [], 2)[0];
-    if (!top?.autoLinkEligible) continue;
-    try {
-      await queueRequest(item.id, "");
-    } catch {
-      // The error is exposed in the local panel and the host can retry manually.
-    }
-  }
-}
 
 async function autoLinkSafeMatches() {
   let changed = false;
@@ -5053,24 +5330,27 @@ async function autoLinkSafeMatches() {
 
 async function findYoutube(id) {
   if (youtubeSearches.has(id)) return youtubeSearches.get(id);
+  if (youtubeCache.has(id) && ((youtubeCache.get(id) || []).length || Date.now() - (youtubeSearchAt.get(id) || 0) < 45000)) return youtubeCache.get(id);
   const item = requests.find((entry) => entry.id === id);
   if (!item) throw new Error("The request is no longer available.");
 
   const operation = (async () => {
     let results = [];
     try {
-      const data = await searchKaraokeYouTube(
-        config,
-        item.song,
-        item.artist,
-        item.language,
-        item.languageCode
-      );
+      const key = JSON.stringify([config.lastHotelId, config.lastActivityId, item.song, item.artist, item.language, item.languageCode]);
+      let cached = youtubeQueryCache.get(key);
+      if (!cached || Date.now() - cached.at > 10 * 60 * 1000) {
+        cached = { at: Date.now(), promise: searchKaraokeYouTube(config, item.song, item.artist, item.language, item.languageCode, 24) };
+        youtubeQueryCache.set(key, cached);
+        if (youtubeQueryCache.size > 100) youtubeQueryCache.delete(youtubeQueryCache.keys().next().value);
+        cached.promise.catch(() => youtubeQueryCache.delete(key));
+      }
+      const data = await cached.promise;
       results = Array.isArray(data.items) ? data.items : [];
     } catch {
       results = [];
     }
-    results = selectYoutubeOptions(results, 6);
+    results = selectYoutubeOptions(results, 24);
     youtubeCache.set(id, results);
     youtubeSearchAt.set(id, Date.now());
     return results;
@@ -5090,6 +5370,7 @@ async function prepareMissingYoutube() {
   const missing = requests.filter(
     (item) =>
       !effectiveRequestOutcome(item) &&
+      !(operatingMode === 'bridge' && (queuedEntries.has(item.id) || removedExternallyIds.has(item.id) || sheetMarksVirtualDj(item))) &&
       !findMatches(
         libraryFiles,
         item.song,
@@ -5178,7 +5459,7 @@ async function chooseBackgroundAudioFile() {
 }
 
 async function openStarScreenWindow() {
-  if (operatingMode !== "player" || !config.lastActivityId || !tenantState.activity) {
+  if (operatingMode !== "player" || (!config.lastActivityId && !freeModeSession) || !tenantState.activity) {
     throw new Error("Select an activity and Player mode before opening Star Screen.");
   }
   const url = `http://127.0.0.1:${runtimePort}/star-screen.html?display=1`;
@@ -5187,7 +5468,7 @@ async function openStarScreenWindow() {
 }
 
 async function serveStatic(pathname, response) {
-  const relative = pathname === "/"
+  const relative = pathname === "/" || pathname === "/operate"
     ? "index.html"
     : pathname === "/google-sign-in"
       ? "google-sign-in.html"
@@ -5239,16 +5520,109 @@ async function songStorageView() {
 
 async function api(request, response, url) {
   const { pathname } = url;
+  if((pathname.startsWith('/api/player/source/')||pathname.startsWith('/api/player/media-preferences')||pathname==='/api/player/media/choose-folder') && request.headers.origin && request.headers.origin!==`http://${String(request.headers.host||'')}`){json(response,403,{ok:false});return;}
+
   const bridgeMutation = request.method === 'POST' && (
-    pathname.startsWith('/api/virtualdj/') || /\/api\/requests\/[^/]+\/(metadata|move)$/.test(pathname));
+    pathname.startsWith('/api/operations/') || pathname.startsWith('/api/virtualdj/') || /\/api\/requests\/[^/]+\/(metadata|move|queue|replace|undo-outcome)$/.test(pathname) || pathname==='/api/suggestions/queue');
   if (bridgeMutation && request.headers.origin && request.headers.origin !== `http://${String(request.headers.host || '')}`) {
     json(response, 403, { ok: false, error: 'Cross-origin Bridge commands are not allowed.' }); return;
+  }
+  if (request.method === 'GET' && pathname === '/api/virtualdj/meter') {
+    if (!entryModeResolved || activitySelectionBusy || operatingMode !== 'bridge' || !eventClients.size) { json(response, 200, {available:false}); return; }
+    try {
+      if (!meterRead) meterRead = readVdjMeter(config.virtualDJ).finally(() => { meterRead = null; });
+      json(response, 200, {available:true, ...await meterRead});
+    } catch { json(response, 200, {available:false}); }
+    return;
+  }
+  if (request.method === 'POST' && pathname === '/api/virtualdj/queue/action') {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    const data = await runVdjQueueOperation(body, async () => {
+      const entry = bridgeQueueEntry(String(body.sourceId || ''));
+      if (!entry || !['removed','skipped','completed','load'].includes(body.action)) throw new Error('Queue item/action unavailable.');
+      if (body.action === 'load') {
+        return runHostVdjCommand(body,'HOST_PREPARE_VDJ_DECK',String(body.sourceId),async intent=>{
+          if(vdjQueueEntries[0]?.virtualDJItemId!==entry.virtualDJItemId) {await moveKaraokeEntry(config.virtualDJ,entry,vdjQueueEntries[0]);await reconcileVirtualDjQueue(true);}
+          return {ok:true, loaded:await vdjOperations.prepareHead(entry,intent)};
+        });
+      }
+      await vdjOperations.refresh();
+      const deck=vdjOperations.view().decks.find(d=>d.deck===1);
+      if (deck?.playing && normalizeVdjPath(deck.filePath)===normalizeVdjPath(entry.filePath)) await vdjOperations.command({action:'pause',deck:1,filePath:deck.filePath,commandId:`${body.commandId}_pause`});
+      if (entry.linkedRequestId) return setRequestOutcome(entry.linkedRequestId, body.action);
+      const result = await removeKaraokeEntry(config.virtualDJ, entry);
+      if (!result.verified && result.reason !== 'not-found') throw new Error('Physical removal not confirmed.');
+      await recordExternalOutcome(entry, body.action);
+      return {ok:true};
+    }); json(response,200,data); return;
+  }
+  if (request.method === 'POST' && pathname === '/api/virtualdj/history/action') {
+    requireSignedInBridge();const body=await readJson(request);
+    const data=await runAdministrativeCommand(body,async()=>{
+      if(operatingMode!=='bridge' || !['completed','skipped'].includes(body.outcome)) throw new Error('History correction unavailable.');
+      const entry=ensureOperationsContext().externalHistory.find(i=>i.virtualDJItemId===body.virtualDJItemId);
+      if(!entry) throw new Error('History item unavailable.');
+      entry.outcome=body.outcome;entry.status=body.outcome.toUpperCase();await persistQueuedEntries();return {ok:true};
+    });json(response,200,data);broadcastState();return;
+  }
+  if (request.method === 'POST' && pathname === '/api/operations/clear') {
+    requireSignedInBridge();
+    const body = await readJson(request);
+    if (body.confirm !== 'CLEAR_SESSION_QUEUE_AND_HISTORY') throw new Error('Explicit confirmation of requests and history deletion is required.');
+    const data = await runAdministrativeCommand(body, async () => {
+      if (!['bridge','player'].includes(operatingMode) || clearOperationsBusy || vdjQueueOperationBusy || queueLocks.size || reservePromotionBusy || activityMutationBusy || activitySelectionBusy || finishCleanupPromise) throw new Error('Queue is unavailable or busy.');
+      clearOperationsBusy = true;
+      try {
+        // Finish reads/writes already in flight before capturing this session.
+        await Promise.all([syncOperation,maintenanceOperation,vdjQueueCheckPromise,...outcomeOperations.values()]);
+        const mode = operatingMode;
+        let physical=[];
+        if (mode === 'bridge') {
+          await vdjOperations.refresh();
+          if (!vdjOperations.view().connected) throw new Error('Reconnect VirtualDJ before clearing its physical queue.');
+          physical=await listKaraokeEntries(config.virtualDJ);
+        }
+        ensureOperationsContext();
+        const ids=[...new Set([...requests.map(item=>item.id),...playerLocalRequests.keys(),...queuedEntries.keys(),...outcomeRecoveries.keys()])];
+        operationsState.clearedIds=[...new Set([...operationsState.clearedIds,...ids])];
+        operationsState.pendingClearIds=[...new Set([...(operationsState.pendingClearIds || []),...requests.map(item=>item.id)])];
+        await persistQueuedEntries();
+        // Explicitly cancel terminal requests as well; never use an outcome action
+        // here because it preserves history and may remove a loaded VDJ row.
+        await flushPendingQueueClear();
+        if(mode==='bridge') {
+          const targets=physical.map((entry,index)=>({...entry,id:`clear-${index}`}));
+          const result=await clearConfirmedFutureQueue({config:config.virtualDJ,entries:targets,allowDuplicateRows:true});
+          const retained=targets.filter(entry=>result.preserved.includes(entry.id));
+          operationsState.clearedVdjEntries=[...(operationsState.clearedVdjEntries || []),...retained];
+          await persistQueuedEntries();
+          if(result.uncertain.length)throw new Error('VirtualDJ did not confirm every waiting track was removed. Retry clearing; playback was preserved.');
+        }
+        requests=[];
+        for(const map of [queuedEntries,outcomeRecoveries,playerLocalRequests,requestFileLinks,playerStemJobs,pendingInsertions,queuePresenceMisses,vdjQueuePositions,knownExternalEntries,externalQueueMisses,youtubeCache,youtubeSearchAt,localAvailability])map.clear();
+        for(const set of [queuedIds,suppressedQueueIds,removedExternallyIds,transientQueueMissingIds,clipboardHandledIds,reportedStatuses,reportedDuplicateIds])set.clear();
+        bridgeMatchCache.clear();
+        playerOrder=[];playerQueueVisibility.clear();
+        playerPlayback={currentRequestId:'',currentTimeSeconds:0,scene:'lobby',wasPlaying:false,updatedAt:new Date().toISOString()};
+        remotePlayerRuntime=null;playerRuntimeDirty=mode==='player' && activityState.activityRunning && !freeModeSession;
+        operationsState.reserveIds=[];operationsState.pendingPromotions=0;operationsState.externalHistory=[];operationsState.queueIdentities=[];operationsState.loadedVdjHead=null;
+        externalQueueEntries=[];vdjQueueEntries=[];vdjQueueCount=0;vdjQueueHasSnapshot=mode==='bridge';
+        lastExternalSyncSignature='';lastQueueSignature='';queueSignatureAt=0;fullQueueObservedAt=0;
+        clipboardState={requestId:'',url:'',resultType:'',notice:'',copiedAt:'',error:''};
+        vdjOperations.resetContext();
+        await persistQueuedEntries();
+        if(mode==='player' && activityState.activityRunning && !freeModeSession)await pushPlayerRuntimeRemote();
+        broadcastState();
+        return {ok:true,state:stateView(),cleared:ids.length};
+      } finally { await persistQueuedEntries();clearOperationsBusy=false; }
+    }); json(response,200,data); broadcastState(); return;
   }
   if (request.method === 'POST' && pathname === '/api/virtualdj/control') {
     requireSignedInBridge();
     const body = await readJson(request);
     const data = body.action === 'skip'
-      ? await runVdjQueueOperation(body, () => skipVdjTrack(body))
+      ? await runVdjQueueOperation(body, () => runHostVdjCommand(body,'HOST_SKIP_VDJ_NEXT',String(body.filePath || ''),intent=>skipVdjTrack(body,intent)))
       : await vdjOperations.command(body);
     json(response, 200, data);
     return;
@@ -5308,6 +5682,31 @@ async function api(request, response, url) {
       decodeURIComponent(loudnessMatch[2]),
       { force: body.force === true }
     ));
+    return;
+  }
+  const analysisMatch = pathname.match(/^\/api\/player\/analysis\/(karaoke|background)\/([^/]+)$/);
+  if (request.method === 'GET' && analysisMatch) {
+    const id = decodeURIComponent(analysisMatch[2]);
+    const filePath = analysisMatch[1] === 'background'
+      ? await assertAllowedBackgroundFile(decodeMediaToken(id))
+      : await playerFileForRequest(id);
+    const controller = new AbortController();
+    const disconnected = () => { if (!response.writableEnded) controller.abort(); };
+    response.once('close', disconnected);
+    try {
+      const samples = await audioAnalysisSampler.decode(filePath, { ffmpegPath: stemFfmpegPath, signal: controller.signal });
+      if (!controller.signal.aborted) {
+        response.writeHead(200, {
+          'Content-Type': 'application/octet-stream', 'Content-Length': samples.length,
+          'Cache-Control': 'no-store', 'X-Guest-Star-Sample-Rate': ANALYSIS_SAMPLE_RATE
+        });
+        response.end(samples);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      response.removeListener('close', disconnected);
+    }
     return;
   }
   const backgroundMediaMatch = pathname.match(/^\/api\/player\/background\/media\/([^/]+)$/);
@@ -5386,6 +5785,65 @@ async function api(request, response, url) {
       decodeURIComponent(playerStemRequestMatch[1]),
       body.engine
     ));
+    return;
+  }
+  if(pathname==='/api/player/media-preferences' && ['GET','POST'].includes(request.method)){
+    if(request.method==='POST'){
+      requireSignedInBridge();const body=await readJson(request);
+      config=await saveConfig(sanitizeConfig({playerAudioFolders:body.audioFolders,playerVideoFolders:body.videoFolders,playerMediaPriority:body.priority},config));
+      await scanPlayerFolders();broadcastState();
+    }
+    json(response,200,{audioFolders:config.playerAudioFolders,videoFolders:config.playerVideoFolders,priority:config.playerMediaPriority});return;
+  }
+  if(pathname==='/api/player/media/choose-folder' && request.method==='POST'){
+    requireSignedInBridge();const body=await readJson(request);json(response,200,{folder:await chooseFolder(body.kind==='audio'?'Choose Player audio folder':'Choose Player video folder')});return;
+  }
+  const sourceMatch=pathname.match(/^\/api\/player\/source\/([^/]+)$/);
+  if(sourceMatch && ['GET','POST'].includes(request.method)){
+    const id=decodeURIComponent(sourceMatch[1]);const view=await playerSourceView(id,{prepare:request.method==='GET'&&url.searchParams.get('prepare')==='1'});
+    if(request.method==='GET'){json(response,200,view);return;}
+    requireSignedInBridge();const body=await readJson(request);const chosen=view.candidates.find(c=>c.token===body.token);if(!chosen)throw new Error('Source is not a matching Player candidate.');
+    const file=await assertPlayerFile(decodeMediaToken(chosen.token));playerSourceOverrides.set(id,file);playerResolvedSources.set(id,file);
+    await writeFile(playerSourcePreferencesPath,JSON.stringify(Object.fromEntries(playerSourceOverrides)));
+    const revision=(playerSourceRevisions.get(id)||0)+1;playerSourceRevisions.set(id,revision);
+    json(response,200,{sourceUrl:`/api/player/media/${encodeURIComponent(id)}?sourceRevision=${revision}`,sourceRevision:revision,mediaToken:chosen.token,mediaType:chosen.mediaType});return;
+  }
+  const waveformMatch = pathname.match(/^\/api\/player\/waveform\/([^/]+)$/);
+  if (waveformMatch && request.method === 'GET') {
+    const origin=String(request.headers.origin||'');
+    if(origin && origin!==`http://${String(request.headers.host||'')}`){json(response,403,{ok:false});return;}
+    const file=await playerFileForRequest(decodeURIComponent(waveformMatch[1]));
+    playerWaveforms.ffmpegPath=stemFfmpegPath || process.env.GUEST_STAR_FFMPEG || resolve(STEM_ENGINE_ROOT,'node_modules','ffmpeg-static','ffmpeg');
+    json(response,200,await playerWaveforms.request(file));return;
+  }
+  const lyricsMatch = pathname.match(/^\/api\/player\/(lyrics|library-lyrics)\/([^/]+)(\/(?:lrc|versions|edit|restore|share|realign|reference))?$/);
+  if (lyricsMatch && ['GET','POST','DELETE'].includes(request.method)) {
+    const origin = String(request.headers.origin || '');
+    if (origin && origin !== `http://${String(request.headers.host || '')}`) { json(response, 403, {ok:false,error:'Cross-origin lyrics requests are not allowed.'}); return; }
+    if (request.method !== 'GET') requireSignedInBridge();
+    const body = request.method === 'POST' ? await readJson(request) : {};
+    const language = String(body.language || url.searchParams.get('language') || 'auto');
+    const id = decodeURIComponent(lyricsMatch[2]);
+    const file = lyricsMatch[1] === 'library-lyrics'
+      ? await assertPlayerFile(decodeMediaToken(id)) : await playerFileForRequest(id);
+    if(lyricsMatch[3] && lyricsMatch[3]!=='/lrc'){
+      const operation=lyricsMatch[3].slice(1);
+      if(operation==='versions' && request.method==='GET'){json(response,200,await lyricsExtractor.versions(file));return;}
+      if(request.method!=='POST'){json(response,405,{ok:false});return;}
+      if(!['edit','restore','share','realign','reference'].includes(operation))throw new Error('Invalid lyrics action');
+      lyricsExtractor.ffmpegPath=stemFfmpegPath||resolve(STEM_ENGINE_ROOT,'node_modules','ffmpeg-static','ffmpeg');
+      json(response,200,await lyricsExtractor[operation](file,body));return;
+    }
+    lyricsExtractor.ffmpegPath=stemFfmpegPath || process.env.GUEST_STAR_FFMPEG || resolve(STEM_ENGINE_ROOT,'node_modules','ffmpeg-static','ffmpeg');
+    const result = request.method === 'DELETE'
+      ? await lyricsExtractor.cancel(file,{language})
+      : await lyricsExtractor.request(file,{language,start:request.method==='POST',force:body.force===true});
+    if (lyricsMatch[3]==='/lrc') {
+      if (request.method !== 'GET' || result.status !== 'ready') { json(response,404,{ok:false,error:'Lyrics are not ready.'}); return; }
+      const lrc = toLRC(result.segments);
+      response.writeHead(200, {'Content-Type':'text/plain; charset=utf-8','Content-Disposition':'attachment; filename="Guest-Star-lyrics.lrc"','Cache-Control':'no-store'});
+      response.end(lrc);
+    } else json(response,200,result);
     return;
   }
   const playerMediaMatch = pathname.match(/^\/api\/player\/media\/([^/]+)$/);
@@ -5830,32 +6288,73 @@ async function api(request, response, url) {
     json(response, 200, { ok: true, authenticated: true, ...identityState });
     return;
   }
+  if (request.method === 'POST' && pathname === '/api/entry/prepare') {
+    await entryBootstrapReady;
+    entryModeResolved=false;vdjOperations.resetContext();json(response,200,{ok:true});return;
+  }
+  if (request.method === 'POST' && pathname === '/api/entry/free') {
+    requireSignedInBridge();
+    if ((activityState.activityRunning && !superhostCanOverride()) || activitySelectionBusy || queueLocks.size || vdjQueueOperationBusy || clearOperationsBusy || scanning) throw new Error('Finaliza la sesión u operación actual antes de cambiar de contexto.');
+    activitySelectionBusy=true;entryModeResolved=false;stopCloudRealtime();
+    try {
+      await Promise.all([syncOperation,maintenanceOperation,vdjQueueCheckPromise]);await persistQueuedEntries();
+      const sessionId='free:'+randomUUID();
+      await restoreSelectedContext({activityId:sessionId,hotelId:'',venueId:''},'');
+      freeModeSession={sessionId};
+      // Only the active selection changes. configForStorage retains the remembered scheduled activity.
+      config=await saveConfig(sanitizeConfig({...config,lastHotelId:'',lastVenueId:'',lastActivityId:''},config));
+      activityState={accepting:false,activityHours:0,transitionSeconds:config.transitionSeconds || 30,accumulatedSeconds:0,remainingSeconds:0,activityStartedAt:'',activityFinishedAt:'',activityRunning:false,stateRevision:0,activityId:sessionId,updatedAt:'',lastAction:'',lastSource:'',playbackMode:''};
+      tenantState={hotel:null,venue:null,activity:{activityId:sessionId,name:'Modo libre',status:'ready'},session:null,branding:null,kioskAccess:null,schedules:[],upcomingActivities:[],permissions:{canStartActivity:true,canFinishActivity:true,canStartNewActivity:true},share:null};
+      requests=[];clearTransientCaches();await persistQueuedEntries();json(response,200,stateView());broadcastState();
+    }finally{activitySelectionBusy=false;restartCloudRealtime();}
+    return;
+  }
+  if (request.method === 'POST' && pathname === '/api/entry/free/resume') {
+    requireSignedInBridge();
+    if (!superhostCanOverride()) throw new Error('Solo Superhost puede reanudar una actividad libre suspendida.');
+    if (activitySelectionBusy || queueLocks.size || vdjQueueOperationBusy || clearOperationsBusy || scanning) throw new Error('Espera a que termine la operación actual antes de cambiar de actividad.');
+    const candidate=resumableFreeSession;
+    if (!candidate) throw new Error('No hay una actividad libre en curso para reanudar.');
+    const selection={activityId:candidate.sessionId,hotelId:'',venueId:''};
+    const saved=await activityContexts.load(activityContextKey(selection,candidate.activityStartedAt));
+    const active=saved.activeActivityState;
+    if(active.activityId!==candidate.sessionId || active.activityStartedAt!==candidate.activityStartedAt || !active.playbackMode) throw new Error('La actividad libre guardada ya no está en curso.');
+    activitySelectionBusy=true;entryModeResolved=false;stopCloudRealtime();
+    try {
+      await Promise.all([syncOperation,maintenanceOperation,vdjQueueCheckPromise]);await persistQueuedEntries();
+      await restoreSelectedContext(selection,candidate.activityStartedAt);
+      freeModeSession={sessionId:candidate.sessionId};
+      config=await saveConfig(sanitizeConfig({...config,lastHotelId:'',lastVenueId:'',lastActivityId:''},config));
+      activityState={accepting:false,activityHours:0,transitionSeconds:config.transitionSeconds||30,accumulatedSeconds:0,remainingSeconds:0,activityStartedAt:candidate.activityStartedAt,activityFinishedAt:'',activityRunning:true,stateRevision:1,activityId:candidate.sessionId,updatedAt:'',lastAction:'resume',lastSource:'',playbackMode:active.playbackMode};
+      tenantState={hotel:null,venue:null,activity:{activityId:candidate.sessionId,name:'Modo libre',status:'in_progress'},session:null,branding:null,kioskAccess:null,schedules:[],upcomingActivities:[],permissions:{canStartActivity:true,canFinishActivity:true,canStartNewActivity:true},share:null};
+      requests=[];clearTransientCaches();operatingMode=active.playbackMode;lastSelectedMode=operatingMode;entryModeResolved=true;
+      await persistQueuedEntries();json(response,200,stateView());broadcastState();
+    }finally{activitySelectionBusy=false;restartCloudRealtime();}
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/auth/selection") {
+    requireSignedInBridge();
     const body = await readJson(request);
-    const previousActivityId = config.lastActivityId;
-    const selection = {
-      hotelId: String(body.hotelId || ""),
-      venueId: String(body.venueId || ""),
-      activityId: String(body.activityId || "")
-    };
-    const data = await selectBridgeActivity(config, selection);
-    if (selection.activityId && selection.activityId !== previousActivityId) {
-      operatingMode = "";
+    if (activitySelectionBusy || queueLocks.size || vdjQueueOperationBusy || clearOperationsBusy || scanning) {
+      json(response,409,{error:'Espera a que termine la operación actual antes de cambiar de actividad.'});return;
     }
-    config = await saveConfig(sanitizeConfig({
-      ...config,
-      lastHotelId: selection.hotelId,
-      lastVenueId: selection.venueId,
-      lastActivityId: selection.activityId,
-      rememberSelection: body.rememberSelection !== false
-    }, config));
-    applyActivityState(data);
-    requests = bridgeRequests(data);
-    clearTransientCaches();
-    sheetError = "";
-    json(response, 200, stateView());
-    broadcastState();
-    restartCloudRealtime();
+    const selection = {hotelId:String(body.hotelId || ''),venueId:String(body.venueId || ''),activityId:String(body.activityId || '')};
+    if (activityState.activityRunning && activityContextKey(currentContextSelection())!==activityContextKey(selection) && !superhostCanOverride()) throw new Error('Finaliza la actividad antes de cambiar de contexto.');
+    activitySelectionBusy=true;entryModeResolved=false;stopCloudRealtime();
+    try {
+      await Promise.all([syncOperation,maintenanceOperation,vdjQueueCheckPromise]);
+      await persistQueuedEntries();
+      const data=await selectBridgeActivity(config,selection);
+      const nextStartedAt=String((data.state || data).activityStartedAt || '');
+      const changed=activityContextKey(currentContextSelection(),activityState.activityStartedAt)!==activityContextKey(selection,nextStartedAt);
+      if(changed) {
+        await restoreSelectedContext(selection,nextStartedAt);
+      }
+      freeModeSession=null;
+      config=await saveConfig(sanitizeConfig({...config,lastHotelId:selection.hotelId,lastVenueId:selection.venueId,lastActivityId:selection.activityId,rememberedActivity:body.rememberSelection===true ? selection : config.rememberedActivity},config));
+      applyActivityState(data);requests=bridgeRequests(data);clearTransientCaches();refreshLocalAvailability();sheetError='';
+      await persistQueuedEntries();json(response,200,stateView());broadcastState();
+    }finally{activitySelectionBusy=false;restartCloudRealtime();}
     return;
   }
   if (request.method === "POST" && pathname === "/api/config/language") {
@@ -5868,6 +6367,26 @@ async function api(request, response, url) {
     json(response, 200, { ok: true, uiLanguage: config.uiLanguage });
     broadcastState();
     return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/stem-engine") {
+    const body = await readJson(request);
+    if (!["spleeter", "demucs", "gsvocalrt"].includes(body.selectedStemEngine)) throw new Error("Motor de separación vocal inválido.");
+    config = await saveConfig(sanitizeConfig({ selectedStemEngine: body.selectedStemEngine }, config));
+    updateStemEngineSummary();
+    broadcastState();
+    void processStemQueue();
+    json(response, 200, { ok: true, selectedStemEngine: selectedStemEngine(), activeEngine: nativeStemLease || nextStemEngine() });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/player/stem-engine/transport") {
+    const body = await readJson(request);
+    if (body.action === "release") { nativeStemLease = ""; void processStemQueue(); }
+    else if (body.action === "acquire") {
+      const engine = nextStemEngine();
+      if (engine === "gsvocalrt") nativeStemLease = engine;
+      json(response, 200, { ok: true, engine }); return;
+    } else throw new Error("Acción de stems inválida.");
+    json(response, 200, { ok: true }); return;
   }
   if (request.method === "POST" && pathname === "/api/config") {
     const body = await readJson(request);
@@ -5892,6 +6411,7 @@ async function api(request, response, url) {
       if (data?.state) applyActivityState(data);
     }
     config = await saveConfig(nextConfig);
+    updateStemEngineSummary();
     restartCloudRealtime();
     startLibraryWatchers();
     await scanNow();
@@ -5953,15 +6473,20 @@ async function api(request, response, url) {
     requireSignedInBridge();
     const body = await readJson(request);
     const nextMode = String(body.mode || "").toLowerCase();
-    if (!config.lastHotelId || !config.lastVenueId || !config.lastActivityId || !tenantState.activity) {
+    if (!freeModeSession && (!config.lastHotelId || !config.lastVenueId || !config.lastActivityId || !tenantState.activity)) {
       throw new Error("Select a hotel, venue and activity before choosing the playback mode.");
     }
     if (!["player", "bridge"].includes(nextMode)) {
       throw new Error("Choose Player or Bridge before starting the activity.");
     }
-    if (activityState.activityRunning && operatingMode) {
+    if (activityState.activityRunning && operatingMode && nextMode !== operatingMode && !superhostCanOverride()) {
       throw new Error("The playback mode is locked until this activity finishes.");
     }
+    if (activityState.activityRunning && nextMode !== operatingMode && superhostCanOverride()) {
+      superhostModeOverrides.set(activityContextKey(currentContextSelection(),activityState.activityStartedAt),nextMode);
+      activityState.playbackMode=nextMode;
+    }
+    entryModeResolved=true;
     operatingMode = nextMode;
     lastSelectedMode = nextMode;
     await persistQueuedEntries(config.lastActivityId || activityState.activityId);
@@ -5970,13 +6495,28 @@ async function api(request, response, url) {
     broadcastState();
     return;
   }
+  if(request.method==='POST' && pathname==='/api/activity/reconcile') {
+    await syncNow();json(response,200,stateView());return;
+  }
   const activityMatch = pathname.match(
-    /^\/api\/activity\/(start|open|close|reset|finish|start-new|archive)$/
+    /^\/api\/activity\/(start|open|close|reset|finish|continue|start-new|archive)$/
   );
   if (request.method === "POST" && activityMatch) {
     const action = activityMatch[1];
+    if(activityMutationBusy){json(response,409,{ok:false,error:'An activity change is already in progress.'});return;}
+    activityMutationBusy=true;
+    finishTransitionPending=action==='finish' && operatingMode==='bridge';
+    try {
     if (["start", "start-new"].includes(action) && !operatingMode) {
       throw new Error("Choose Player or Bridge before starting the activity.");
+    }
+    if (freeModeSession) {
+      const now=new Date().toISOString();
+      if(['start','start-new','open'].includes(action)) {activityState.activityStartedAt=now;activityState.activityFinishedAt='';activityState.activityRunning=true;activityState.playbackMode=operatingMode;tenantState.activity.status='in_progress';}
+      else if(action==='finish'){activityState.activityFinishedAt=now;activityState.activityRunning=false;tenantState.activity.status='finished';}
+      else if(action==='close')activityState.accepting=false;
+      else if(['archive','reset'].includes(action)){await resetLocalActivity(freeModeSession.sessionId);activityState.activityRunning=false;activityState.activityStartedAt='';activityState.activityFinishedAt='';tenantState.activity.status='ready';}
+      activityState.lastAction=action;activityState.stateRevision++;await persistQueuedEntries();json(response,200,stateView());broadcastState();return;
     }
     const context = {
       hotelId: config.lastHotelId,
@@ -5984,14 +6524,28 @@ async function api(request, response, url) {
       activityId: config.lastActivityId,
       source: operatingMode === "player" ? "player" : "bridge"
     };
-    const data = action === "finish"
-      ? await v4AppsScriptAction(config, "finishActivityV4", context)
+    const sessionBody = await readJson(request);
+    const data = action === "continue"
+      ? await v4AppsScriptAction(config, "continueActivityV4", {...sessionBody,...context})
+      : action === "close" && context.source==='bridge'
+      ? await v4AppsScriptAction(config,"toggleRequests",{...context,open:false,minimal:true})
+      : action === "open"
+      ? await v4AppsScriptAction(config, "prepareSession", { ...sessionBody, ...context, minimal:context.source==='bridge' })
+      : action === "finish"
+      ? await v4AppsScriptAction(config, "finishActivityV4", { ...sessionBody, ...context })
       : action === "start-new"
         ? await v4AppsScriptAction(config, "startNewActivityV4", context)
         : action === "archive"
           ? await v4AppsScriptAction(config, "archiveClearQueue", context)
           : await controlActivity(config, action, context.source);
+    const preclose = action === 'close' ? stateView().requests.filter(i => !i.outcome && !i.queued && i.localAvailable) : [];
     applyActivityState(data);
+    ensureOperationsContext();
+    if (action === 'close' && activityState.accepting === false) {
+      operationsState.closedAt = new Date().toISOString();
+      operationsState.reserveIds = preclose.slice(-3).map(i => i.id);
+    }
+    if (action === 'open') { operationsState.closedAt = ''; operationsState.reserveIds = []; }
     if (["finish", "reset", "archive"].includes(action)) operatingMode = "";
     if (["reset", "archive", "start-new"].includes(action)) {
       await reconcileDeletedRequests([], activityState, {
@@ -6002,12 +6556,20 @@ async function api(request, response, url) {
       requests = bridgeRequests(data);
       refreshLocalAvailability();
     }
-    await syncNow();
-    await reconcileVirtualDjQueue(true);
-    await persistQueuedEntries(activityState.activityId);
+    if (context.source === 'bridge' && ['start','open','close','finish','continue'].includes(action)) {
+      await persistQueuedEntries(activityState.activityId);
+      scheduleCloudScheduleWake(data);
+      if(action==='finish')void cleanupFinishedBridgeQueue({...data,cleanupRequested:true}).catch(error=>{vdjError=errorMessage(error);broadcastState();});
+      broadcastState();
+    } else {
+      await syncNow();
+      await reconcileVirtualDjQueue(true);
+      await persistQueuedEntries(activityState.activityId);
+    }
     if (["finish", "reset", "archive"].includes(action)) restartCloudRealtime();
     json(response, 200, stateView());
     return;
+    } finally {activityMutationBusy=false;finishTransitionPending=false;}
   }
   if (request.method === "POST" && pathname === "/api/virtualdj/test") {
     const body = await readJson(request);
@@ -6037,10 +6599,8 @@ async function api(request, response, url) {
   const queueMatch = pathname.match(/^\/api\/requests\/([^/]+)\/queue$/);
   if (request.method === "POST" && queueMatch) {
     const body = await readJson(request);
-    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => queueRequest(
-      decodeURIComponent(queueMatch[1]),
-      body.filePath
-    ));
+    const id=decodeURIComponent(queueMatch[1]);
+    const data = await runVdjQueueOperation({...body,requestId:id}, () => runHostVdjCommand(body,'HOST_SEND_TO_VDJ',id,intent=>queueRequest(id,body.filePath,intent)));
     broadcastState();
     json(response, 200, data);
     return;
@@ -6064,10 +6624,8 @@ async function api(request, response, url) {
   }
   if (request.method === "POST" && replaceMatch) {
     const body = await readJson(request);
-    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => replaceQueuedRequest(
-      decodeURIComponent(replaceMatch[1]),
-      body.filePath
-    ));
+    const id=decodeURIComponent(replaceMatch[1]);
+    const data = await runVdjQueueOperation({...body,requestId:id}, () => runHostVdjCommand(body,'HOST_REPLACE_IN_VDJ',id,intent=>replaceQueuedRequest(id,body.filePath,intent)));
     broadcastState();
     json(response, 200, data);
     return;
@@ -6082,9 +6640,8 @@ async function api(request, response, url) {
   const dismissRequeueMatch =
     pathname.match(/^\/api\/requests\/([^/]+)\/dismiss-requeue$/);
   if (request.method === "POST" && dismissRequeueMatch) {
-    const data = await dismissRequeue(
-      decodeURIComponent(dismissRequeueMatch[1])
-    );
+    const body = await readJson(request);
+    const data = await dismissRequeue(decodeURIComponent(dismissRequeueMatch[1]), body.outcome);
     broadcastState();
     json(response, 200, data);
     return;
@@ -6105,17 +6662,17 @@ async function api(request, response, url) {
     pathname.match(/^\/api\/requests\/([^/]+)\/undo-outcome$/);
   if (request.method === "POST" && undoOutcomeMatch) {
     const body = await readJson(request);
-    const data = await runVdjQueueOperation({ ...body, commandId: body.commandId || randomUUID() }, () => undoRequestOutcome(
-      decodeURIComponent(undoOutcomeMatch[1]),
-      String(body.placement || "")
-    ));
+    const id=decodeURIComponent(undoOutcomeMatch[1]);
+    const data = await runVdjQueueOperation({...body,requestId:id,commandId:body.commandId || (body.placement==='pending'?randomUUID():undefined)}, () => body.placement==='pending'
+      ? undoRequestOutcome(id,'pending')
+      : runHostVdjCommand(body,'HOST_RETURN_TO_VDJ',id,intent=>undoRequestOutcome(id,String(body.placement || ''),intent)));
     broadcastState();
     json(response, 200, data);
     return;
   }
   if (request.method === "POST" && pathname === "/api/suggestions/queue") {
     const body = await readJson(request);
-    const data = await queueHitSuggestion(body);
+    const data = await runVdjQueueOperation(body,()=>runHostVdjCommand(body,'HOST_SEND_SUGGESTION_TO_VDJ',JSON.stringify([body.song,body.artist,body.list]),intent=>queueHitSuggestion(body,intent)));
     broadcastState();
     json(response, 200, data);
     return;
@@ -6135,59 +6692,34 @@ async function api(request, response, url) {
     const items = youtubeCache.get(id) || await findYoutube(id);
     const selected = items.find((item) => item.url === String(body.url || ""));
     if (!selected) throw new Error("Elige uno de los enlaces mostrados por el Bridge.");
-    try {
-      await copyMacClipboard(selected.url);
-      const item = requests.find((entry) => entry.id === id);
-      if (item) {
-        const updated = await updateBridgeRequest(
-          config,
-          id,
-          item.status,
-          basename(queuedEntries.get(id)?.filePath || ""),
-          {
-            durationSeconds:
-              Number(selected.durationSeconds) || item.durationSeconds,
-            sourceUrl: selected.url
-          }
-        );
-        if (updated?.state) applyActivityState(updated);
-        item.sourceUrl = selected.url;
-        if (Number(selected.durationSeconds) > 0) {
-          item.durationSeconds = Number(selected.durationSeconds);
-        }
-        requestFileLinks.delete(id);
-        const tracked = queuedEntries.get(id);
-        if (tracked) queuedEntries.set(id, { ...tracked, manualLink: false });
-        await persistQueuedEntries();
-      }
-      clipboardHandledIds.add(id);
-      clipboardState = {
-        requestId: id,
-        url: selected.url,
-        resultType: selected.resultType || "",
-        notice: selected.notice || "",
-        copiedAt: new Date().toISOString(),
-        error: ""
-      };
-    } catch (error) {
-      clipboardState = {
-        requestId: id,
-        url: selected.url,
-        resultType: selected.resultType || "",
-        notice: selected.notice || "",
-        copiedAt: "",
-        error: errorMessage(error)
-      };
-      throw error;
+    if (body.clipboardCopied !== true) await copyMacClipboard(selected.url);
+    clipboardHandledIds.add(id);
+    clipboardState = { requestId: id, url: selected.url, resultType: selected.resultType || '', notice: selected.notice || '', copiedAt: new Date().toISOString(), error: '' };
+    const item = requests.find(entry => entry.id === id);
+    const copyContext = activityContextKey(currentContextSelection(), activityState.activityStartedAt);
+    const copyConfig = { ...config };
+    if (item) {
+      item.sourceUrl = selected.url;
+      if (Number(selected.durationSeconds) > 0) item.durationSeconds = Number(selected.durationSeconds);
+      const status = item.status, revision = item.stateRevision;
+      void updateBridgeRequest(copyConfig, id, status, basename(queuedEntries.get(id)?.filePath || ''), {
+        durationSeconds: item.durationSeconds, sourceUrl: selected.url,
+        ...(bridgeFeatures.versionedMetadata && revision > 0 ? { expectedRevision: revision } : {})
+      }).then(updated => {
+        if (copyContext !== activityContextKey(currentContextSelection(), activityState.activityStartedAt)) return;
+        const current = requests.find(entry => entry.id === id);
+        if (current && updated?.request?.stateRevision) current.stateRevision = Math.max(current.stateRevision || 0, Number(updated.request.stateRevision));
+      }).catch(error => {
+        if (copyContext !== activityContextKey(currentContextSelection(), activityState.activityStartedAt)) return;
+        sheetError = `El enlace se copió; no se pudo guardar: ${errorMessage(error)}`;
+        broadcastState();
+      });
     }
     broadcastState();
-    json(response, 200, {
-      ok: true,
-      url: selected.url,
-      sheetUpdated: true
-    });
+    json(response, 200, { ok: true, url: selected.url, sheetUpdated: false, savePending: Boolean(item) });
     return;
   }
+
   const youtubeMatch = pathname.match(/^\/api\/requests\/([^/]+)\/youtube$/);
   if (request.method === "POST" && youtubeMatch) {
     const id = decodeURIComponent(youtubeMatch[1]);
@@ -6231,9 +6763,27 @@ async function api(request, response, url) {
   json(response, 404, { ok: false, error: "Action not found." });
 }
 
+// Public overlay projection reuses the existing queue and verified Bridge mapping.
+// It never queries D1/VDJ, mutates a queue, or starts a second playback engine.
+const vdjOverlayHttp = createVdjOverlayHttp(() => projectVdjDisplay({
+  tenant: tenantState, activity: activityState, mode: operatingMode,
+  requests: requests.map(item => ({...item, outcome:effectiveRequestOutcome(item), cleared:operationsState.clearedIds.includes(item.id)})),
+  entries: vdjQueueEntries.filter(e => !operationsState.externalHistory.some(h => h.virtualDJItemId === e.virtualDJItemId)),
+  playback: vdjOperations.view(), finalizing:Boolean(finishTransitionPending || finishCleanupPromise),
+  identify: filePath => {
+    if (vdjQueueEntries.filter(e => normalizeVdjPath(e.filePath) === normalizeVdjPath(filePath)).length > 1) return null;
+    const matches = [...queuedEntries.values()].filter(e => normalizeVdjPath(e.filePath) === normalizeVdjPath(filePath));
+    if(matches.length !== 1) return null;
+    const item = requests.find(r => r.id === matches[0].id);
+    if(!item || effectiveRequestOutcome(item) || suppressedQueueIds.has(item.id)) return null;
+    return {id:item.id};
+  }
+}));
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (await vdjOverlayHttp(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) await api(request, response, url);
     else await serveStatic(url.pathname, response);
   } catch (error) {
@@ -6265,16 +6815,21 @@ process.on("uncaughtExceptionMonitor", (error, origin) => {
 
 async function restoreBridgeIdentity() {
   if (!hasV4Session(config)) return;
-  try {
-    const data = await fetchBridgeIdentity(config);
-    identityState = {
-      authenticated: true,
-      user: data.user || null,
-      selection: data.selection || { hotels: [], venues: [], activities: [] }
-    };
-  } catch (error) {
-    identityState.authenticated = false;
-    sheetError = errorMessage(error);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await fetchBridgeIdentity(config);
+      identityState = {
+        authenticated: true,
+        user: data.user || null,
+        selection: data.selection || { hotels: [], venues: [], activities: [] }
+      };
+      sheetError = '';
+      return;
+    } catch (error) {
+      identityState.authenticated = false;
+      sheetError = errorMessage(error);
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+    }
   }
 }
 
@@ -6307,6 +6862,10 @@ async function resumeRunningActivity() {
     activityId,
     source: "resume"
   });
+  const startedAt=String((data.state || data).activityStartedAt || '');
+  if (queueActivityId!==activityId || String(storedQueueState.activityStartedAt || '')!==startedAt) {
+    await restoreSelectedContext({hotelId,venueId,activityId},startedAt);
+  }
   config = await saveConfig(sanitizeConfig({
     ...config,
     lastHotelId: hotelId,
@@ -6355,6 +6914,7 @@ async function editBridgeMetadata(id, body) {
     }
     const current = requests.find(value => value.id === id);
     if (!current) throw new Error('Metadata was saved remotely; the request is no longer in this activity.');
+    if (current.song !== metadata.song || current.artist !== metadata.artist) { youtubeCache.delete(id); youtubeSearchAt.delete(id); }
     Object.assign(current, metadata, { stateRevision: Number(updated.stateRevision) });
     // Preserve physical VDJ identity: visible Guest Star metadata is not a
     // physical rename/re-tag and must not sever a previously verified link.
@@ -6396,7 +6956,8 @@ async function moveBridgeRequest(id, body) {
   return { ok: true, warning };
 }
 
-async function skipVdjTrack(body) {
+async function skipVdjTrack(body,hostIntent) {
+  assertVdjHostIntent(hostIntent,'load');
   if (operatingMode !== 'bridge') throw new Error('Select Bridge mode before Skip.');
   await vdjOperations.refresh();
   const playback = vdjOperations.view();
@@ -6418,13 +6979,16 @@ async function skipVdjTrack(body) {
   let outcome = null;
   const currentId = current?.linkedRequestId || (tracked.length === 1 ? tracked[0].id : '');
   if (currentId) outcome = await setRequestOutcome(currentId, 'skipped');
+  else if(current) {
+    await removeKaraokeEntry(config.virtualDJ,current);await recordExternalOutcome(current,'skipped');
+  }
   if (next) {
     if (/["`\r\n\0]/.test(next.filePath)) throw new Error('VDJ cannot safely load this source using the current script quoting mechanism.');
     const pathNow = await queryVdj(config.virtualDJ, `deck ${deck.deck} get_filepath`);
     if (normalizeVdjPath(pathNow) === normalizeVdjPath(next.filePath)) return { ok: true, alreadyAdvanced: true, outcome };
     if (normalizeVdjPath(pathNow) !== normalizeVdjPath(deck.filePath)) throw new Error('VDJ advanced independently; no second Next command was sent.');
     if (operatingMode !== 'bridge') throw new Error('Bridge mode changed before Next.');
-    await executeVdj(config.virtualDJ, `deck ${deck.deck} load "${next.filePath}"${deck.playing ? ` & deck ${deck.deck} play` : ''}`);
+    await executeVdj(config.virtualDJ, `deck ${deck.deck} load "${next.filePath}"${deck.playing ? ` & deck ${deck.deck} play` : ''}`,{hostIntent});
   }
   await vdjOperations.refresh();
   return { ok: true, outcome, nextLoaded: Boolean(next), playback: vdjOperations.view() };
@@ -6443,7 +7007,7 @@ async function executeCloudCommand(command) {
     return { synchronized: true };
   }
   if (command.commandType === "addRequest") {
-    return runVdjQueueOperation(command, () => queueRequest(String(payload.requestId || ''), payload.filePath || ''));
+    return runVdjQueueOperation(command, () => runHostVdjCommand({...payload,commandId:command.commandId},'HOST_SEND_TO_VDJ',String(payload.requestId || ''),intent=>queueRequest(String(payload.requestId || ''),payload.filePath || '',intent)));
   }
   if (command.commandType === "removeRequest") {
     return runVdjQueueOperation(command, () => removeQueuedRequest(String(payload.requestId || '')));
@@ -6455,13 +7019,12 @@ async function executeCloudCommand(command) {
     return runAdministrativeCommand(command, () => setRequestOutcome(String(payload.requestId || ''), 'skipped', { removeVDJ: !vdjQueueOperationBusy }));
   }
   if (command.commandType === "undo") {
-    return runVdjQueueOperation(command, () => undoRequestOutcome(
-      String(payload.requestId || ""),
-      String(payload.placement || "pending")
-    ));
+    return runVdjQueueOperation(command, () => payload.placement==='pending' || !payload.placement
+      ? undoRequestOutcome(String(payload.requestId || ''),'pending')
+      : runHostVdjCommand({...payload,commandId:command.commandId},'HOST_RETURN_TO_VDJ',String(payload.requestId || ''),intent=>undoRequestOutcome(String(payload.requestId || ''),String(payload.placement),intent)));
   }
   if (command.commandType === "moveRequest") {
-    return runVdjQueueOperation(command, () => queueRequest(String(payload.requestId || ''), payload.filePath || ''));
+    return runVdjQueueOperation(command, () => moveBridgeRequest(String(payload.requestId || ''),{...payload,commandId:command.commandId}));
   }
   throw new Error("Unsupported Bridge command.");
 }
@@ -6509,7 +7072,7 @@ let cloudRealtimePendingSync = false;
 let cloudRealtimePendingCommands = false;
 
 function cloudRealtimeEligible() {
-  return hasV4Session(config) && Boolean(
+  return !freeModeSession && hasV4Session(config) && Boolean(
     config.lastHotelId && config.lastActivityId && config.deviceId
   );
 }
@@ -6534,9 +7097,11 @@ function scheduleCloudScheduleWake(data) {
   cloudRealtimeScheduleTimer = null;
   if (!cloudRealtimeEligible()) return;
   const now = Date.now();
-  const candidates = (Array.isArray(data?.schedules) ? data.schedules : [])
+  const session=data?.session;
+  const runTimes=session?.status==='scheduled'&&session?.autoStart ? [session.startsAt] : session?.status==='in_progress'&&session.autoFinish&&!session.autoFinishCancelledAt ? [session.endCountdown?.deadlineAt || new Date(Date.parse(session.startedAt||session.startsAt)+Number(session.durationSeconds)*1000).toISOString()] : [];
+  const candidates = [...runTimes,...(Array.isArray(data?.schedules) ? data.schedules : [])
     .filter((schedule) => String(schedule?.status || "") === "active")
-    .flatMap((schedule) => [schedule?.requestOpeningAt, schedule?.scheduledStartAt])
+    .flatMap((schedule) => [schedule?.requestOpeningAt, schedule?.scheduledStartAt])]
     .map((value) => Date.parse(String(value || "")))
     .filter((value) => Number.isFinite(value) && value > now + 250)
     .sort((left, right) => left - right);
@@ -6773,8 +7338,16 @@ try {
   sheetError = errorMessage(error);
 }
 startLibraryWatchers();
-await scanNow();
-await syncNow();
+// A validated running Bridge starts its local event loops immediately;
+// library/YouTube maintenance cannot delay entry or VDJ observation.
+if (operatingMode === "bridge" && activityState.activityRunning) {
+  resolveEntryBootstrap();
+  void scanNow().then(() => syncNow()).catch(error => { sheetError = errorMessage(error); broadcastState(); });
+} else {
+  await scanNow();
+  await syncNow();
+  resolveEntryBootstrap();
+}
 void processStemQueue();
 void verifyStemEngineCapability();
 
@@ -6787,11 +7360,37 @@ setTimeout(scanLoop, (WEB_BETA ? 5 : config.scanIntervalSeconds) * 1000).unref()
 restartCloudRealtime();
 // Network Control exposes HTTP queries, not push events. Bounded LOCAL reads
 // only while Bridge has an SSE consumer; never poll D1/cloud for playback.
+let lastQueueSignature='', queueSignatureAt=0, fullQueueObservedAt=0;
 async function vdjPlaybackLoop() {
-  if (operatingMode === 'bridge' && eventClients.size > 0) await vdjOperations.refresh();
+  if (entryModeResolved && !activitySelectionBusy && operatingMode === 'bridge' && eventClients.size > 0) {
+    const wasConnected=vdjOperations.view().connected;await vdjOperations.refresh();
+    if(!wasConnected && vdjOperations.view().connected) lastQueueSignature='';
+    if (!finishTransitionPending && !finishCleanupPromise && !vdjQueueOperationBusy && !vdjQueueCheckPromise && !queueLocks.size && !clearOperationsBusy) {
+      if(Date.now()-queueSignatureAt>=2000 && vdjOperations.view().connected) {
+        queueSignatureAt=Date.now();
+        try {
+          const signature=await readVdjQueueSignature(config.virtualDJ,vdjQueueCount);
+          if(signature!==lastQueueSignature || [...queuePresenceMisses.values(),...externalQueueMisses.values()].some(misses=>misses>0) || (vdjQueueCount>256 && Date.now()-fullQueueObservedAt>10000)) {
+            lastQueueSignature=signature;fullQueueObservedAt=Date.now();await reconcileVirtualDjQueue(true);
+          }
+        } catch { /* Playback refresh reports transport failures; preserve the last queue. */ }
+      }
+    }
+  }
   setTimeout(vdjPlaybackLoop, vdjOperations.view().connected ? 1000 : 5000).unref();
 }
 void vdjPlaybackLoop();
+async function vdjExistingQueueHeadLoop() {
+  try {
+    if(entryModeResolved && !activitySelectionBusy && operatingMode==='bridge' &&
+      !finishTransitionPending && !finishCleanupPromise && !clearOperationsBusy && !vdjQueueOperationBusy && !queueLocks.size) {
+      const scope=activityContextKey(currentContextSelection(),activityState.activityStartedAt);
+      await vdjOperations.loadExistingQueueHead({valid:()=>scope===activityContextKey(currentContextSelection(),activityState.activityStartedAt)});
+    }
+  } catch { /* Unconfirmed head/playback: no effect; observe on the next cycle. */ }
+  setTimeout(vdjExistingQueueHeadLoop,250).unref();
+}
+void vdjExistingQueueHeadLoop();
 setInterval(() => {
   void refreshSystemMemoryPressure().then(() => {
     const result = updateStemResourceState();
@@ -6824,6 +7423,7 @@ setInterval(() => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    audioAnalysisSampler.stop();
     if (activeStemChild?.pid) {
       try {
         if (activeStemChild.guestStarStopped) activeStemChild.kill("SIGCONT");
@@ -6836,3 +7436,8 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     server.close(() => process.exit(0));
   });
 }
+
+process.once('SIGTERM', () => lyricsExtractor.close());
+process.once('SIGINT', () => lyricsExtractor.close());
+process.once('SIGTERM', () => playerWaveforms.close());
+process.once('SIGINT', () => playerWaveforms.close());

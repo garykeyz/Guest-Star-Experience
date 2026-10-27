@@ -223,7 +223,7 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
         /^get_next_karaoke_song "([^"]+)"(?: (\d+))?$/
       );
       const index = Number(next?.[2] || 0);
-      response.end(next ? vdjQueue[index]?.[next[1]] || "" : "");
+      response.end(next ? vdjQueue[index]?.[next[1] === "fullpath" ? "filepath" : next[1]] || "" : "");
     }
   });
   const vdjPort = await listen(vdjServer);
@@ -245,15 +245,12 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
       backgroundMusicVolume: 0.42,
       rememberLibraryFolders: true,
       appsScriptUrl: `http://127.0.0.1:${sheetPort}/exec`,
-      hostPin: "",
-      rememberHostPin: false,
       virtualDJ: {
         host: "127.0.0.1",
         port: vdjPort,
         password: "",
         timeoutMs: 1000
       },
-      requestIntervalSeconds: 3,
       scanIntervalSeconds: 5,
       autoQueueExact: false
     }, null, 2)}\n`
@@ -323,6 +320,13 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   assert.equal((await backgroundMedia.arrayBuffer()).byteLength, 16);
 
   vdjQueue.splice(0, 1);
+  for (let check = 0; check < 3; check += 1) {
+    await fetch(`${bridgeUrl}/api/requests/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    });
+  }
   state = await waitForState(
     bridgeUrl,
     (candidate) =>
@@ -378,6 +382,61 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
   ).then((response) => response.json());
   assert.equal(queuedAgain.ok, true);
   assert.equal(vdjQueue.at(-1).singer, "Ana");
+
+  const linkedOnly = await fetch(
+    `${bridgeUrl}/api/requests/request-1/link`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: replacementSong })
+    }
+  ).then((response) => response.json());
+  assert.equal(linkedOnly.linked, true);
+  assert.equal(linkedOnly.source, "manual");
+  assert.equal(
+    vdjQueue.find((entry) => entry.singer === "Ana")?.filepath,
+    await realpath(localSong),
+    "link-only never changes the physical VirtualDJ row"
+  );
+  state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
+  assert.equal(state.requests.find((item) => item.id === "request-1").linkedFileName,
+    "Adele - Hello Alternate Karaoke.mp4");
+
+  const youtubeLinked = await fetch(
+    `${bridgeUrl}/api/requests/request-1/youtube/copy`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://www.youtube.com/watch?v=karaoke123" })
+    }
+  ).then((response) => response.json());
+  assert.equal(youtubeLinked.ok, true);
+  state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
+  assert.equal(state.requests.find((item) => item.id === "request-1").linkedFilePath, "");
+  assert.match(state.requests.find((item) => item.id === "request-1").sourceUrl, /youtube\.com/);
+
+  await fetch(`${bridgeUrl}/api/requests/request-1/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filePath: replacementSong })
+  }).then((response) => response.json());
+  state = await fetch(`${bridgeUrl}/api/state`).then((response) => response.json());
+  assert.equal(state.requests.find((item) => item.id === "request-1").sourceUrl, "");
+
+  const unlinked = await fetch(`${bridgeUrl}/api/requests/request-1/unlink`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  }).then((response) => response.json());
+  assert.equal(unlinked.unlinked, true);
+  assert.equal(unlinked.physicalRowPreserved, true);
+  assert.equal(vdjQueue.some((entry) => entry.singer === "Ana"), true);
+
+  await fetch(`${bridgeUrl}/api/requests/request-1/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filePath: replacementSong })
+  }).then((response) => response.json());
 
   const replaced = await fetch(
     `${bridgeUrl}/api/requests/request-1/replace`,

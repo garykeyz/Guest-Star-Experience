@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the audited installed runtime with the matching source, icon and version."""
+"""Build the canonical Bridge UI with the audited native dependencies, icon and version."""
 import argparse
 import hashlib
 import json
@@ -12,6 +12,13 @@ import subprocess
 
 def run(*args):
     subprocess.run(list(map(str, args)), check=True)
+
+
+def clone_copy(src, dst):
+    """Use APFS copy-on-write for the large audited runtime and models."""
+    subprocess.run(['cp', '-c', str(src), str(dst)], check=True)
+    shutil.copystat(src, dst)
+    return dst
 
 
 parser = argparse.ArgumentParser()
@@ -39,25 +46,29 @@ info.update(CFBundleDisplayName='Guest Star Experience',
 with (contents / 'Info.plist').open('wb') as handle:
     plistlib.dump(info, handle)
 shutil.copy2(args.native_executable, macos / 'GuestStarBridge')
+# Retain audited native inference libraries and their SONAME aliases.
+if (args.audited_app / 'Contents/Frameworks').exists():
+    shutil.copytree(args.audited_app / 'Contents/Frameworks', contents / 'Frameworks', symlinks=True, copy_function=clone_copy)
 shutil.copy2(source / 'macos/GuestStarBridge', macos / 'GuestStarBridge.sh')
 shutil.copy2(source / 'macos/assets/AppIcon.icns', resources / 'AppIcon.icns')
 bridge = resources / 'bridge'
 bridge.mkdir()
 for folder in ('src', 'public'):
-    shutil.copytree(source / folder, bridge / folder)
-for filename in ('package.json', 'README.md', 'config.example.json',
-                 'app.js', 'host-console.css', 'index.html',
-                 'native-display-routing.js', 'player-beta.js',
-                 'storage-preferences.js'):
+    shutil.copytree(source / folder, bridge / folder, copy_function=clone_copy)
+for filename in ('package.json', 'README.md', 'config.example.json'):
     shutil.copy2(source / filename, bridge / filename)
 (bridge / 'scripts').mkdir()
 shutil.copy2(source / 'scripts/stems-engine-smoke.mjs',
              bridge / 'scripts/stems-engine-smoke.mjs')
 # Native dependency versions and model files are preserved from the audited bundle.
 shutil.copytree(args.audited_app / 'Contents/Resources/runtime/node-arm64',
-                resources / 'runtime/node-arm64')
+                resources / 'runtime/node-arm64', copy_function=clone_copy)
 shutil.copytree(args.audited_app / 'Contents/Resources/bridge/stem-engine',
-                bridge / 'stem-engine')
+                bridge / 'stem-engine', copy_function=clone_copy)
+# Lyrics/alignment are part of the installed Player and must accompany it.
+# Preserve the audited local binaries, model and their license notices.
+shutil.copytree(args.audited_app / 'Contents/Resources/bridge/lyrics-engine',
+                bridge / 'lyrics-engine', copy_function=clone_copy)
 magics = {b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe',
           b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'}
 binaries = []

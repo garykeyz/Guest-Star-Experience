@@ -30,22 +30,43 @@ export function initLobbyWaveform(svg) {
   const levels = Array(LOBBY_BAR_COUNT).fill(0);
   let receivedAt = -Infinity, sequence = -1;
   let active = false, lastFrame = 0, frame = 0;
+  let disposed = false;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function schedule() {
+    if (!frame && !disposed && !document.hidden && svg.getClientRects().length) frame = requestAnimationFrame(paint);
+  }
   function paint(now) {
-    frame = requestAnimationFrame(paint);
+    frame = 0;
+    if (disposed || document.hidden || !svg.getClientRects().length) return;
     const elapsed = Math.max(0, now - lastFrame);
-    if (elapsed < (reducedMotion.matches ? 500 : 33)) return;
+    if (elapsed < (reducedMotion.matches ? 500 : 33)) { schedule(); return; }
     lastFrame = now;
     const live = active && now - receivedAt < 500;
+    let moving = false;
     bars.forEach((bar, index) => {
       const next = live ? targets[index] : 0;
-      levels[index] = reducedMotion.matches ? next : levels[index] + (next - levels[index]) * (1 - Math.exp(-Math.min(100, elapsed) / (next > levels[index] ? 35 : 100)));
+      const previous = levels[index];
+      levels[index] = Math.abs(next - previous) < 0.0001 ? next : reducedMotion.matches ? next : previous + (next - previous) * (1 - Math.exp(-Math.min(100, elapsed) / (next > previous ? 35 : 100)));
+      moving ||= levels[index] !== next;
+      if (levels[index] === previous && bar.hasAttribute('y1')) return;
       const { y1, y2 } = lobbyBarGeometry(index, levels[index]);
       bar.setAttribute('y1', y1); bar.setAttribute('y2', y2);
     });
+    // Preserve the same live interpolation, then stop after the last decay.
+    if (live || moving) schedule();
   }
-  frame = requestAnimationFrame(paint);
-  window.addEventListener('pagehide', () => cancelAnimationFrame(frame), { once: true });
+  function visibilityChanged() {
+    cancelAnimationFrame(frame); frame = 0; lastFrame = 0;
+    schedule();
+  }
+  function destroy() {
+    disposed = true; cancelAnimationFrame(frame); frame = 0;
+    document.removeEventListener('visibilitychange', visibilityChanged);
+    window.removeEventListener('pagehide', destroy);
+  }
+  schedule();
+  document.addEventListener('visibilitychange', visibilityChanged);
+  window.addEventListener('pagehide', destroy, { once: true });
   return {
     receive(message) {
       if (message?.type !== 'lobby-waveform-frame' || !Number.isFinite(message.sequence) || message.sequence <= sequence) return;
@@ -54,7 +75,9 @@ export function initLobbyWaveform(svg) {
       sequence = message.sequence;
       targets = message.playing === true ? samples : Array(LOBBY_BAR_COUNT).fill(0);
       receivedAt = performance.now();
+      schedule();
     },
-    setScene(state) { active = state?.displayMode !== 'karaoke' && state?.background?.playing === true; }
+    setScene(state) { active = state?.displayMode !== 'karaoke' && state?.background?.playing === true; schedule(); },
+    destroy
   };
 }

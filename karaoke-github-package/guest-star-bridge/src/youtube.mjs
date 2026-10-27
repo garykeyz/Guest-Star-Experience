@@ -17,7 +17,7 @@ function youtubeVideoKey(value) {
 export function selectYoutubeOptions(items, limit = 6) {
   const candidates = Array.isArray(items) ? items : [];
   const seen = new Set();
-  const maximum = Math.min(10, Math.max(1, Number(limit) || 6));
+  const maximum = Math.min(24, Math.max(1, Number(limit) || 6));
   const priority = (item) => {
     const value = Number(item?.channelPriority);
     return Number.isFinite(value) && value > 0 ? value : 9999;

@@ -21,17 +21,23 @@ export const DEFAULT_CONFIG = Object.freeze({
   lastUsername: "",
   rememberLogin: true,
   rememberSelection: true,
+  rememberedActivity: null,
   superhostLanguage: "es",
   uiLanguage: "es",
   favoriteSongsByHotel: {},
   secretsInKeychain: false,
   libraryFolders: [],
+  playerAudioFolders: [],
+  playerVideoFolders: [],
+  playerMediaPriority: "auto",
   rememberLibraryFolders: true,
   backgroundMusicSources: [],
   backgroundMusicVolume: 0.55,
   audioOutputDeviceId: "",
   starScreenDisplayId: "",
-  defaultStemEngine: "auto",
+  selectedStemEngine: "gsvocalrt",
+  defaultStemEngine: "gsvocalrt", // Compatibility alias; never enables Auto.
+  defaultVocalGuideLevel: 0,
   interfacePreferences: {
     showStarScreenPreview: true,
     showWaveform: true,
@@ -170,6 +176,12 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.lastVenueId === undefined ? String(current.lastVenueId || "") : String(input.lastVenueId || ""),
     lastActivityId:
       input.lastActivityId === undefined ? String(current.lastActivityId || "") : String(input.lastActivityId || ""),
+    rememberedActivity: (()=>{
+      const value=input.rememberedActivity===undefined
+        ? current.rememberedActivity || ((input.rememberSelection ?? current.rememberSelection) && (input.lastActivityId ?? current.lastActivityId) ? {hotelId:input.lastHotelId ?? current.lastHotelId,venueId:input.lastVenueId ?? current.lastVenueId,activityId:input.lastActivityId ?? current.lastActivityId} : null)
+        : input.rememberedActivity;
+      return value?.hotelId && value?.venueId && value?.activityId ? {hotelId:String(value.hotelId),venueId:String(value.venueId),activityId:String(value.activityId)} : null;
+    })(),
     lastUsername:
       input.lastUsername === undefined ? String(current.lastUsername || "") : String(input.lastUsername || "").trim(),
     rememberLogin:
@@ -206,6 +218,9 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
     libraryFolders: normalizeFolders(
       input.libraryFolders === undefined ? current.libraryFolders : input.libraryFolders
     ),
+    playerAudioFolders: normalizeFolders(input.playerAudioFolders === undefined ? current.playerAudioFolders : input.playerAudioFolders),
+    playerVideoFolders: normalizeFolders(input.playerVideoFolders === undefined ? current.playerVideoFolders : input.playerVideoFolders),
+    playerMediaPriority: ['audio','video','auto'].includes(input.playerMediaPriority ?? current.playerMediaPriority) ? (input.playerMediaPriority ?? current.playerMediaPriority) : 'auto',
     rememberLibraryFolders:
       input.rememberLibraryFolders === undefined
         ? Boolean(current.rememberLibraryFolders)
@@ -229,15 +244,11 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.starScreenDisplayId === undefined
         ? String(current.starScreenDisplayId || "").trim().slice(0, 500)
         : String(input.starScreenDisplayId || "").trim().slice(0, 500),
-    defaultStemEngine: ["auto", "spleeter", "demucs"].includes(String(
-      input.defaultStemEngine === undefined
-        ? current.defaultStemEngine || "auto"
-        : input.defaultStemEngine
-    ).toLowerCase())
-      ? String(input.defaultStemEngine === undefined
-        ? current.defaultStemEngine || "auto"
-        : input.defaultStemEngine).toLowerCase()
-      : "auto",
+    defaultVocalGuideLevel: Math.max(0, Math.min(0.2, Number(input.defaultVocalGuideLevel ?? current.defaultVocalGuideLevel ?? 0) || 0)),
+    selectedStemEngine: ["spleeter", "demucs", "gsvocalrt"].includes(String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase())
+      ? String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase() : "spleeter",
+    defaultStemEngine: ["spleeter", "demucs", "gsvocalrt"].includes(String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase())
+      ? String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase() : "spleeter",
     interfacePreferences: normalizeInterfacePreferences(
       input.interfacePreferences,
       current.interfacePreferences
@@ -281,9 +292,9 @@ export function configForStorage(config) {
     ...clean,
     authToken: clean.rememberLogin ? clean.authToken : "",
     deviceToken: clean.rememberLogin ? clean.deviceToken : "",
-    lastHotelId: clean.rememberSelection ? clean.lastHotelId : "",
-    lastVenueId: clean.rememberSelection ? clean.lastVenueId : "",
-    lastActivityId: clean.rememberSelection ? clean.lastActivityId : "",
+    lastHotelId: clean.rememberedActivity?.hotelId || "",
+    lastVenueId: clean.rememberedActivity?.venueId || "",
+    lastActivityId: clean.rememberedActivity?.activityId || "",
     libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : []
   };
 }
@@ -320,7 +331,7 @@ export async function loadConfig() {
       }
       if (parsed.audioOutputDeviceId === undefined) parsed.audioOutputDeviceId = "";
       if (parsed.starScreenDisplayId === undefined) parsed.starScreenDisplayId = "";
-      if (parsed.defaultStemEngine === undefined) parsed.defaultStemEngine = "auto";
+      if (parsed.defaultStemEngine === undefined) parsed.defaultStemEngine = "spleeter";
       if (parsed.interfacePreferences === undefined) {
         parsed.interfacePreferences = { ...DEFAULT_CONFIG.interfacePreferences };
       }

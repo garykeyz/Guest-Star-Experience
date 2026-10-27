@@ -1,3 +1,4 @@
+import {assertVdjHostIntent,authorizeVdjSongWrite,auditVdjWrite} from './virtualdj-host-intent.mjs';
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -348,7 +349,10 @@ async function request(config, endpoint, script, options = {}) {
   throw lastError;
 }
 
-export async function executeVdj(config, script) {
+export async function executeVdj(config, script, {hostIntent} = {}) {
+  const stillValid=await authorizeVdjSongWrite(script,hostIntent);
+  await auditVdjWrite(script,hostIntent);
+  if(stillValid && !stillValid())throw Error("The activity changed before sending the VDJ command.");
   const result = await request(config, "execute", script, { attempts: 1 });
   if (result.toLowerCase() === "false") {
     throw new Error("VirtualDJ rejected the command.");
@@ -357,6 +361,7 @@ export async function executeVdj(config, script) {
 }
 
 export async function queryVdj(config, script) {
+  await authorizeVdjSongWrite(script,null,{query:true});
   return request(config, "query", script, { attempts: 3 });
 }
 
@@ -499,6 +504,7 @@ export async function insertKaraokeEntry(
   targetIndex,
   options = {}
 ) {
+  assertVdjHostIntent(options.hostIntent,'enqueue');
   const filePath = normalizedQueryValue(entry?.filePath);
   const singer = normalizedQueryValue(entry?.singer);
   if (!filePath || !singer) {
@@ -526,7 +532,8 @@ export async function insertKaraokeEntry(
   try {
     await executeVdj(
       config,
-      buildKaraokeInsertScript(filePath, singer, desired, before.length)
+      buildKaraokeInsertScript(filePath, singer, desired, before.length),
+      {hostIntent:options.hostIntent}
     );
   } catch (error) {
     if (error?.deliveryUncertain === true) error.commandAccepted = true;
@@ -592,7 +599,7 @@ export async function removeKaraokeEntry(config, entry) {
   const targetPath = normalizeVdjPath(entry?.filePath);
   const targetSinger = normalizeVdjSinger(entry?.singer);
   const targetSong = normalizeVdjMetadata(entry?.song);
-  if (!targetSinger || (!targetPath && !targetSong)) {
+  if (!targetPath && (!targetSinger || !targetSong)) {
     throw new Error("The request data required to remove it from VirtualDJ is missing.");
   }
 

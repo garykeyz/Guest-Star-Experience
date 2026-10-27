@@ -122,7 +122,7 @@ test("la huella agrupa el mismo fallo aunque cambien IDs, contadores y líneas d
 });
 
 test("deduplica incidentes abiertos y abre uno nuevo después de resolver", () => {
-  const store = new DiagnosticStore({ version: "4.4.1", build: "test" });
+  const store = new DiagnosticStore({ version: "4.5", build: "test" });
   const first = store.record({
     module: "Player",
     severity: "ERROR",
@@ -196,7 +196,7 @@ test("persiste eventos, reportes, fallos y salud sin conservar secretos", async 
   const storagePath = join(root, "diagnostics.json");
   const store = new DiagnosticStore({
     storagePath,
-    version: "4.4.1",
+    version: "4.5",
     build: "diagnostic-test"
   });
   const source = store.record({
@@ -267,7 +267,7 @@ test("persiste eventos, reportes, fallos y salud sin conservar secretos", async 
 test("genera un reporte técnico reutilizable con estado, eventos y salud sanitizados", () => {
   const report = technicalReportText({
     reportId: "GS-TEST-1",
-    version: "4.4.1",
+    version: "4.5",
     build: "test",
     severity: "ERROR",
     modules: ["Audio", "Player"],

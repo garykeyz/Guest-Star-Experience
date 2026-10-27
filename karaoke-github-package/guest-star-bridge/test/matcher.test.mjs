@@ -69,7 +69,7 @@ test("acepta una coincidencia exacta sin etiqueta de idioma", () => {
   assert.equal(result[0].languageConflict, false);
 });
 
-test("normaliza los siete idiomas locales sin inventar un valor", () => {
+test("normaliza los ocho idiomas locales sin inventar un valor", () => {
   const expected = [
     ["English", "english"],
     ["Español", "spanish"],
@@ -77,7 +77,8 @@ test("normaliza los siete idiomas locales sin inventar un valor", () => {
     ["Português", "portuguese"],
     ["Deutsch", "german"],
     ["Italiano", "italian"],
-    ["Русский", "russian"]
+    ["Русский", "russian"],
+    ["हिन्दी", "hindi"]
   ];
   expected.forEach(([value, code]) => assert.equal(normalizeLanguage(value), code));
   assert.equal(normalizeLanguage("unknown"), "");
@@ -99,4 +100,95 @@ test("no convierte un fallo temporal de carpeta en una biblioteca vacía", async
     scanLibrary([join(tmpdir(), "guest-star-folder-that-is-not-mounted")]),
     /karaoke folder is not available/
   );
+});
+
+test("caso A: título y artista correctos producen confianza real muy alta", () => {
+  const [match] = findMatches(
+    ["/Library/Adele - Hello Karaoke.mp4"],
+    "Hello",
+    "Adele",
+    "English",
+    2
+  );
+  assert.equal(match.confidenceTier, "very-high");
+  assert.equal(match.autoLinkEligible, true);
+  assert.ok(match.confidencePercent >= 94);
+});
+
+test("caso B: formato artista conjunto antes del separador conserva una coincidencia fuerte", () => {
+  const [match] = findMatches(
+    ["/Library/Lady Gaga Bradley Cooper - Shallow Karaoke.mp4"],
+    "Shallow",
+    "Lady Gaga & Bradley Cooper"
+  );
+  assert.equal(match.exact, true);
+  assert.ok(match.confidencePercent >= 90);
+});
+
+test("caso C: mismo título con artista incorrecto nunca recibe un falso 90%", () => {
+  const [match] = findMatches(
+    ["/Library/Lionel Richie - Hello Karaoke.mp4"],
+    "Hello",
+    "Adele"
+  );
+  assert.equal(match.artistConflict, true);
+  assert.equal(match.exact, false);
+  assert.ok(match.confidencePercent < 60);
+});
+
+test("caso D: una versión alternativa no se autoasigna a una solicitud genérica", () => {
+  const [match] = findMatches(
+    ["/Library/Adele - Hello Live.mp4"],
+    "Hello",
+    "Adele"
+  );
+  assert.equal(match.versionConflict, true);
+  assert.equal(match.autoLinkEligible, false);
+});
+
+test("caso E: candidatos casi idénticos quedan ambiguos por margen", () => {
+  const [match] = findMatches(
+    [
+      "/Library/Adele - Hello Karaoke.mp4",
+      "/Library/Adele - Hello Karaoke HD.mp4"
+    ],
+    "Hello",
+    "Adele"
+  );
+  assert.equal(match.ambiguous, true);
+  assert.equal(match.autoLinkEligible, false);
+  assert.ok(match.margin < 0.08);
+});
+
+test("caso F: YouTube puede corroborar pero no rescata un conflicto de artista", () => {
+  const [match] = findMatches(
+    ["/Library/Lionel Richie - Hello Karaoke.mp4"],
+    "Hello",
+    "Adele",
+    "English",
+    1,
+    { youtubeResults: [{ title: "Adele - Hello Karaoke Lyrics", durationSeconds: 295 }] }
+  );
+  assert.equal(match.artistConflict, true);
+  assert.equal(match.autoLinkEligible, false);
+  assert.ok(match.confidencePercent < 60);
+});
+
+test("caso G: duración compatible suma evidencia y una duración incompatible penaliza", () => {
+  const close = scoreFile(
+    { filePath: "/Library/Adele - Hello Karaoke.mp4", durationSeconds: 296 },
+    "Hello",
+    "Adele",
+    "English",
+    { durationSeconds: 300 }
+  );
+  const far = scoreFile(
+    { filePath: "/Library/Adele - Hello Karaoke.mp4", durationSeconds: 180 },
+    "Hello",
+    "Adele",
+    "English",
+    { durationSeconds: 300 }
+  );
+  assert.equal(close.durationCompared, true);
+  assert.ok(close.score > far.score);
 });

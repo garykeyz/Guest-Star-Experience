@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ROOT } from "./config.mjs";
 
@@ -36,6 +36,8 @@ function cleanRecovery(value = {}) {
     originalPosition:
       Number.isInteger(position) && position >= 0 ? position : null,
     markedAt: String(value.markedAt || "").trim(),
+    returnedAt: String(value.returnedAt || "").trim(),
+    returnedRevision: Math.max(0, Number(value.returnedRevision) || 0),
     entry: cleanEntry(value.entry || {})
   };
 }
@@ -227,7 +229,23 @@ export function normalizeQueueState(value = {}) {
     playerStemJobs: Array.isArray(value.playerStemJobs)
       ? value.playerStemJobs.map(cleanPlayerStemJob).filter(Boolean)
       : [],
-    requestFileLinks
+    requestFileLinks,
+    operationsState: value.operationsState && typeof value.operationsState === 'object' ? {
+      context: String(value.operationsState.context || ''),
+      closedAt: String(value.operationsState.closedAt || ''),
+      pendingPromotions: Math.max(0,Math.min(3,Number(value.operationsState.pendingPromotions)||0)),
+      reserveIds: Array.isArray(value.operationsState.reserveIds) ? [...new Set(value.operationsState.reserveIds.map(String))].slice(0, 3) : [],
+      clearedIds: Array.isArray(value.operationsState.clearedIds) ? [...new Set(value.operationsState.clearedIds.map(String))] : [],
+      pendingClearIds: cleanPlayerOrder(value.operationsState.pendingClearIds),
+      clearedVdjEntries: Array.isArray(value.operationsState.clearedVdjEntries) ? value.operationsState.clearedVdjEntries.map(entry=>({id:String(entry.id || ''),filePath:String(entry.filePath || ''),singer:String(entry.singer || '')})).filter(entry=>entry.filePath) : [],
+      loadedVdjHead: value.operationsState.loadedVdjHead && typeof value.operationsState.loadedVdjHead==='object' ? {scope:String(value.operationsState.loadedVdjHead.scope||''),filePath:String(value.operationsState.loadedVdjHead.filePath||''),singer:String(value.operationsState.loadedVdjHead.singer||''),virtualDJItemId:String(value.operationsState.loadedVdjHead.virtualDJItemId||'')} : null,
+      finishCleanup: value.operationsState.finishCleanup && typeof value.operationsState.finishCleanup==='object' ? {scope:String(value.operationsState.finishCleanup.scope||''),consumed:cleanPlayerOrder(value.operationsState.finishCleanup.consumed),done:value.operationsState.finishCleanup.done===true,result:value.operationsState.finishCleanup.result||null} : null,
+    queueIdentities: Array.isArray(value.operationsState.queueIdentities) ? value.operationsState.queueIdentities.slice(0,2000).map(entry => ({
+        index: Math.max(0,Number(entry.index)||0), virtualDJItemId:String(entry.virtualDJItemId||''),
+        filePath:String(entry.filePath||''),singer:String(entry.singer||''),song:String(entry.song||''),artist:String(entry.artist||''),durationSeconds:Math.max(0,Number(entry.durationSeconds)||0)
+      })).filter(entry=>entry.virtualDJItemId&&(entry.filePath||entry.song)) : [],
+      externalHistory: Array.isArray(value.operationsState.externalHistory) ? value.operationsState.externalHistory : []
+    } : {context:'', closedAt:'', reserveIds:[], clearedIds:[], externalHistory:[]}
   };
 }
 
@@ -239,6 +257,8 @@ export async function loadQueueState() {
     return normalizeQueueState();
   }
 }
+
+let queueWrites = Promise.resolve();
 
 export async function saveQueueState(
   activityId,
@@ -255,7 +275,8 @@ export async function saveQueueState(
   playerQueueVisibility = {},
   requestFileLinks = [],
   lastSelectedMode = operatingMode,
-  activeActivityState = {}
+  activeActivityState = {},
+  operationsState = {}
 ) {
   const clean = normalizeQueueState({
     activityId,
@@ -267,6 +288,7 @@ export async function saveQueueState(
     operatingMode,
     lastSelectedMode,
     activeActivityState,
+    operationsState,
     playerRequests: Array.from(playerRequests || []),
     playerOrder: Array.from(playerOrder || []),
     playerQueueVisibility,
@@ -274,13 +296,15 @@ export async function saveQueueState(
     playerStemJobs: Array.from(playerStemJobs || []),
     requestFileLinks: Array.from(requestFileLinks || [])
   });
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
-  try {
-    await chmod(QUEUE_STATE_PATH, 0o600);
-  } catch {
-    // Windows y algunos discos montados no implementan permisos POSIX.
-  }
+  const content = `${JSON.stringify(clean, null, 2)}\n`;
+  const write = async () => {
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(`${QUEUE_STATE_PATH}.tmp`, content, { encoding: 'utf8', mode: 0o600 });
+    await rename(`${QUEUE_STATE_PATH}.tmp`, QUEUE_STATE_PATH);
+    try { await chmod(QUEUE_STATE_PATH, 0o600); } catch { /* Some disks do not support POSIX modes. */ }
+  };
+  queueWrites = queueWrites.then(write, write);
+  await queueWrites;
   return clean;
 }
 

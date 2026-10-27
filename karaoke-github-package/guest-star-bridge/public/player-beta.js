@@ -1,3 +1,7 @@
+import {installLyricEditor} from './lyric-editor.js';
+import {normalizeBrandImageUrl} from './shared/brand-image-url.js';
+import {createStereoMeter} from './stereo-meter.js';
+import {buildActivitySummary} from './shared/activity-coverage.js';
 import { brandingTheme, renderBrandLogos } from './shared/branding-theme.js';
 import { setLocalQrImage } from './qr-ui.js';
 import { currentHostActivityAccess } from './host-activity-access.js';
@@ -5,9 +9,11 @@ import { starScreenLifecycle, starScreenPreferences, starScreenRequestData } fro
 import { initCurrentSongBackground } from './player-visuals.js';
 import { attachPlayerQueueUI, reorderPlayerQueue, queueStemLabel } from './player-queue-ui.js';
 import { deterministicFunnyMessage } from './shared/guest-locales.js';
+import { createTimedLyricsController, lyricsForSelection, timedLyricsLines, renderTimedWords } from './shared/timed-lyrics.js';
+import {decodeWaveform,paintWaveform} from './shared/waveform-view.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
-const activeRequest = (item) => !item?.outcome &&
+const activeRequest = (item) => !item?.outcome && !item?.standby && !item?.cleared &&
   !['Ya cantó', 'Saltado', 'Retirada del Player'].includes(String(item?.status || ''));
 const terminalRequest = (item) => Boolean(item?.outcome) || ['Ya cantó', 'Saltado', 'Retirada del Player'].includes(String(item?.status || ''));
 const escapeHtml = (value) => String(value || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -34,6 +40,11 @@ export function playerProgressState(currentTime, duration) {
     percent: (current / total) * 100,
     disabled: false
   };
+}
+
+export function normalizeVocalGuideDefault(value) {
+  const level = Number(value);
+  return Number.isFinite(level) ? Math.max(0, Math.min(0.2, level)) : 0;
 }
 
 export function playerStemMix({ stemsReady = false, vocalLevel = 0 } = {}) {
@@ -394,7 +405,7 @@ export function reconnectPlayerAudioGraph(graph) {
     graph.source, graph.instrumentalSource, graph.vocalsSource, graph.backgroundSource,
     graph.normalGain, graph.instrumentalGain, graph.vocalsGain, graph.backgroundGain, graph.backgroundFade,
     graph.bus, graph.karaokeAutoGain, graph.backgroundAutoGain, graph.pitch, graph.low, graph.mid, graph.high,
-    graph.analyser, graph.master, graph.karaokeFade, graph.outputMix, graph.finalMaster, graph.outputAnalyser
+    graph.analyser, graph.master, graph.karaokeFade, graph.outputMix, graph.finalMaster, graph.outputAnalyser, graph.outputSplitter, ...(graph.outputAnalysers || [])
   ];
   nodes.forEach(disconnectNode);
   graph.source.connect(graph.normalGain);
@@ -419,26 +430,15 @@ export function reconnectPlayerAudioGraph(graph) {
   if (graph.outputMix) graph.outputMix.connect(graph.finalMaster || graph.destination);
   if (graph.finalMaster) graph.finalMaster.connect(graph.outputAnalyser || graph.destination);
   if (graph.outputAnalyser) graph.outputAnalyser.connect(graph.destination);
+  if (graph.outputSplitter && graph.outputAnalysers) {
+    graph.finalMaster.connect(graph.outputSplitter);
+    graph.outputAnalysers.forEach((node,index)=>graph.outputSplitter.connect(node,index));
+  }
   graph.connected = true;
   return graph;
 }
 
-export function normalizeBrandImageUrl(value) {
-  const source = String(value || '').trim();
-  if (!source) return '';
-  try {
-    const url = new URL(source);
-    if (!['drive.google.com', 'drive.usercontent.google.com', 'docs.google.com'].includes(url.hostname.toLowerCase())) return source;
-    const match = url.pathname.match(/\/(?:file\/)?d\/([a-zA-Z0-9_-]{10,})(?:\/|$)/);
-    const id = match?.[1] || url.searchParams.get('id') || '';
-    if (!/^[a-zA-Z0-9_-]{10,}$/.test(id)) return source;
-    const thumbnail = new URL('https://drive.google.com/thumbnail');
-    thumbnail.searchParams.set('id', id); thumbnail.searchParams.set('sz', 'w1000');
-    const resourceKey = url.searchParams.get('resourcekey');
-    if (resourceKey) thumbnail.searchParams.set('resourcekey', resourceKey);
-    return thumbnail.toString();
-  } catch { return source; }
-}
+export {normalizeBrandImageUrl} from './shared/brand-image-url.js';
 
 function formatDuration(value, compact = false) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
@@ -474,6 +474,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   const channel = new BroadcastChannel('guest-star-player');
   let state = null;
   let currentId = '';
+  let lyricsSelectionKey = '';
+  let lyricsVisible = false;
+  let playerWaveform=null,playerWaveformGeneration=0;
+  const lyricsController = createTimedLyricsController({
+    request: api,
+    onChange: () => { renderLyrics(); publish(); },
+    schedule: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+    unschedule: (timer) => window.clearTimeout(timer)
+  });
   let activePlaybackSession = null;
   let order = [];
   let queueVisibility = {};
@@ -578,10 +587,16 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let karaokeSeekGeneration = 0;
   let karaokeSeekInFlight = false;
   let karaokeQueuedSeek = null;
+  let karaokeSeekActiveRequest = null;
+  let nativeKaraokeCommittedSeekRevision = 0;
   let stemIntegrationTask = null;
   let masterPercent = 100;
   let outputMeterTimer = 0;
-  const outputMeterSamples = new Float32Array(512);
+  const outputMeterSamples = [new Float32Array(512),new Float32Array(512)];
+  const masterBlock = $('#playerMasterVolume').closest('.player-master-output');
+  document.getElementById('masterDock').append(masterBlock);
+  const stereoRoot=document.createElement('div');masterBlock.prepend(stereoRoot);
+  const stereoMeter=createStereoMeter(stereoRoot,{label:'Guest Star Master L/R'});
   let outputMeterSource = { rmsL: 0, rmsR: 0, peakL: 0, peakR: 0, receivedAt: -Infinity };
   const outputMeterVisual = { rms: 0, peak: 0, held: 0, until: 0, paintedAt: 0 };
   let karaokeScrubPreview = null;
@@ -610,11 +625,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   const nativeVideoSyncMetrics = { stateEvents: 0, hardSeeks: 0, rateWrites: 0, maxDriftSeconds: 0 };
   let nativeWaveformHistory = [];
   let lockedStemEngine = '';
+  let currentStemSelection = '';
+  let stemTransportTail = Promise.resolve();
+  let lastStemFailure = '';
   const automaticStemRequestIds = new Set();
   let directSearchTimer = 0;
   let directSearchGeneration = 0;
   let directSearchTracks = [];
   let runtimeSaveTimer = 0;
+  let leavingWorkspace = false;
   let runtimeRestoreActivityId = '';
   let pendingResumeTime = null;
   let lastRuntimeCheckpoint = 0;
@@ -632,7 +651,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         low: Math.max(-12, Math.min(12, Number(saved.low) || 0)),
         mid: Math.max(-12, Math.min(12, Number(saved.mid) || 0)),
         high: Math.max(-12, Math.min(12, Number(saved.high) || 0)),
-        vocalLevel: Math.max(0, Math.min(1, Number(saved.vocalLevel) || 0)),
+        separationEnabled: true,
+        vocalLevel: 0,
         backgroundTempoPercent: normalizeTempoPercent(saved.backgroundTempoPercent),
         backgroundTempoLocked: saved.backgroundTempoLocked === true
       };
@@ -655,19 +675,29 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const pending = nativeAudioRequests.get(String(detail.requestId || ''));
     if (!pending) return;
     nativeAudioRequests.delete(String(detail.requestId || ''));
-    window.clearTimeout(pending.timeout);
+    pending.cleanup();
     if (detail.ok === false) pending.reject(new Error(detail.error || 'La operación nativa de audio falló.'));
     else pending.resolve(detail);
   });
 
-  function nativeAudioRequest(action, payload = {}) {
+  function nativeAudioRequest(action, payload = {}, { signal } = {}) {
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      // A video may need an AVFoundation extraction pass before it becomes an
-      // audio file.  Keep the request alive long enough for a local, large
-      // karaoke asset without silently falling back to WebKit audio.
-      const timeout = window.setTimeout(() => { nativeAudioRequests.delete(requestId); reject(new Error('El bridge nativo de audio no respondió.')); }, 60000);
-      nativeAudioRequests.set(requestId, { resolve, reject, timeout });
+      const cleanup = () => { window.clearTimeout(timeout); signal?.removeEventListener('abort', abort); };
+      const abort = () => {
+        nativeAudioRequests.delete(requestId);
+        cleanup();
+        reject(new DOMException('Operación sustituida.', 'AbortError'));
+      };
+      // File preparation can take longer than an IPC turn; a superseded seek
+      // releases its reply/timer immediately instead of retaining old requests.
+      const timeout = window.setTimeout(() => {
+        nativeAudioRequests.delete(requestId); cleanup();
+        reject(new Error('El bridge nativo de audio no respondió.'));
+      }, 60000);
+      if (signal?.aborted) { abort(); return; }
+      signal?.addEventListener('abort', abort, { once: true });
+      nativeAudioRequests.set(requestId, { resolve, reject, timeout, cleanup });
       window.webkit.messageHandlers.guestStarNative.postMessage({ action, requestId, ...payload });
     });
   }
@@ -714,9 +744,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     }, 1200);
   }
 
+  const playerSourceChoices=new Map();
   function karaokeMediaSource(requestId = currentId) {
     const id = String(requestId || '');
-    return id ? `/api/player/media/${encodeURIComponent(id)}` : '';
+    return id ? (playerSourceChoices.get(id)?.sourceUrl || `/api/player/media/${encodeURIComponent(id)}`) : '';
   }
 
   function karaokeStemSource(requestId, kind, engine = lockedStemEngine) {
@@ -726,6 +757,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     return `/api/player/stems/${encodeURIComponent(id)}/${kind}?engine=${encodeURIComponent(selectedEngine)}`;
   }
 
+  function selectedStemEngine() { return state?.stemEngine?.selectedStemEngine || state?.config?.selectedStemEngine || 'spleeter'; }
+  function playbackStemEngine() { return currentStemSelection || state?.stemEngine?.activeEngine || selectedStemEngine(); }
+  function vocalRTStreamingEnabled() { return usingNativeAudio() && playbackStemEngine() === 'gsvocalrt' && state?.stemEngine?.vocalRT?.enabled === true; }
+
   function nativeKaraokeSources(requestId = currentId) {
     const id = String(requestId || '');
     const original = absoluteMediaURL(karaokeMediaSource(id));
@@ -733,9 +768,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     // resolved URL while the replacement is loading, which made its audio
     // become the native track for a newly selected row.
     if (!original) return [];
-    if (!lockedStemSourceReady(id)) return [{ slot: 'original', url: original, gain: 1 }];
-    if (current()?.stem?.format === 'gsx') return stemSourcesForEngine(id, lockedStemEngine);
+    if (vocalRTStreamingEnabled() || !lockedStemSourceReady(id)) return [{ slot: 'original', url: original, gain: 1 }];
+    if (current()?.stem?.format === 'gsx') return [{ slot: 'original', url: original, gain: 1 }, ...stemSourcesForEngine(id, lockedStemEngine)];
     return [
+      { slot: 'original', url: original, gain: 1 },
       { slot: 'instrumental', url: absoluteMediaURL(karaokeStemSource(id, 'instrumental')), gain: 1 },
       // The source is always loaded at unity.  vocalLevel is sent separately
       // to the native vocals mixer, so a slider move changes only that real
@@ -827,7 +863,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const position = Number(deck?.position);
     if (!usingNativeAudio()) return Math.max(0, Number(media.currentTime) || 0);
     const optimistic = nativeKaraokeClockOverride;
-    if (optimistic && performance.now() - optimistic.receivedAt < 1250) {
+    if (optimistic && (performance.now() - optimistic.receivedAt < 1250 || Number(deck?.seekRevision || 0) < nativeKaraokeCommittedSeekRevision)) {
       const rate = Math.max(50, Math.min(150, Number(optimistic.tempoPercent) || tempoPercent)) / 100;
       const elapsed = optimistic.playing ? Math.max(0, (performance.now() - optimistic.receivedAt) / 1000) : 0;
       const duration = Number(deck?.duration) || Number(media.duration);
@@ -859,6 +895,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       pitchSemitones: deck === 'karaoke' ? keySemitones : 0,
       volume: deck === 'karaoke' ? nativeKaraokeGain : nativeBackgroundGain,
       autoGainDb: deck === 'karaoke' ? karaokeAutoGainDb : backgroundAutoGainDb,
+      stemEngine: deck === 'karaoke' ? playbackStemEngine() : undefined,
+      separationEnabled: deck === 'karaoke' ? audioSettings.separationEnabled !== false : undefined,
       vocalLevel: deck === 'karaoke' ? audioSettings.vocalLevel : 0,
       eq: deck === 'karaoke'
         ? { low: audioSettings.low, mid: audioSettings.mid, high: audioSettings.high }
@@ -866,9 +904,32 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     };
   }
 
-  async function loadNativeDeck(deck, sources, position = 0) {
+  function loadNativeDeck(deck, sources, position = 0) {
+    if (deck !== 'karaoke') return loadNativeDeckForStems(deck, sources, position);
+    const requestId = currentId, generation = karaokeMediaGeneration;
+    const previous = stemTransportTail;
+    const task = previous.catch(() => {}).then(() => {
+      if (requestId !== currentId || generation !== karaokeMediaGeneration) throw new Error('La carga de stems fue sustituida.');
+      return loadNativeDeckForStems(deck, sources, position);
+    });
+    stemTransportTail = task.catch(async error => {
+      await api('/api/player/stem-engine/transport', { method: 'POST', body: JSON.stringify({ action: 'release' }) });
+    });
+    return task;
+  }
+
+  async function loadNativeDeckForStems(deck, sources, position = 0) {
     if (!usingNativeAudio()) return null;
     silenceWebKitAudio();
+    if (deck === 'karaoke') {
+      const requestId = currentId, generation = karaokeMediaGeneration;
+      const acquired = await api('/api/player/stem-engine/transport', { method: 'POST', body: JSON.stringify({ action: 'acquire' }) });
+      if (requestId !== currentId || generation !== karaokeMediaGeneration) throw new Error('La selección de stems cambió.');
+      currentStemSelection = acquired.engine;
+      lockedStemEngine = ''; lockedStemRequestId = '';
+      lockStemSourceForCurrent();
+      sources = nativeKaraokeSources(requestId);
+    }
     const result = await nativeAudioRequest('nativeAudioLoad', {
       ...nativeDeckConfiguration(deck, position),
       sources
@@ -935,7 +996,17 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function pauseNativeDeck(deck) { nativeAudioCommand('nativeAudioPause', { deck }); }
-  function stopNativeDeck(deck) { nativeAudioCommand('nativeAudioStop', { deck }); }
+  function stopNativeDeck(deck) {
+    if (deck !== 'karaoke' || !usingNativeAudio()) { nativeAudioCommand('nativeAudioStop', { deck }); return; }
+    // Release the streaming lease only after native Stop has destroyed its worker.
+    // Before the first native load there is no deck/worker to acknowledge.
+    const stopped = nativeDeckState('karaoke') || karaokeNativeLoadPromise
+      ? nativeAudioRequest('nativeAudioStop', { deck })
+      : Promise.resolve(nativeAudioCommand('nativeAudioStop', { deck }));
+    stemTransportTail = stemTransportTail.catch(() => {}).then(() => stopped).then(() =>
+      api('/api/player/stem-engine/transport', { method: 'POST', body: JSON.stringify({ action: 'release' }) })
+    ).catch(error => recordAudio('STEM_RELEASE_FAILED', 'WARNING', { message: error.message }));
+  }
   function seekNativeDeck(deck, position) { nativeAudioCommand('nativeAudioSeek', { deck, position: Math.max(0, Number(position) || 0) }); }
 
   async function pauseNativeKaraokeDeck(position) {
@@ -950,6 +1021,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function cancelPendingKaraokeSeek() {
     karaokeSeekGeneration += 1;
+    karaokeSeekActiveRequest?.controller.abort();
+    karaokeSeekActiveRequest = null;
+    karaokeSeekInFlight = false;
     karaokeQueuedSeek = null;
     karaokeScrubPreview = null;
     karaokeSeekPointerActive = false;
@@ -957,46 +1031,64 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function seekKaraokeTransport(position) {
     const target = Math.max(0, Math.min(karaokeClockDuration() || Infinity, Number(position) || 0));
+    const active = karaokeSeekActiveRequest;
+    if (active && active.target === target && active.mediaGeneration === karaokeMediaGeneration && active.requestId === currentId) return active.promise;
     const generation = ++karaokeSeekGeneration;
-    karaokeQueuedSeek = { target, generation, mediaGeneration: karaokeMediaGeneration, requestId: currentId };
+    active?.controller.abort();
+    const request = { target, generation, mediaGeneration: karaokeMediaGeneration, requestId: currentId, controller: new AbortController() };
+    karaokeSeekActiveRequest = request;
+    karaokeQueuedSeek = request;
     karaokeScrubPreview = target;
-    // Decode the requested frame immediately; native IPC runs concurrently.
-    // Only one native seek and one latest pending seek can exist at a time.
-    setVisualClockPosition(media, target);
-    if (usingNativeAudio()) setNativeKaraokeTransportSnapshot(target, karaokeTransportIsPlaying());
-    visualTransportRevision += 1;
-    renderNow();
-    publish();
-    return flushKaraokeSeek();
+    request.promise = flushKaraokeSeek();
+    return request.promise;
+  }
+
+  async function waitForLatestKaraokeSeek() {
+    // Play must not re-schedule the old paused clock while the final seek is
+    // preparing. A replacement owns a new promise; keep following that owner.
+    while (karaokeSeekActiveRequest) {
+      const pending = karaokeSeekActiveRequest;
+      await pending.promise;
+      if (karaokeSeekActiveRequest === pending) return;
+    }
   }
 
   async function flushKaraokeSeek() {
-    if (karaokeSeekInFlight || !karaokeQueuedSeek) return;
-    karaokeSeekInFlight = true;
+    if (!karaokeQueuedSeek) return;
     const request = karaokeQueuedSeek;
     karaokeQueuedSeek = null;
-    const { target, generation, mediaGeneration, requestId } = request;
+    const { target, generation, mediaGeneration, requestId, controller } = request;
+    karaokeSeekInFlight = generation;
     const requestedAt = performance.now();
     recordAudio('SEEK_REQUEST', 'INFO', { position: target, trackId: requestId });
     try {
-      const result = usingNativeAudio() && nativeKaraokeDeckRequestId === requestId && nativeDeckIsLoaded('karaoke')
-        ? await nativeAudioRequest('nativeAudioSeek', { deck: 'karaoke', position: target, revision: generation })
+      const nativeSeek = usingNativeAudio() && nativeKaraokeDeckRequestId === requestId;
+      const result = nativeSeek
+        ? await nativeAudioRequest('nativeAudioSeek', { deck: 'karaoke', position: target, revision: generation }, { signal: controller.signal })
         : { position: target };
       if (generation !== karaokeSeekGeneration || mediaGeneration !== karaokeMediaGeneration || requestId !== currentId) return;
       const committed = Number(result.position ?? target);
+      if (nativeSeek) nativeKaraokeCommittedSeekRevision = generation;
+      // Only committed transport reaches the video follower and Lyrics clock.
+      // Pointer preview never starts a decode pipeline or announces an old seek.
+      setVisualClockPosition(media, committed);
       if (usingNativeAudio()) setNativeKaraokeTransportSnapshot(committed, karaokeTransportIsPlaying());
-      karaokeScrubPreview = null;
+      karaokePendingStartPosition = committed;
+      visualTransportRevision += 1;
+      if (!karaokeSeekPointerActive) karaokeScrubPreview = null;
       recordAudio('SEEK_COMPLETE', 'INFO', { position: committed, roundTripMs: Math.round(performance.now() - requestedAt), trackId: requestId });
       renderNow(); publish(); scheduleRuntimeSave(0);
     } catch (error) {
-      if (generation === karaokeSeekGeneration && requestId === currentId) {
+      if (generation === karaokeSeekGeneration && requestId === currentId && error.name !== 'AbortError') {
         karaokeScrubPreview = null;
         renderNow();
         showNotice(`No se pudo cambiar la posición: ${error.message}`, true);
       }
     } finally {
-      karaokeSeekInFlight = false;
-      if (karaokeQueuedSeek) void flushKaraokeSeek();
+      if (karaokeSeekInFlight === generation) {
+        karaokeSeekInFlight = false;
+        karaokeSeekActiveRequest = null;
+      }
     }
   }
 
@@ -1004,8 +1096,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const now = performance.now();
     if (now - nativeTransportPublishAt < 250) return;
     nativeTransportPublishAt = now;
-    renderNow();
-    publish();
+    renderNow({ clockOnly: true });
+    // The native state handler already publishes the lightweight player-clock.
+    // Do not serialize the complete Lyrics/queue snapshot on every clock tick.
     if (Date.now() - lastRuntimeCheckpoint >= 10000) {
       lastRuntimeCheckpoint = Date.now();
       scheduleRuntimeSave(500);
@@ -1016,8 +1109,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     nativeAudioState = event.detail || null;
     nativeAudioStateReceivedAt = performance.now();
     if (!nativeAudioState) return;
+    const own = (nativeAudioState.decks || []).find(deck => deck.deck === 'karaoke')?.vocalRT;
+    if (Number(own?.failures) > 0 && lastStemFailure !== 'GS-VocalRT') { lastStemFailure = 'GS-VocalRT'; showNotice('No se pudo iniciar GS-VocalRT. Se conserva el audio original.', true); }
     // End the optimistic handoff when the corresponding rendered clock arrives.
-    if (!karaokeSeekInFlight && !karaokeQueuedSeek) nativeKaraokeClockOverride = null;
+    if (!karaokeSeekInFlight && !karaokeQueuedSeek && Number(nativeDeckState('karaoke')?.seekRevision || 0) >= nativeKaraokeCommittedSeekRevision) nativeKaraokeClockOverride = null;
     if (nativeAudioState.error) {
       recordAudio('NATIVE_AUDIO_ENGINE_ERROR', 'ERROR', { message: nativeAudioState.error });
       diagnostics?.setHealth?.('Audio', 'ERROR', { engine: 'AVAudioEngine', message: nativeAudioState.error });
@@ -1027,10 +1122,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       publish();
       return;
     }
-    const healthSignature = `${nativeAudioState.running ? 'OK' : 'RECOVERING'}:${nativeAudioState.timePitchNodeCount || 0}`;
+    const engineHealth = nativeAudioState.running ? 'OK' : nativeAudioState.idleSuspended ? 'IDLE' : 'RECOVERING';
+    const healthSignature = `${engineHealth}:${nativeAudioState.timePitchNodeCount || 0}`;
     if (healthSignature !== nativeAudioHealthSignature) {
       nativeAudioHealthSignature = healthSignature;
-      diagnostics?.setHealth?.('Audio', nativeAudioState.running ? 'OK' : 'RECOVERING', {
+      diagnostics?.setHealth?.('Audio', engineHealth, {
         engine: nativeAudioState.engine || 'AVAudioEngine',
         timePitchNodes: nativeAudioState.timePitchNodeCount || 0
       });
@@ -1039,6 +1135,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     for (const deck of Array.isArray(nativeAudioState.decks) ? nativeAudioState.decks : []) {
       const element = deck.deck === 'karaoke' ? media : deck.deck === 'background' ? backgroundAudio : null;
       if (!element || !Number.isFinite(Number(deck.position))) continue;
+      if (deck.deck === 'karaoke' && Number(deck.seekRevision || 0) < nativeKaraokeCommittedSeekRevision) continue;
       if (deck.deck === 'karaoke') {
         nativeWaveformHistory.push(Math.max(0, Math.min(1, Number(deck.meter) || 0)));
         if (nativeWaveformHistory.length > 96) nativeWaveformHistory = nativeWaveformHistory.slice(-96);
@@ -1060,6 +1157,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         } else visualRate(element, deck.tempoPercent);
         continue;
       }
+      renderLyricsClock();
       if (!karaokeSeekInFlight && !karaokeQueuedSeek) channel.postMessage({
         type: 'player-clock', currentId, currentTime: karaokeClockPosition(),
         playing: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
@@ -1170,7 +1268,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const master = $('#playerMasterVolume');
     if (master && document.activeElement !== master) { master.value = String(masterPercent); paintRange(master); }
     const masterValue = $('#playerMasterVolumeValue');
-    if (masterValue) masterValue.textContent = `${masterPercent}% · ${masterPercent ? `${appliedMasterDb.toFixed(1)} dB` : '−∞'}`;
+    if (masterValue) masterValue.textContent = masterPercent ? `${appliedMasterDb.toFixed(1)} dB` : '−∞';
     const karaokeReadout = $('#playerKaraokeAutoGain');
     if (karaokeReadout) karaokeReadout.textContent = currentLoudness?.pending ? 'AUTO pendiente' : `AUTO ${karaokeAutoGainDb >= 0 ? '+' : ''}${karaokeAutoGainDb.toFixed(1)} dB`;
     const backgroundReadout = $('#playerBackgroundAutoGain');
@@ -1220,39 +1318,17 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function paintOutputMeter() {
     const now = performance.now();
-    let rms = 0; let peak = 0;
+    let sample = {rmsL:0,rmsR:0,peakL:0,peakR:0};
     if (usingNativeAudio()) {
-      if (now - outputMeterSource.receivedAt < 250) {
-        rms = Math.max(outputMeterSource.rmsL, outputMeterSource.rmsR);
-        peak = Math.max(outputMeterSource.peakL, outputMeterSource.peakR);
-      }
-    } else if (mediaAudioGraph?.outputAnalyser && audioContext?.state === 'running') {
-      mediaAudioGraph.outputAnalyser.getFloatTimeDomainData(outputMeterSamples);
-      let energy = 0;
-      for (let i = 0; i < outputMeterSamples.length; i += 1) {
-        const sample = outputMeterSamples[i]; energy += sample * sample; peak = Math.max(peak, Math.abs(sample));
-      }
-      rms = Math.sqrt(energy / outputMeterSamples.length);
+      if(now-outputMeterSource.receivedAt<250)sample=outputMeterSource;
+    } else if(mediaAudioGraph?.outputAnalysers && audioContext?.state==='running') {
+      mediaAudioGraph.outputAnalysers.forEach((analyser,index)=>{
+        const data=outputMeterSamples[index];analyser.getFloatTimeDomainData(data);let energy=0,peak=0;
+        for(const value of data){energy+=value*value;peak=Math.max(peak,Math.abs(value));}
+        const side=index?'R':'L';sample[`rms${side}`]=Math.sqrt(energy/data.length);sample[`peak${side}`]=peak;
+      });
     }
-    const elapsed = Math.min(1, (now - outputMeterVisual.paintedAt) / 1000);
-    outputMeterVisual.paintedAt = now;
-    outputMeterVisual.rms = Math.max(rms, outputMeterVisual.rms * Math.exp(-elapsed * 9));
-    outputMeterVisual.peak = peak;
-    if (peak >= outputMeterVisual.held || now >= outputMeterVisual.until) {
-      outputMeterVisual.held = peak; outputMeterVisual.until = now + 800;
-    }
-    const percent = (value) => Math.max(0, Math.min(100, (linearToDbfs(value) + 60) / 60 * 100));
-    const fill = $('#playerOutputMeterFill');
-    const marker = $('#playerOutputMeterPeak');
-    const value = $('#playerOutputMeterValue');
-    if (fill) fill.style.transform = `scaleX(${percent(outputMeterVisual.rms) / 100})`;
-    if (marker) marker.style.left = `${percent(outputMeterVisual.held)}%`;
-    if (value) value.textContent = peak > 0.001 ? `${linearToDbfs(peak).toFixed(1)} dBFS` : '−∞ dBFS';
-    const meter = $('#playerOutputMeter');
-    if (meter) {
-      meter.dataset.level = peak > 10 ** (-3 / 20) ? 'red' : peak >= 10 ** (-12 / 20) ? 'yellow' : 'green';
-      meter.setAttribute('aria-valuenow', String(Math.round(linearToDbfs(peak))));
-    }
+    stereoMeter.update(sample);
   }
 
   window.addEventListener('gueststar:native-output-meter', (event) => {
@@ -1300,10 +1376,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     setAudioParam(mediaAudioGraph.low.gain, audioSettings.low);
     setAudioParam(mediaAudioGraph.mid.gain, audioSettings.mid);
     setAudioParam(mediaAudioGraph.high.gain, audioSettings.high);
-    const stemsReady = lockedStemSourceReady();
-    setAudioParam(mediaAudioGraph.normalGain.gain, stemsReady ? 0 : 1, 0.025);
-    setAudioParam(mediaAudioGraph.instrumentalGain.gain, stemsReady ? 1 : 0, 0.025);
-    setAudioParam(mediaAudioGraph.vocalsGain.gain, stemsReady ? audioSettings.vocalLevel : 0, 0.025);
+    const mix = playerStemMix({ stemsReady: lockedStemSourceReady() && audioSettings.separationEnabled !== false, vocalLevel: audioSettings.vocalLevel });
+    setAudioParam(mediaAudioGraph.normalGain.gain, mix.normal, 0.025);
+    setAudioParam(mediaAudioGraph.instrumentalGain.gain, mix.instrumental, 0.025);
+    setAudioParam(mediaAudioGraph.vocalsGain.gain, mix.vocals, 0.025);
     setAudioParam(mediaAudioGraph.master?.gain, mediaTargetVolume, 0.025);
     setAudioParam(mediaAudioGraph.backgroundGain?.gain, backgroundTargetVolume, 0.025);
     setAudioParam(mediaAudioGraph.karaokeAutoGain?.gain, dbToLinear(karaokeAutoGainDb), 0.075);
@@ -1332,7 +1408,26 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const vocalControl = $('#playerVocalControl');
     const stemsReady = lockedStemSourceReady();
     if (vocalControl) vocalControl.classList.remove('hidden');
-    if (vocal) vocal.disabled = !stemsReady;
+    if (vocal) vocal.disabled = !stemsReady && !vocalRTStreamingEnabled();
+    {
+      const separationHost = vocalControl?.parentNode;
+      if (separationHost && !document.getElementById("gsVocalSeparation")) {
+        const label = document.createElement("label");
+        const control = document.createElement("input");
+        control.type = "checkbox"; control.id = "gsVocalSeparation";
+        control.checked = audioSettings.separationEnabled !== false;
+        label.style.cssText = "display:inline-flex;align-items:center;gap:6px;margin:0;font-size:12px";
+        control.style.cssText = "display:inline-block;width:16px;height:16px;margin:0";
+        label.append(control, document.createTextNode(" Separación vocal"));
+        separationHost.insertBefore(label, vocalControl);
+        control.addEventListener("change", () => {
+          audioSettings.separationEnabled = control.checked;
+          persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
+        });
+      }
+    }
+    const separationControl = $("#gsVocalSeparation");
+    if (separationControl) separationControl.checked = audioSettings.separationEnabled !== false;
     renderPlaybackProcessing();
   }
 
@@ -1475,6 +1570,12 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     sceneRevision += 1;
   }
 
+  function scheduleTransportFade(frame) {
+    let settled=false,animation=0;
+    const timer=setTimeout(()=>{if(settled)return;settled=true;cancelAnimationFrame(animation);frame(performance.now());},32);
+    animation=requestAnimationFrame(time=>{if(settled)return;settled=true;clearTimeout(timer);frame(time);});
+  }
+
   function fadeVolume(element, target, duration = FADE_MS, valid = () => true) {
     const fadeGeneration = element === backgroundAudio ? ++backgroundFadeGeneration : 0;
     const isValid = () => (element !== backgroundAudio || fadeGeneration === backgroundFadeGeneration) && valid();
@@ -1500,10 +1601,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
         writeVolume(origin + (fadeDestination - origin) * eased);
-        if (progress < 1) requestAnimationFrame(frame);
+        if (progress < 1) scheduleTransportFade(frame);
         else resolve(true);
       };
-      requestAnimationFrame(frame);
+      scheduleTransportFade(frame);
     });
   }
 
@@ -1539,7 +1640,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     });
   }
 
-  const activityId = () => String(state?.account?.current?.activityId || '');
+  const activityId = () => String(state?.entryContext?.sessionType==='free' ? state.entryContext.sessionId : state?.account?.current?.activityId || '');
   const storageKey = () => `guest-star:player-order:${activityId() || 'none'}`;
   const visibilityStorageKey = () => `guest-star:player-star-visibility:${activityId() || 'none'}`;
   const starScreenLanguageKey = () => `guest-star:star-screen-language:${activityId() || 'none'}`;
@@ -1630,7 +1731,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   async function persistRuntime() {
     window.clearTimeout(runtimeSaveTimer);
     runtimeSaveTimer = 0;
-    if (!playerPreparationReady()) return;
+    if (leavingWorkspace || !playerPreparationReady()) return;
     try {
       await api('/api/player/runtime', {
         method: 'POST',
@@ -1643,6 +1744,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function scheduleRuntimeSave(delay = 1200) {
+    if (leavingWorkspace) return;
     window.clearTimeout(runtimeSaveTimer);
     runtimeSaveTimer = window.setTimeout(() => void persistRuntime(), delay);
   }
@@ -1673,9 +1775,12 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const share = state?.tenant?.share || {};
     const access = currentHostActivityAccess(state, { superhostInHostView: opened });
     const nextSchedule = (state?.tenant?.schedules || [])
-      .filter(item => item.status === 'active' && item.activityId === activity.activityId && item.venueId === venue.venueId && Date.parse(item.scheduledStartAt) > Date.now())
+      .filter(item => item.hotelId === hotel.hotelId && item.status === 'active' && item.activityId === activity.activityId && item.venueId === venue.venueId && Date.parse(item.scheduledStartAt) > Date.now())
       .sort((a, b) => Date.parse(a.scheduledStartAt) - Date.parse(b.scheduledStartAt))[0];
     return {
+      hotelId: hotel.hotelId, activityId: activity.activityId, venueId: venue.venueId,
+      finalLanguage: state?.config?.uiLanguage || "en",
+      finalExperience: state?.tenant?.finalExperience || null,
       hotelName: hotel.name || 'Guest Star',
       hotelTimeZone: hotel.timezone || 'UTC',
       venueName: venue.name || 'Venue',
@@ -1751,7 +1856,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       starScreenLanguage,
       funnyMessage,
       activityLifecycle: lifecycle,
-      finalExperience: lifecycle.mode === 'post-activity' ? { nextActivity: info.nextOccurrence } : null,
+      finalExperience: lifecycle.mode === 'post-activity' ? info.finalExperience : null,
       dedication: dedicationTarget && dedicationVisibleId === String(dedicationTarget.id)
         ? { requestId: String(dedicationTarget.id), text: String(dedicationTarget.comment || '').trim() }
         : null,
@@ -1767,9 +1872,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         artist: request.artist,
         localAvailable: request.localAvailable,
         source: request.sourceType === 'player_local' ? 'player_local' : 'request',
-        isVideo: isVideoName(exactFile)
+        isVideo: (playerSourceChoices.get(currentId)?.mediaType||playerSourceChoices.get(currentId)?.candidates?.find(c=>c.token===playerSourceChoices.get(currentId)?.selectedToken)?.mediaType)==='video'||(!playerSourceChoices.has(currentId)&&isVideoName(exactFile))
       } : null,
       mediaUrl: sourceForCurrent(),
+      lyrics: {
+        ...lyricsForSelection(lyricsController.value, lyricsSelectionKey, currentLyricsSelectionKey()),
+        currentId,
+        mediaUrl: sourceForCurrent(),
+        enabled: lyricsVisible
+      },
       visualTransportRevision,
       playing: stageMode === 'karaoke' && karaokeTransportIsPlaying(),
       currentTime: karaokeClockPosition(),
@@ -1817,24 +1928,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function playerSummary() {
-    const items = state?.requests || [];
-    const active = items.filter(activeRequest);
-    const completed = items.filter((item) => item.outcome === 'completed' || String(item.status) === 'Ya cantó');
-    const skipped = items.filter((item) => ['skipped', 'removed'].includes(item.outcome) || ['Saltado', 'Retirada del Player'].includes(String(item.status)));
-    const transition = (item) => Number(item.transitionSeconds) || Number(state?.activity?.transitionSeconds) || 0;
-    const track = (item) => (Number(item.durationSeconds) || 240) + transition(item);
-    const plannedSeconds = items.filter((item) => !skipped.includes(item)).reduce((total, item) => total + track(item), 0);
-    const completedSeconds = completed.reduce((total, item) => total + track(item), 0);
-    const queuedSeconds = active.filter((item) => item.localAvailable).reduce((total, item) => total + track(item), 0);
-    const targetSeconds = Math.max(0, Number(state?.activitySummary?.targetSeconds) || Number(state?.activity?.activityHours) * 3600 || 0);
-    const started = Date.parse(String(state?.activity?.activityStartedAt || ''));
-    const finished = Date.parse(String(state?.activity?.activityFinishedAt || ''));
-    const elapsedSeconds = Number.isFinite(started) ? Math.max(0, Math.floor(((Number.isFinite(finished) ? finished : Date.now()) - started) / 1000)) : 0;
-    const confirmedSeconds = completedSeconds + queuedSeconds;
-    const gapSeconds = Math.max(0, targetSeconds - confirmedSeconds);
-    const overrunSeconds = Math.max(0, confirmedSeconds - targetSeconds);
-    const coveragePercent = targetSeconds ? Math.round((confirmedSeconds / targetSeconds) * 100) : 0;
-    return { active, completed, skipped, plannedSeconds, confirmedSeconds, targetSeconds, elapsedSeconds, gapSeconds, overrunSeconds, coveragePercent, eventEndsAt: Number.isFinite(started) && targetSeconds ? new Date(started + targetSeconds * 1000) : null };
+    const items=state?.requests || [], active=items.filter(activeRequest), completed=items.filter(i=>i.outcome==='completed'||i.status==='Ya cantó'), skipped=items.filter(terminalRequest).filter(i=>!completed.includes(i));
+    const summary=buildActivitySummary(state?.activity,items,Date.now(),active.filter(i=>i.localAvailable && (!i.stem || i.stem.status==='ready')),{currentPlayback:{currentRequestId:currentId,currentTimeSeconds:Number(media.currentTime)||0},reserveIds:state?.operations?.reserveIds});
+    return {...summary,active,completed,skipped,eventEndsAt:summary.eventEndsAt ? new Date(summary.eventEndsAt) : null};
   }
 
   function renderBranding() {
@@ -1866,7 +1962,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const can = (permission) => permissions.all === true || permissions[permission] === true;
 
     $('#playerModeBadge').textContent = selectedMode === 'player' ? 'PLAYER INTERNO' : selectedMode === 'bridge' ? 'BRIDGE · VIRTUALDJ' : 'MODO SIN ELEGIR';
-    $('#playerModeLock').textContent = !configured ? 'Selecciona una actividad para continuar' : locked ? 'Bloqueado durante esta actividad' : 'Se puede cambiar antes de iniciar';
+    $('#playerModeLock').textContent = !configured ? 'Selecciona una actividad para continuar' : locked ? 'Bloqueado durante esta actividad' : activityRunning() ? 'Superhost · cambio permitido durante la actividad' : 'Se puede cambiar antes de iniciar';
     $('.player-mode-lock').classList.toggle('locked', locked);
     $('#playerWorkspace').classList.toggle('player-activity-unconfigured', !configured);
     $('#playerLibraryMetric').textContent = `${Number(state?.library?.count) || 0} pistas`;
@@ -1893,7 +1989,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     if (summary.overrunSeconds) { coverageCard.classList.add('over'); $('#playerCoverageTime').textContent = `Excede ${formatDuration(summary.overrunSeconds)}`; }
     else if (!summary.gapSeconds && summary.targetSeconds) { coverageCard.classList.add('ok'); $('#playerCoverageTime').textContent = 'Tiempo cubierto'; }
     else { coverageCard.classList.add('warning'); $('#playerCoverageTime').textContent = `${formatDuration(summary.gapSeconds)} pendiente`; }
-    $('#playerCoverageDetail').textContent = `${summary.coveragePercent}% cubierto por cantadas y fila reproducible`;
+    $('#playerCoverageDetail').textContent = `${summary.coveragePercent}% cubierto por tiempo transcurrido y contenido futuro`;
     $('#playerEventEndTime').textContent = summary.eventEndsAt ? clockTime(summary.eventEndsAt) : 'Sin iniciar';
     $('#playerEventEndDetail').textContent = summary.eventEndsAt ? `Organiza la rotación para terminar a las ${clockTime(summary.eventEndsAt)}.` : 'Configura la actividad y selecciona el modo de reproducción.';
     $('#playerTenantPath').textContent = state?.tenant?.hotel ? `${info.hotelName} • ${info.venueName}` : 'SELECCIONA UNA ACTIVIDAD';
@@ -1926,9 +2022,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const stemStatus = $('#playerStemQuickStatus');
     const stemReady = stemTarget?.stem?.ready === true;
     const stemBusy = stemTarget?.stem && !stemReady && stemTarget.stem.status !== 'failed';
-    if (!state?.stemEngine?.available) stemStatus.textContent = state?.stemEngine?.message || 'Motores IA no disponibles';
+    if (vocalRTStreamingEnabled()) stemStatus.textContent = 'Separación vocal en vivo · acompañamiento + voz 0–100%';
+    else if (!state?.stemEngine?.available) stemStatus.textContent = state?.stemEngine?.message || 'Motores IA no disponibles';
     else if (!stemTarget) stemStatus.textContent = 'Selecciona una pista';
     else if (!stemTarget.localAvailable) stemStatus.textContent = 'Falta el archivo local';
+    else if (playerSourceChoices.get(String(stemTarget.id))?.stemsCompatible===false) stemStatus.textContent='Fuente del Player · reproducción del audio original';
     else if (stemReady && stemTarget.stem?.improving) stemStatus.textContent = `AUTO · ${stemTarget.stem.engine || 'Spleeter'} listo · mejorando calidad…`;
     else if (stemReady) stemStatus.textContent = `${String(stemTarget.stem?.engine || 'IA').toUpperCase()} listo · instrumental + voz`;
     else if (stemBusy) stemStatus.textContent = `${Math.round(Number(stemTarget.stem.progress) || 0)}% · ${stemTarget.stem.phase || 'Preparando rápido…'}`;
@@ -1998,7 +2096,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function renderCompleted() {
-    const items = (state?.requests || []).filter(terminalRequest);
+    const items = (state?.requests || []).filter(i=>!i.cleared && terminalRequest(i));
     $('#playerCompletedCount').textContent = String(items.length);
     $('#playerHistoryBadge').textContent = String(items.length);
     $('#playerCompleted').innerHTML = items.length
@@ -2093,9 +2191,102 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     finally { item.youtubeSearching = false; renderPlanB(); }
   }
 
-  function renderNow() {
+  function currentLyricsFile() {
     const item = current();
-    currentSongBackground.render();
+    return item?.queuedFilePath || item?.filePath || item?.matches?.find(match => match.exact)?.filePath || '';
+  }
+
+  function currentLyricsSelectionKey() {
+    return current() ? `${currentId}|${sourceForCurrent()}|${currentLyricsFile()}` : '';
+  }
+
+  function syncLyricsSelection() {
+    const item = current();
+    const selectionKey = currentLyricsSelectionKey();
+    if (selectionKey === lyricsSelectionKey) return;
+    lyricsSelectionKey = selectionKey;
+    lyricsVisible = Boolean(item);
+    lyricsController.select(item ? { id: currentId, source: selectionKey, autoAnalyze: lyricsVisible } : null);
+    playerWaveform=null;
+    const waveformCanvas=$('#playerWaveform');
+    waveformCanvas?.getContext('2d')?.clearRect(0,0,waveformCanvas.width,waveformCanvas.height);
+    const waveformToken=++playerWaveformGeneration,trackId=currentId;
+    if(item)void (async()=>{for(let attempt=0;attempt<180&&waveformToken===playerWaveformGeneration;attempt++){
+      try{const result=await api(`/api/player/waveform/${encodeURIComponent(trackId)}`);if(waveformToken!==playerWaveformGeneration)return;if(result.status==='ready'){playerWaveform=decodeWaveform(result);startWaveform();return;}}catch{return;}
+      await new Promise(done=>window.setTimeout(done,500));
+    }})();
+  }
+
+  function renderLyrics() {
+    const panel = $('#playerLyrics');
+    if (!panel) return;
+    const lyrics = lyricsController.value;
+    const selected = Boolean(current());
+    const busy = ['preparing', 'transcribing','aligning'].includes(lyrics.status);
+    const ready = lyrics.status === 'ready' && lyrics.segments.length > 0;
+    const labels = {
+      idle: 'Sin letras preparadas',needs_alignment:'Texto existente de otra grabación · revisar y alinear', preparing: 'Cargando letras…', transcribing: 'Analizando voz…', aligning:'Alineando letra contra el audio…',
+      ready: lyrics.estimated ? 'Letras estimadas · revisa el resultado' : 'Letras listas',
+      unavailable: 'No hay letras disponibles para esta pista',
+      error: 'No se pudieron preparar las letras', cancelled: 'Análisis cancelado'
+    };
+    $('#playerLyricsStatus').textContent = selected ? labels[lyrics.status] || labels.idle : 'Selecciona una pista';
+    const progress = $('#playerLyricsProgress');
+    progress.textContent = busy && lyrics.processedSeconds > 0 ? `Audio analizado: ${formatDuration(lyrics.processedSeconds, true)}` : '';
+    const analyze = $('#playerLyricsAnalyze');
+    analyze.disabled = !selected || busy;
+    analyze.textContent = lyrics.status==='needs_alignment'?'Ver / Alinear texto existente':['error', 'unavailable', 'cancelled', 'ready'].includes(lyrics.status) ? 'Reintentar' : 'Analizar letras';
+    $('#playerLyricsCancel').hidden = !busy || !selected;
+    const download = $('#playerLyricsDownload');
+    download.hidden = !ready;
+    if (ready) download.href = `/api/player/lyrics/${encodeURIComponent(currentId)}/lrc`;
+    else download.removeAttribute('href');
+    const visible = $('#playerLyricsVisible');
+    visible.disabled = !selected;
+    visible.checked = lyricsVisible;
+    renderLyricsClock();
+  }
+
+  function renderLyricsClock(){
+    const lyrics=lyricsController.value,ready=lyrics.status==='ready'&&lyrics.segments.length>0;
+    const lines=timedLyricsLines(lyrics.segments,karaokeScrubPreview??karaokeClockPosition());
+    renderTimedWords($('#playerLyricsCurrent'),ready?lines:{current:'',words:[]});
+    $('#playerLyricsPrevious').textContent=ready?lines.previous:'';$('#playerLyricsNext').textContent=ready?lines.next:'';
+    $('#playerLyricsPreview').hidden=!ready;
+  }
+  media.addEventListener('timeupdate',renderLyricsClock);
+  $('#playerLyricsAnalyze')?.addEventListener('click', () => {
+    if(lyricsController.value.status==='needs_alignment'){$('#playerLyricsEdit').click();return;}
+    lyricsVisible = true;
+    void lyricsController.start({ force: lyricsController.value.status !== 'idle' });
+  });
+  $('#playerLyricsCancel')?.addEventListener('click', () => { void lyricsController.cancel(); });
+  $('#playerLyricsVisible')?.addEventListener('change', (event) => {
+    lyricsVisible = event.target.checked;
+    publish();
+  });
+
+  function renderPlayerSources(){
+    const select=$('#playerSourceSelect'),choice=playerSourceChoices.get(currentId);select.replaceChildren();
+    for(const candidate of choice?.candidates||[]){const option=document.createElement('option');option.value=candidate.token;option.textContent=`${candidate.mediaType==='audio'?'AUDIO':'VIDEO'} · ${candidate.label}`;option.selected=candidate.token===choice.selectedToken;select.append(option);}
+    select.disabled=!choice?.candidates?.length;
+  }
+  $('#playerSourceSelect').addEventListener('change',async event=>{
+    const id=currentId;const wasPlaying=karaokeTransportIsPlaying(),position=karaokeClockPosition(),savedTempo=tempoPercent,savedKey=keySemitones,savedLock=karaokeTempoLocked;
+    try{const next=await api(`/api/player/source/${encodeURIComponent(id)}`,{method:'POST',body:JSON.stringify({token:event.target.value})});
+      if(id!==currentId)return;const choice=playerSourceChoices.get(id);playerSourceChoices.set(id,{...choice,...next,selectedToken:event.target.value});
+      releaseActivePlayback(id);pendingResumeTime=position;await loadRequest(id,false);tempoPercent=savedTempo;keySemitones=savedKey;karaokeTempoLocked=savedLock;applyAudioSettings({synchronizePlayback:true});if(wasPlaying)await startKaraoke();renderNow();publish();
+    }catch(error){showNotice(error.message,true);renderPlayerSources();}
+  });
+  installLyricEditor({getId:()=>currentId,getLyrics:()=>lyricsController.value,getTime:()=>karaokeScrubPreview??karaokeClockPosition(),isPlaying:()=>karaokeTransportIsPlaying(),onTogglePlay:()=>karaokeTransportIsPlaying()?pauseKaraoke():startKaraoke(),onSeek:position=>seekKaraokeTransport(position),onReanalyze:()=>lyricsController.start({force:true}),request:api,onSaved:next=>{lyricsController.replace(next);renderLyrics();publish();}});
+
+  function renderNow({ clockOnly = false } = {}) {
+    const item = current();
+    if (!clockOnly) {
+      syncLyricsSelection();
+      renderLyrics();
+      currentSongBackground.render();
+    }
     const progress = playerProgressState(karaokeScrubPreview ?? karaokeClockPosition(), karaokeClockDuration());
     $('#playerNowSong').textContent = item?.song || 'Selecciona una canción';
     $('#playerNowSinger').textContent = item ? guest(item) : 'Star Lineup y la música de fondo permanecen activos hasta pulsar Reproducir.';
@@ -2244,17 +2435,23 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     karaokePendingStartPosition = Math.max(0, Number(restoredPosition) || 0);
     setNativeKaraokeTransportIntent(false, karaokePendingStartPosition);
     nativeKaraokeDeckRequestId = '';
+    nativeKaraokeCommittedSeekRevision = 0;
     karaokeNativeLoadPromise = null;
     // nativeAudioStop also invalidates an in-flight AVFoundation extraction in
     // the host.  Without it, a former row could finish downloading after this
     // row had replaced the video and install the wrong audio into the deck.
     if (usingNativeAudio()) stopNativeDeck('karaoke');
     if (stageMode === 'karaoke' && currentId && currentId !== requestId) await enterLobby({ clearMedia: true });
-    if (mediaGeneration !== karaokeMediaGeneration) return;
+    if (mediaGeneration !== karaokeMediaGeneration || state?.operations?.clearedIds?.includes(requestId)) return;
     analysisGeneration += 1;
     analysisControllers.get('karaoke')?.abort();
     currentId = requestId;
     karaokeMediaRequestId = requestId;
+    // Each new source starts with the configured low guide, independent of
+    // the previous source's live slider position. No inference is requested.
+    audioSettings.vocalLevel = normalizeVocalGuideDefault(state?.config?.defaultVocalGuideLevel);
+    audioSettings.separationEnabled = true;
+    renderAudioSettings();
     tempoPercent = 100; karaokeTempoLocked = false; keySemitones = 0;
     visualTransportRevision += 1;
     nativeKaraokeWasPlaying = false;
@@ -2266,6 +2463,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     applyAutoGain();
     setScene('lobby');
     if (!item.localAvailable) { render(); showNotice('Esta solicitud todavía no tiene un archivo local exacto.', true); return; }
+    try{const choice=await api(`/api/player/source/${encodeURIComponent(requestId)}?prepare=1`);if(mediaGeneration!==karaokeMediaGeneration)return;playerSourceChoices.set(requestId,{...choice,sourceUrl:choice.sourceUrl||playerSourceChoices.get(requestId)?.sourceUrl||`/api/player/media/${encodeURIComponent(requestId)}`});renderPlayerSources();}catch{}
     const source = karaokeMediaSource(requestId);
     lockActivePlayback(item, source);
     const expected = new URL(source, location.origin).href;
@@ -2279,13 +2477,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       setVisualClockPosition(media, karaokePendingStartPosition);
     }
     clearStemMedia();
+    currentStemSelection = "";
+    lastStemFailure = "";
     if (usingNativeAudio()) {
       lockStemSourceForCurrent();
       // Preparing a selected local file does not wait for AI or stop background.
       // Play can use this cached deck instead of downloading/exporting again.
-      const preload = loadNativeDeck('karaoke', nativeKaraokeSources(requestId), karaokePendingStartPosition)
-        .then(() => {
-          if (mediaGeneration === karaokeMediaGeneration && requestId === currentId) nativeKaraokeDeckRequestId = requestId;
+      const preloadPosition = karaokePendingStartPosition;
+      const preload = loadNativeDeck('karaoke', nativeKaraokeSources(requestId), preloadPosition)
+        .then(async () => {
+          if (mediaGeneration !== karaokeMediaGeneration || requestId !== currentId) return;
+          nativeKaraokeDeckRequestId = requestId;
+          // A user can release the position control while this source is still
+          // preparing. Apply that latest staged destination once, after load.
+          if (Math.abs(karaokePendingStartPosition - preloadPosition) > 0.001) await seekKaraokeTransport(karaokePendingStartPosition);
         })
         .catch(error => recordAudio('NATIVE_PRELOAD_DEFERRED', 'WARNING', { trackId: requestId, message: error.message }));
       karaokeNativeLoadPromise = preload;
@@ -2303,6 +2508,30 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     let context = null;
     try {
       signal.throwIfAborted();
+      const localSource = new URL(source, location.href);
+      const nativeSource = localSource.origin === location.origin
+        ? localSource.pathname.match(/^\/api\/player\/(background\/)?media\/([^/]+)$/) : null;
+      if (usingNativeAudio() && nativeSource) {
+        // The native installation already bundles FFmpeg. Decode only the
+        // analysis window there, instead of expanding the whole song in WebKit.
+        const kind = nativeSource[1] ? 'background' : 'karaoke';
+        const sample = await fetch(`/api/player/analysis/${kind}/${nativeSource[2]}`, { signal });
+        if (sample.ok) {
+          const bytes = await sample.arrayBuffer();
+          signal.throwIfAborted();
+          const sampleRate = Number(sample.headers.get('X-Guest-Star-Sample-Rate'));
+          if (sampleRate !== 11025 || !bytes.byteLength || bytes.byteLength % 4 || bytes.byteLength > 11025 * 120 * 4) throw new Error('La muestra de análisis local no es válida.');
+          // Preserve TBPM precedence without downloading the rest of the file.
+          const tags = await fetch(source, { signal, headers: { Range: 'bytes=0-1048590' } });
+          const taggedBpm = tags.status === 206 ? embeddedBpm(await tags.arrayBuffer()) : 0;
+          if (tags.status !== 206) await tags.body?.cancel();
+          const result = await analyzeOffThread(new Float32Array(bytes), sampleRate, signal);
+          return taggedBpm ? { ...result, bpm: taggedBpm, bpmSource: 'metadata' } : { ...result, bpmSource: 'audio' };
+        }
+        // Retain the existing browser decoder for installations without FFmpeg.
+        if (![404, 503].includes(sample.status)) throw new Error(`HTTP ${sample.status}`);
+        await sample.body?.cancel();
+      }
       const response = await fetch(source, { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       if (Number(response.headers.get('content-length')) > 96 * 1024 * 1024) throw new Error('Análisis diferido: archivo grande.');
@@ -2453,6 +2682,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         stemElements = [];
         applyAudioSettings({ synchronizePlayback: true });
         recordAudio('STEM_SOURCE_FALLBACK_ORIGINAL', 'WARNING', { engine: failedEngine, message: error.message });
+        showNotice(`No se pudo iniciar ${({ spleeter: 'Spleeter', demucs: 'Demucs', gsvocalrt: 'GS-VocalRT' })[failedEngine] || failedEngine}. Se conserva el audio original.`, true);
         await waitUntilPlayable(media, mediaGeneration, 8000, {
           expectedSource: karaokeMediaSource(requestId),
           isCurrent: isCurrentSelection
@@ -2476,6 +2706,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
           lockedStemEngine = 'original';
           applyAudioSettings({ synchronizePlayback: true });
           recordAudio('NATIVE_STEM_SOURCE_FALLBACK_ORIGINAL', 'WARNING', { engine: failedEngine, message: error.message });
+          showNotice(`No se pudo iniciar ${({ spleeter: 'Spleeter', demucs: 'Demucs', gsvocalrt: 'GS-VocalRT' })[failedEngine] || failedEngine}. Se conserva el audio original.`, true);
           await loadNativeDeck('karaoke', nativeKaraokeSources(requestId), startPosition);
           if (token !== transitionToken || !isCurrentSelection()) {
             stopNativeDeck('karaoke');
@@ -2486,6 +2717,13 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       }
       if (usingNativeAudio() && (!resuming || !nativeDeckAlreadyLoaded)) {
         startPosition = karaokePendingStartPosition;
+      }
+      if (usingNativeAudio()) {
+        await waitForLatestKaraokeSeek();
+        if (token !== transitionToken || !isCurrentSelection()) return;
+        startPosition = nativeDeckAlreadyLoaded && resuming
+          ? karaokeClockPosition()
+          : karaokePendingStartPosition;
       }
       syncStemTimes(true);
       const visualPlayback = usingNativeAudio() ? Promise.resolve() : media.play().catch((error) => {
@@ -2905,12 +3143,14 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     const canvas = $('#playerWaveform');
     const context = canvas?.getContext('2d');
     if (!canvas || !context) return;
+    if(playerWaveform){let lastPaint=-Infinity;const drawTrack=now=>{waveformFrame=requestAnimationFrame(drawTrack);if(!opened||document.hidden||now-lastPaint<50)return;lastPaint=now;paintWaveform(canvas,playerWaveform,{playhead:karaokeScrubPreview??karaokeClockPosition()});};drawTrack(performance.now());return;}
     if (usingNativeAudio()) {
       const drawNative = (now) => {
         waveformFrame = requestAnimationFrame(drawNative);
         const frameTime = Number(now) || performance.now();
         if (!opened || document.hidden || frameTime - nativeWaveformPaintAt < 50) return;
         nativeWaveformPaintAt = frameTime;
+        if(playerWaveform){paintWaveform(canvas,playerWaveform,{playhead:karaokeScrubPreview??karaokeClockPosition()});return;}
         const values = nativeWaveformHistory;
         context.clearRect(0, 0, canvas.width, canvas.height);
         const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
@@ -2932,6 +3172,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       if (!analyser) return;
       waveformFrame = requestAnimationFrame(draw);
       if (!opened || document.hidden) return;
+      if(playerWaveform){paintWaveform(canvas,playerWaveform,{playhead:karaokeScrubPreview??karaokeClockPosition()});return;}
       analyser.getByteFrequencyData(values);
       context.clearRect(0, 0, canvas.width, canvas.height);
       const width = canvas.width / values.length;
@@ -2988,6 +3229,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         outputMix: audioContext.createGain(),
         finalMaster: audioContext.createGain(),
         outputAnalyser: audioContext.createAnalyser(),
+        outputSplitter: audioContext.createChannelSplitter(2),
+        outputAnalysers: [audioContext.createAnalyser(),audioContext.createAnalyser()],
         destination: audioContext.destination
       };
       graph.low = audioContext.createBiquadFilter();
@@ -3005,6 +3248,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       graph.backgroundAutoGain.gain.value = dbToLinear(backgroundAutoGainDb);
       graph.finalMaster.gain.value = masterVolumeGain(masterPercent);
       graph.outputAnalyser.fftSize = 512;
+      graph.outputAnalysers.forEach(node=>{node.fftSize=512;});
       graph.backgroundGain.gain.value = backgroundTargetVolume;
       graph.backgroundFade.gain.value = backgroundAudio.paused ? 0 : 1;
       audioContext.addEventListener('statechange', () => {
@@ -3259,9 +3503,9 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
           if (!isValid()) { resolve(false); return; }
           const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
           setKaraokeVolume(origin + (destination - origin) * (0.5 - Math.cos(Math.PI * progress) / 2));
-          if (progress < 1) requestAnimationFrame(frame); else resolve(true);
+          if (progress < 1) scheduleTransportFade(frame); else resolve(true);
         };
-        requestAnimationFrame(frame);
+        scheduleTransportFade(frame);
       });
     }
     if (mediaAudioGraph) mediaAudioGraph.master.gain.value = mediaTargetVolume;
@@ -3279,10 +3523,10 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
         if (mediaAudioGraph) mediaAudioGraph.karaokeFade.gain.value = origin + (destinationFade - origin) * eased;
         else media.volume = origin + (destinationFade - origin) * eased;
-        if (progress < 1) requestAnimationFrame(frame);
+        if (progress < 1) scheduleTransportFade(frame);
         else resolve(true);
       };
-      requestAnimationFrame(frame);
+      scheduleTransportFade(frame);
     });
   }
 
@@ -3299,7 +3543,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   function readyStemEngine(item = current()) {
     if (item?.stem?.ready !== true) return '';
     return [item.stem.source, item.stem.readyEngine, item.stem.engine, item.stem.lockedSource]
-      .map(value => String(value || '').toLowerCase()).find(value => ['spleeter', 'demucs'].includes(value)) || '';
+      .map(value => String(value || '').toLowerCase()).find(value => value === playbackStemEngine() && ['spleeter', 'demucs'].includes(value)) || '';
   }
 
   function stemSourcesForEngine(requestId, engine) {
@@ -3309,6 +3553,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function integrateReadyStems() {
+    if (vocalRTStreamingEnabled()) return;
     const engine = readyStemEngine();
     if (!currentId || !engine || lockedStemEngine !== 'original' || stemIntegrationTask || transitionBusy) return;
     const requestId = currentId;
@@ -3351,6 +3596,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function lockStemSourceForCurrent() {
+    if (!currentStemSelection) currentStemSelection = state?.stemEngine?.activeEngine || selectedStemEngine();
+    if (vocalRTStreamingEnabled()) { lockedStemEngine = "gsvocalrt"; lockedStemRequestId = currentId; return; }
     const requestId = String(currentId || '');
     if (!requestId) return 'original';
     if (lockedStemEngine && lockedStemRequestId === requestId) return lockedStemEngine;
@@ -3364,7 +3611,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
       item?.stem?.selectedEngine
     ].map((value) => String(value || '').toLowerCase());
     const engine = item?.stem?.ready === true
-      ? candidates.find((value) => ['spleeter', 'demucs'].includes(value)) || ''
+      ? candidates.find((value) => value === playbackStemEngine() && ['spleeter', 'demucs'].includes(value)) || ''
       : '';
     lockedStemEngine = engine || 'original';
     lockedStemRequestId = requestId;
@@ -3391,6 +3638,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   function lockedStemSourceReady(requestId = currentId) {
     return Boolean(
+      !playerSourceChoices.get(String(requestId))?.sourceRevision &&
       ['spleeter', 'demucs'].includes(lockedStemEngine) &&
       lockedStemRequestId === String(requestId || '') &&
       instrumentalAudio.getAttribute('src') &&
@@ -3464,6 +3712,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     media.pause(); media.removeAttribute('src'); media.load();
     stopNativeDeck('karaoke');
     clearStemMedia();
+    currentStemSelection = '';
     lockedStemEngine = '';
     resetPlayerProgress();
     window.setTimeout(() => { intentionalMediaReset = false; }, 0);
@@ -3556,19 +3805,25 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function queueStemsForAvailability(item) {
+    if (selectedStemEngine() === 'gsvocalrt') return;
     const id = String(item?.id || '');
     // Local assignments are queued atomically by the server.  Public requests
     // are scheduled here at selection time, still without waiting for them.
-    if (!id || item?.sourceType === 'player_local' || !item?.localAvailable || !state?.stemEngine?.available || item.stem || automaticStemRequestIds.has(id)) return;
-    automaticStemRequestIds.add(id);
+    if(playerSourceChoices.get(id)?.stemsCompatible===false)return;
+    const requestKey = `${id}:${selectedStemEngine()}`;
+    const existing = item?.stem?.engines?.[selectedStemEngine()];
+    if (!id || !item?.localAvailable || !state?.stemEngine?.available || ['ready', 'queued', 'processing'].includes(existing?.status) || (item?.stem?.source === selectedStemEngine() && item?.stem?.ready) || automaticStemRequestIds.has(requestKey)) return;
+    automaticStemRequestIds.add(requestKey);
     try {
       const result = await api(`/api/player/requests/${encodeURIComponent(id)}/stems`, {
-        method: 'POST', body: JSON.stringify({ engine: 'auto' })
+        method: 'POST', body: '{}' 
       });
       if (result?.stem) item.stem = result.stem;
       recordAudio('STEMS_AUTO_QUEUED', 'INFO', { requestId: id });
       render();
     } catch (error) {
+      automaticStemRequestIds.delete(requestKey);
+      showNotice(error.message, true);
       recordAudio('STEMS_AUTO_QUEUE_FAILED', 'WARNING', { requestId: id, message: error.message });
     }
   }
@@ -3656,11 +3911,34 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   function sync(next) {
+    const previousStemSelection = selectedStemEngine();
     const previousActivity = activityId();
     const wasPreparationReady = playerPreparationReady();
     const wasRunning = activityRunning();
     const previousLibraryScanAt = lastLibraryScanAt;
     state = next;
+    // Administrative queue clearing also retires a locally locked selection.
+    // A normal queue refresh must continue to protect active playback.
+    if (currentId && next?.operations?.clearedIds?.includes(currentId)) {
+      karaokeMediaGeneration += 1;
+      transitionToken += 1;
+      transitionBusy = false;
+      releaseActivePlayback();
+      currentId = '';
+      pendingResumeTime = 0;
+      pendingOrderSignature = '';
+      pendingVisibilitySignature = '';
+      expandedRequestIds.clear();
+      automaticStemRequestIds.clear();
+      dedicationVisibleId = '';
+      setScene('lobby');
+      clearPlayerMedia();
+    }
+    if (next?.stemEngine?.selectedStemEngine !== previousStemSelection) automaticStemRequestIds.clear();
+    if (current()) void queueStemsForAvailability(current());
+    const failure = current()?.stem?.status === 'failed' ? current().stem.error : '';
+    if (failure && failure !== lastStemFailure) showNotice(failure, true);
+    if (!vocalRTStreamingEnabled()) lastStemFailure = failure;
     if (activityId() && activityRunning()) {
       if (mode() === 'player') localStorage.setItem(playerSessionKey(), '1');
       else localStorage.removeItem(playerSessionKey());
@@ -3998,13 +4276,26 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     audioSettings = { ...audioSettings, low: 0, mid: 0, high: 0 };
     persistAudioSettings(); applyAudioSettings(); renderAudioSettings();
   });
+  let vocalGuideFrame = 0;
   $('#playerVocalLevel').addEventListener('input', (event) => {
     audioSettings.vocalLevel = Math.max(0, Math.min(1, Number(event.target.value) || 0));
-    persistAudioSettings();
-    ensureAudioEngine();
-    applyAudioSettings();
-    renderAudioSettings();
+    $('#playerVocalLevelValue').textContent = `${Math.round(audioSettings.vocalLevel * 100)}%`;
+    // Audio control must not depend on animation frames: WKWebView suspends
+    // them while covered or minimized, even though native audio keeps playing.
+    if (usingNativeAudio()) {
+      nativeAudioCommand('nativeAudioVocalGain', { deck: 'karaoke', vocalLevel: audioSettings.vocalLevel });
+    } else {
+      const mix = playerStemMix({ stemsReady: lockedStemSourceReady() && audioSettings.separationEnabled !== false, vocalLevel: audioSettings.vocalLevel });
+      setAudioParam(mediaAudioGraph?.instrumentalGain?.gain, mix.instrumental, 0.012);
+      setAudioParam(mediaAudioGraph?.vocalsGain?.gain, mix.vocals, 0.012);
+    }
+    if (vocalGuideFrame) return;
+    vocalGuideFrame = requestAnimationFrame(() => {
+      vocalGuideFrame = 0;
+      paintRange($('#playerVocalLevel'));
+    });
   });
+  $('#playerVocalLevel').addEventListener('change', persistAudioSettings);
   $('#playerBackgroundToggle').addEventListener('click', async () => {
     if (backgroundTransportIsPlaying()) {
       if (await fadeVolume(backgroundAudio, 0, 420)) {
@@ -4086,18 +4377,20 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     persistAudioSettings(); renderPlaybackProcessing(); publish();
   });
   $('#playerSeek').addEventListener('input', (event) => {
-    const position = Number(event.target.value);
-    karaokeScrubPreview = position;
+    karaokeScrubPreview = Math.max(0, Math.min(karaokeClockDuration() || Infinity, Number(event.target.value) || 0));
     paintRange(event.currentTarget);
-    $('#playerCurrentTime').textContent = formatDuration(position, true);
-    void seekKaraokeTransport(position);
+    $('#playerCurrentTime').textContent = formatDuration(karaokeScrubPreview, true);
+    if(typeof renderLyricsClock==='function')renderLyricsClock();
   });
   $('#playerSeek').addEventListener('pointerdown', () => { karaokeSeekPointerActive = true; });
   $('#playerSeek').addEventListener('pointercancel', () => { karaokeSeekPointerActive = false; karaokeScrubPreview = null; renderNow(); });
-  $('#playerSeek').addEventListener('pointerup', () => { karaokeSeekPointerActive = false; });
-  $('#playerSeek').addEventListener('change', (event) => {
-    if (Math.abs(karaokePendingStartPosition - Number(event.currentTarget.value)) > 0.001) void seekKaraokeTransport(Number(event.currentTarget.value));
-  });
+  function commitKaraokeScrub(event) {
+    karaokeSeekPointerActive = false;
+    const position = Number(event.currentTarget.value);
+    if (karaokeScrubPreview !== null || Math.abs(karaokePendingStartPosition - position) > 0.001) void seekKaraokeTransport(position);
+  }
+  $('#playerSeek').addEventListener('pointerup', commitKaraokeScrub);
+  $('#playerSeek').addEventListener('change', commitKaraokeScrub);
   function bindMediaEvents() {
     media.addEventListener('play', () => {
       void ensureAudioReady('media-play').catch((error) => showNotice(error.message, true));
@@ -4198,10 +4491,11 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     if (opened && !document.hidden && (!usingNativeAudio() || performance.now() - outputMeterSource.receivedAt > 100)) paintOutputMeter();
   }, 50);
   window.addEventListener('pagehide', () => {
+    lyricsController.destroy();
     window.clearInterval(outputMeterTimer);
     for (const controller of analysisControllers.values()) controller.abort();
     window.cancelAnimationFrame(waveformFrame);
-    for (const pending of nativeAudioRequests.values()) window.clearTimeout(pending.timeout);
+    for (const pending of nativeAudioRequests.values()) pending.cleanup();
     nativeAudioRequests.clear();
     channel.close();
   }, { once: true });
@@ -4290,8 +4584,15 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     diagnostics?.record?.({ module: 'Star Screen', severity: result.ok ? result.fallback ? 'WARNING' : 'INFO' : 'ERROR', event: result.ok ? result.reused ? 'STAR_SCREEN_REFOCUSED' : 'STAR_SCREEN_OPENED' : 'STAR_SCREEN_OPEN_FAILED', summary: result.error || (result.reused ? 'Star Screen enfocada' : 'Star Screen abierta'), context: { fallback: result.fallback === true, displayId: result.displayId || '' } });
     diagnostics?.setHealth?.('Star Screen', result.ok ? result.fallback ? 'WARNING' : 'OK' : 'ERROR', { fallback: result.fallback === true });
   });
+  window.addEventListener('gueststar:native-star-screen-closed', (event) => {
+    if (event.detail?.preview === true) return;
+    starScreenExpected = false;
+    starScreenHeartbeatVisible = false;
+    starScreenLastHeartbeatAt = 0;
+    channel.postMessage({ type: 'star-screen-closed' });
+  });
   window.addEventListener('beforeunload', () => {
-    if (!playerPreparationReady()) return;
+    if (leavingWorkspace || !playerPreparationReady()) return;
     void fetch('/api/player/runtime', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4300,6 +4601,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
     });
   });
   window.setInterval(() => { if (opened && state) renderOperations(); }, 1000);
+  window.setInterval(() => { if(opened && !document.hidden && lyricsController.value.status==='ready')renderLyricsClock(); }, 100);
   window.setInterval(() => {
     if (!opened || !state) return;
     const starScreen = playerStarScreenConnection({
@@ -4355,7 +4657,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
         starScreenVideo: starScreenVideoHealth
       },
       stems: {
-        selectedEngine: 'auto',
+        selectedEngine: selectedStemEngine(),
         lockedEngine: lockedStemEngine,
         ready: lockedStemSourceReady(),
         status: current()?.stem?.status || 'none'
@@ -4373,6 +4675,30 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
 
   return {
     open, close, sync, isOpen: () => opened,
+    async leaveWorkspace() {
+      if (leavingWorkspace) return;
+      const runtime = playerPreparationReady() ? runtimePayload() : null;
+      leavingWorkspace = true;
+      window.clearTimeout(runtimeSaveTimer);
+      runtimeSaveTimer = 0;
+      try {
+        await enterLobby({startBackground:false,authorized:true});
+        if (runtime) {
+          const pausedPosition = karaokeClockPosition();
+          if (Number.isFinite(pausedPosition) && pausedPosition > 0) runtime.playback.currentTimeSeconds = pausedPosition;
+          runtime.playback.wasPlaying = false;
+          await api('/api/player/runtime', {method:'POST',body:JSON.stringify(runtime),keepalive:true});
+        }
+        releaseActivePlayback();
+        clearPlayerMedia();
+        clearBackgroundMedia();
+        await stemTransportTail;
+        close({force:true});
+      } catch (error) {
+        leavingWorkspace = false;
+        throw error;
+      }
+    },
     audioOutputCapability, listAudioOutputs, applyAudioOutput,
     diagnosticSnapshot
   };

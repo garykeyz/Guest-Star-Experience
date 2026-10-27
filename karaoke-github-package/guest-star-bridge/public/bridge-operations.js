@@ -1,3 +1,4 @@
+import {createStereoMeter} from './stereo-meter.js';
 import { reorderPlayerQueue } from './player-queue-ui.js';
 
 const paths = {
@@ -71,7 +72,7 @@ export function attachBridgeDrag(list, { move, enabled }) {
   win.addEventListener('keydown', event => { if (event.key === 'Escape') finish(); });
 }
 
-export function createBridgeOperations({ request, getState, refresh, notify, markOutcome, undoOutcome, i18n, doc = document }) {
+export function createBridgeOperations({ request, getState, refresh, notify, markOutcome, undoOutcome, i18n, redrawRequests = () => {}, doc = document }) {
   const root = doc.getElementById('bridgeOperations');
   const list = doc.getElementById('vdjQueueList');
   const drafts = new Map();
@@ -85,7 +86,7 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
   const post = (url, body) => request(url, { method: 'POST', body: JSON.stringify(body) });
   const playback = () => getState()?.virtualDJ?.playback || {};
   const bridgeMode = () => getState()?.operatingMode?.selected === 'bridge';
-  const target = () => playback().decks?.find(deck => deck.deck === (chosenDeck || playback().selectedDeck));
+  const target = () => playback().decks?.find(deck => deck.deck === 1);
   const latestTerminal = () => [...(getState()?.requests || [])].filter(item => item.outcome && item.sourceType !== 'player_local')
     .sort((a, b) => String(b.outcomeMarkedAt || b.timestamp).localeCompare(String(a.outcomeMarkedAt || a.timestamp)))[0];
 
@@ -108,7 +109,9 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
     const item = latestTerminal();
     if (item) undoOutcome(item.id, playback().connected && item.canRestoreToQueue ? (item.undoOriginalPosition ? 'original' : 'end') : 'pending');
   });
-  controls.append(deckSelect, play, restart, skip, returnButton);
+  deckSelect.hidden=true;
+  const deckName=doc.createElement('strong');deckName.textContent='Deck 1';
+  controls.append(deckName, play, restart, skip, returnButton);
   const master = doc.createElement('section'); master.className = 'player-master-output bridge-master-output';
   master.setAttribute('aria-label', 'Volumen master de salida');
   const masterLabel = doc.createElement('label'); masterLabel.htmlFor = 'bridgeMasterVolume';
@@ -117,7 +120,19 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
   slider.setAttribute('aria-label', 'Master Volume VirtualDJ');
   const level = doc.createElement('output'); level.setAttribute('for', slider.id);
   masterLabel.append(masterText, slider, level); master.append(masterLabel);
-  doc.querySelector('.toolbar .compact-controls')?.prepend(master);
+  doc.getElementById('masterDock')?.append(master);
+  const meterRoot = doc.createElement('div');master.prepend(meterRoot);
+  const meter = createStereoMeter(meterRoot,{label:'VirtualDJ Master L/R'});
+  let meterTimer=0, meterStopped=false;
+  async function meterLoop() {
+    if(meterStopped)return;
+    const active=bridgeMode() && playback().connected && !doc.hidden;
+    if(active){try{meter.update(await request('/api/virtualdj/meter'));}catch{meter.update({available:false});}}
+    else meter.update({available:false});
+    meterTimer=setTimeout(meterLoop,active && playback().decks?.some(d=>d.playing) ? 100 : 1000);
+  }
+  void meterLoop();
+  doc.defaultView.addEventListener('pagehide',()=>{meterStopped=true;clearTimeout(meterTimer);meter.stop();},{once:true});
   root.append(status, controls);
 
   async function command(action) {
@@ -126,7 +141,7 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
     if (!deck?.filePath || !playback().connected || !bridgeMode()) return;
     busy = true; render();
     try {
-      const result = await post('/api/virtualdj/control', { action, deck: deck.deck, filePath: deck.filePath, commandId: crypto.randomUUID() });
+      const result = await post('/api/virtualdj/control', { action, deck: deck.deck, filePath: deck.filePath, commandId: crypto.randomUUID(),...(action==='skip'?{origin:'HOST_SKIP_VDJ_NEXT',userInitiated:true}:{}) });
       if (result.outcome?.warning) notify(result.outcome.warning, true);
       await refresh();
     } catch (error) { notify(error.message, true); }
@@ -170,7 +185,7 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
     const requestState = state?.requests?.find(item => item.queuedFilePath === deck?.filePath && item.sourceType !== 'player_local');
     status.textContent = !bridgeMode() ? text('Select Bridge mode · VDJ controls locked', 'Selecciona modo Bridge · controles VDJ bloqueados')
       : !value.connected ? text('VDJ disconnected · Guest Star queue remains editable', 'VDJ desconectado · solicitudes Guest Star administrables')
-        : `VDJ · ${deck?.loaded ? (deck.playing ? text('Playing', 'Reproduciendo') : text('Paused', 'Pausado')) : text('No loaded track', 'Sin canción cargada')} · Guest Star: ${requestState?.outcome || requestState?.status || text('No linked request', 'Sin solicitud vinculada')}`;
+        : `VDJ · ${deck?.title ? `${deck.title}${deck.artist ? ` · ${deck.artist}` : ''} · ` : ''}${deck?.durationSeconds ? `${Math.floor(deck.currentTimeSeconds || 0)} / ${Math.round(deck.durationSeconds)} s · ` : ''}${deck?.loaded ? (deck.playing ? text('Playing', 'Reproduciendo') : text('Paused', 'Pausado')) : text('No loaded track', 'Sin canción cargada')} · Guest Star: ${requestState?.outcome || requestState?.status || text('No linked request', 'Sin solicitud vinculada')}`;
     status.title = value.error || status.textContent;
     root.classList.toggle('is-connected', value.connected === true && bridgeMode());
     const signature = JSON.stringify(value.decks?.map(item => item.deck) || []);
@@ -200,7 +215,7 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
 
   async function move(sourceId, beforeId) {
     if (busy || !bridgeMode()) return;
-    busy = true; render();
+    busy = true; render(); notify(text('Moving the queue item…', 'Moviendo la canción…'));
     try {
       const administrative = sourceId.startsWith('admin:');
       const item = getState().requests.find(value => value.id === sourceId.slice(6));
@@ -215,7 +230,7 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
   }
   attachBridgeDrag(list, { move, enabled: () => bridgeMode() && !busy && playback().connected });
   const requests = doc.getElementById('requests');
-  if (requests) attachBridgeDrag(requests, { move, enabled: () => bridgeMode() && !busy });
+  // Pending cards are intake only; physical queue owns all ordering controls.
 
   function appendRowActions(row, entry, entries) {
     for (const element of row.querySelectorAll('strong, small')) {
@@ -234,9 +249,15 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
     up.disabled = handle.disabled || index <= 0; down.disabled = handle.disabled || index >= ids.length - 1;
     actions.append(handle, up, down);
     const item = getState()?.requests?.find(value => value.id === entry.linkedRequestId);
-    if (item && !item.outcome) {
-      actions.append(actionButton('complete', text('Already sang / Completed', 'Ya cantó / Completada'), () => markOutcome(item.id, 'completed')),
-        actionButton('skip', text('Skipped', 'Omitida'), () => markOutcome(item.id, 'skipped')));
+    const operate=async action=>{
+      if (entry.linkedRequestId && ['completed','skipped','removed'].includes(action)) return markOutcome(entry.linkedRequestId, action);
+      if(busy)return;busy=true;render();notify(text('Applying the queue action…','Aplicando acción en la cola…'));
+      try{const result=await post('/api/virtualdj/queue/action',{sourceId:id,action,commandId:crypto.randomUUID(),...(action==='load'?{origin:'HOST_PREPARE_VDJ_DECK',userInitiated:true}:{})});if(result.warning)notify(result.warning,true);await refresh();}
+      catch(error){notify(error.message,true);}finally{busy=false;render();}
+    };
+    for(const [name,label,action] of [['play',text('Prepare in Deck 1','Preparar en Deck 1'),'load'],['complete',text('Completed','Completada'),'completed'],['skip',text('Skipped','Omitida'),'skipped'],['remove',text('Remove from queue','Eliminar de cola'),'removed']]){
+      const actionControl=actionButton(name,label,()=>operate(action));
+      actionControl.disabled=!bridgeMode()||!playback().connected||busy;actions.append(actionControl);
     }
     row.append(actions);
   }
@@ -255,25 +276,12 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
       const span = doc.createElement('span'); span.textContent = label; button.append(span);
     });
     const actions = doc.createElement('div'); actions.className = 'bridge-request-actions';
-    if (!item.outcome) {
-      const active = getState().requests.filter(value => !value.outcome && value.sourceType !== 'player_local')
-        .sort((a, b) => (a.administrativePosition || Number.MAX_SAFE_INTEGER) - (b.administrativePosition || Number.MAX_SAFE_INTEGER));
-      const index = active.findIndex(value => value.id === item.id);
-      const card = panel.closest('.request-card');
-      card.dataset.bridgeRow = `admin:${item.id}`;
-      const drag = actionButton('drag', text('Drag Guest Star request', 'Arrastrar solicitud Guest Star'), () => {});
-      drag.dataset.bridgeDrag = ''; drag.classList.add('bridge-drag-handle');
-      const up = actionButton('up', text('Move Guest Star request up', 'Mover solicitud Guest Star arriba'), () => move(`admin:${item.id}`, `admin:${active[index - 1]?.id}`));
-      const down = actionButton('down', text('Move Guest Star request down', 'Mover solicitud Guest Star abajo'), () => move(`admin:${item.id}`, active[index + 2] ? `admin:${active[index + 2].id}` : null));
-      up.disabled = index <= 0; down.disabled = index >= active.length - 1;
-      actions.append(drag, up, down);
-    }
     const edit = actionButton('edit', text('Edit visible metadata', 'Editar metadata visible'), () => {
       drafts.set(item.id, { singer: item.singer, song: item.song, artist: item.artist, revision: item.stateRevision });
-      void refresh();
+      redrawRequests();
     });
     actions.append(edit);
-    if (!item.outcome) actions.append(actionButton('remove', text('Remove request · Undo available', 'Eliminar solicitud · permite Deshacer'), () => markOutcome(item.id, 'removed')));
+
     panel.append(actions);
     const draft = drafts.get(item.id); if (!draft) return;
     const form = doc.createElement('form'); form.className = 'bridge-metadata-form';
@@ -308,5 +316,6 @@ export function createBridgeOperations({ request, getState, refresh, notify, mar
     focusSnapshot = null;
   }
   render();
-  return { render, appendRowActions, appendRequestActions, captureFocus, restoreFocus };
+  return { render, appendRowActions, appendRequestActions, captureFocus, restoreFocus,
+    resetActivityContext() { drafts.clear(); focusSnapshot=null; pendingVolume=null; clearTimeout(volumeTimer); } };
 }

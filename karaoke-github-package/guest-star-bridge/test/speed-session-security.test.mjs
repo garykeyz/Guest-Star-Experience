@@ -16,10 +16,19 @@ test("la selección responde antes de ejecutar la sincronización completa", () 
     server.indexOf('pathname === "/api/auth/selection"'),
     server.indexOf('pathname === "/api/config"')
   );
+  const realtime = server.slice(
+    server.indexOf("let cloudLoopRunning"),
+    server.indexOf("server.listen")
+  );
+  assert.match(body, /const data = await selectBridgeActivity\(config, selection\)/);
+  assert.match(body, /applyActivityState\(data\)/);
   assert.match(body, /json\(response, 200, stateView\(\)\)/);
-  assert.match(body, /void syncNow\(\)\.catch/);
-  assert.ok(body.indexOf("json(response") < body.indexOf("void syncNow()"));
-  assert.doesNotMatch(body, /await syncNow\(\)/);
+  assert.match(body, /restartCloudRealtime\(\)/);
+  assert.ok(body.indexOf("json(response") < body.indexOf("restartCloudRealtime()"));
+  assert.doesNotMatch(body, /syncNow\(\)/);
+  assert.match(realtime, /socket\.addEventListener\("message"/);
+  assert.match(realtime, /refreshCloudAfterSignal/);
+  assert.doesNotMatch(realtime, /requestLoop|setInterval\s*\(/);
 });
 
 test("la sesión revocable queda disponible aunque Keychain no responda", () => {
@@ -38,9 +47,9 @@ test("el Superhost administra credenciales permanentes sin revelar hashes", () =
   assert.match(app, /changePasswordButton/);
 });
 
-test("los siete idiomas se configuran por actividad", () => {
+test("los ocho idiomas se configuran por actividad", () => {
   assert.match(superhost, /updateActivityLanguages/);
-  for (const code of ["es", "en", "fr", "it", "de", "ru", "pt"]) {
+  for (const code of ["es", "en", "fr", "it", "de", "ru", "pt", "hi"]) {
     assert.match(superhost, new RegExp(`language_\\$\\{code\\}|\\["${code}"`));
   }
   assert.match(app, /activityLanguageSettings/);

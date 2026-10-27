@@ -4,6 +4,7 @@ import { initLobbyWaveform } from './lobby-waveform.js';
 import { starScreenPreferences, starScreenPresentation, starScreenPresentationSignature } from './star-screen-presentation.js';
 import { installStarScreenCanvas } from './star-screen-canvas.js';
 import { normalizeGuestLanguage, STAR_SCREEN_COPY } from './shared/guest-locales.js';
+import { lyricsForSnapshot, lyricsPlaybackTime, renderTimedWords, timedLyricsLines } from './shared/timed-lyrics.js';
 
 const $ = (selector) => document.querySelector(selector);
 const channel = new BroadcastChannel('guest-star-player');
@@ -111,13 +112,22 @@ function normalizeBrandImageUrl(value) {
 }
 
 function expectedPlaybackTime(next) {
-  const base = Math.max(0, Number(next?.currentTime) || 0);
-  if (!next?.playing) return base;
-  const publishedAt = Math.max(0, Number(next?.publishedAt) || 0);
-  const elapsed = publishedAt ? Math.max(0, (Date.now() - publishedAt) / 1000) : 0;
-  const duration = Math.max(0, Number(next?.duration) || 0);
-  const position = base + elapsed * nativeTempoRate(next);
-  return duration ? Math.min(duration, position) : position;
+  return lyricsPlaybackTime(next);
+}
+
+function renderLyrics(next) {
+  const panel = $('#starScreenLyrics');
+  const segments = lyricsForSnapshot(next);
+  const lines = timedLyricsLines(segments, expectedPlaybackTime(next));
+  if (panel.hidden !== !lines.displayCurrent) panel.hidden = !lines.displayCurrent;
+  const current = $('#starScreenLyricsCurrent');
+  const upcoming = $('#starScreenLyricsNext');
+  renderTimedWords(current,lines);
+  const previous=$('#starScreenLyricsPrevious');if(previous && previous.textContent!==lines.previous)previous.textContent=lines.previous;
+  if (upcoming.textContent !== lines.next) upcoming.textContent = lines.next;
+  const note = $('#starScreenLyricsEstimated');
+  note.hidden = next?.lyrics?.estimated !== true;
+  note.textContent = next?.starScreenLanguage === 'en' ? 'Estimated lyrics' : 'Letras estimadas';
 }
 
 function syncVideo(next) {
@@ -228,25 +238,32 @@ function renderPresentation(next) {
   const language = normalizeGuestLanguage(next.starScreenLanguage, 'es') === 'en' ? 'en' : 'es';
   const copy = STAR_SCREEN_COPY[language] || STAR_SCREEN_COPY.es;
   document.documentElement.lang = language;
-  const finale = next.activityLifecycle?.mode === 'post-activity';
+  const finalState = next.finalExperience;
+  const finale = next.activityLifecycle?.mode === 'post-activity' && finalState?.finished === true &&
+    ['hotelId','activityId','venueId'].every(key => next[key] && next[key] === finalState[key]);
   document.body.classList.toggle('star-screen-finale-active', finale);
   $('#starScreenWelcome').hidden = finale;
   $('#starScreenFinale').hidden = !finale;
-  $('#starScreenFinaleTitle').textContent = copy.finalTitle;
-  $('#starScreenFinaleMessage').textContent = copy.finalMessage;
-  $('#starScreenNextActivityLabel').textContent = copy.returns;
+  const finalLanguage = normalizeGuestLanguage(next.starScreenLanguage, 'es');
+  const finalCopy = finalLanguage === 'fr' ? { finalTitle: 'MERCI D’AVOIR ÉTÉ AVEC NOUS', finalMessage: 'À la prochaine.', returns: 'NOUS REVIENDRONS' } : copy;
+  $('#starScreenFinaleTitle').textContent = finalCopy.finalTitle;
+  $('#starScreenFinaleMessage').textContent = finalState?.message || finalCopy.finalMessage;
+  $('#starScreenNextActivityLabel').textContent = finalCopy.returns;
   const nextActivity = finale ? next.finalExperience?.nextActivity : null;
   const nextDate = Date.parse(nextActivity?.scheduledStartAt || '');
-  const showNext = Boolean(nextActivity && Number.isFinite(nextDate) && nextDate > Date.now());
+  const showNext = Boolean(nextActivity && ['hotelId','activityId','venueId'].every(key => nextActivity[key] === next[key]) && Number.isFinite(nextDate) && nextDate > Date.now());
   $('#starScreenNextActivity').hidden = !showNext;
+  // The installed canvas stylesheet gives this article display:grid.
+  // An explicit display value prevents that rule from overriding hidden.
+  $('#starScreenNextActivity').style.display = showNext ? '' : 'none';
   if (showNext) {
     let formatted;
     try {
-      formatted = new Intl.DateTimeFormat(language === 'en' ? 'en-US' : 'es-DO', {
+      formatted = new Intl.DateTimeFormat(finalLanguage === 'fr' ? 'fr-FR' : language === 'en' ? 'en-US' : 'es-DO', {
         timeZone: next.hotelTimeZone || 'UTC', weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'
       }).format(nextDate);
     } catch {
-      formatted = new Intl.DateTimeFormat(language === 'en' ? 'en-US' : 'es-DO', {
+      formatted = new Intl.DateTimeFormat(finalLanguage === 'fr' ? 'fr-FR' : language === 'en' ? 'en-US' : 'es-DO', {
         weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'
       }).format(nextDate);
     }
@@ -332,6 +349,7 @@ function render(next) {
     renderPresentation(next);
   }
   syncVideo(next);
+  renderLyrics(next);
 }
 
 function sendVideoHealth() {
@@ -370,6 +388,11 @@ function sendHeartbeat() {
 }
 
 channel.addEventListener('message', (event) => {
+  if (event.data?.type === 'star-screen-closed' && preview) {
+    displayPeerSeenAt = 0;
+    if (lastState) syncVideo(lastState);
+    return;
+  }
   if (event.data?.type === 'star-screen-heartbeat' && preview && event.data.preview === false) {
     if (event.data.visible === false && event.data.instanceId === displayPeerId) displayPeerSeenAt = 0;
     else if (event.data.visible !== false) { displayPeerId = event.data.instanceId; displayPeerSeenAt = Date.now(); }
@@ -380,6 +403,7 @@ channel.addEventListener('message', (event) => {
     if (!lastState || String(clock.currentId) !== String(lastState.currentId) || Number(clock.publishedAt) < lastPublishedAt) return;
     // Transport-only snapshots do not rebuild logos, QR, theme or canvas.
     lastState = { ...lastState, currentTime: clock.currentTime, playing: clock.playing, tempoPercent: clock.tempoPercent, publishedAt: clock.publishedAt };
+    renderLyrics(lastState);
     if (!document.hidden) syncVideo(lastState);
     return;
   }
@@ -401,7 +425,12 @@ channel.addEventListener('message', (event) => {
   }
   render(event.data);
 });
-try { render(JSON.parse(localStorage.getItem('guest-star:player-state') || 'null')); } catch { /* Waiting for Player. */ }
+try {
+  const cached = JSON.parse(localStorage.getItem('guest-star:player-state') || 'null');
+  // This cache is shared across activity changes. A finale must wait for the
+  // live payload carrying backend-validated hotel/activity/venue identifiers.
+  if (cached) render({ ...cached, finalExperience: null });
+} catch { /* Waiting for Player. */ }
 window.setInterval(renderAccessCountdown, 1000);
 channel.postMessage({ type: 'request-state' });
 sendHeartbeat();
@@ -420,5 +449,6 @@ video.addEventListener('seeked', () => {
   if (lastState && pendingVideoTransportKey) syncVideo(lastState);
 });
 window.setInterval(() => { if (lastState?.playing && !document.hidden) syncVideo(lastState); }, 100);
+window.setInterval(() => { if (lastState && !document.hidden) renderLyrics(lastState); }, 100);
 window.setInterval(sendHeartbeat, 2000);
 window.setInterval(sendVideoHealth, 2000);
