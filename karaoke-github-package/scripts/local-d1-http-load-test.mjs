@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { createHmac } from "node:crypto";
+import { readFile, mkdtemp, rm, cp, readdir } from "node:fs/promises";
+import { verifyLocalRequestDelivery } from "./request-delivery-local-fixture.mjs";
 import os, { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 // The managed test container blocks libuv's interface enumeration. Miniflare
 // only needs a loopback address for its internal workerd process.
@@ -15,19 +18,30 @@ os.networkInterfaces = () => ({
 });
 
 const execute = promisify(execFile);
-const packageRoot = resolve(new URL("..", import.meta.url).pathname);
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const wrangler = resolve(packageRoot, "node_modules/.bin/wrangler");
 const publicCode = "moon-palace-4b9a99b9f7a140d4bb86";
 const stamp = "2026-08-29T00:00:00.000Z";
+const sessionSecret = "local-load-test-secret";
+const kioskPin = "654321";
+const kioskJoinToken = "local-http-kiosk-join-token-000000000000000000000001";
+
+function sessionHash(value) {
+  return createHmac("sha256", sessionSecret).update(String(value)).digest("hex");
+}
 const activityCount = Math.max(1, Math.min(250, Number(process.env.GUEST_STAR_LOAD_ACTIVITIES) || 1));
 const guestsPerActivity = Math.max(1, Math.min(2_000, Number(process.env.GUEST_STAR_LOAD_GUESTS_PER_ACTIVITY) || 200));
 const requestedConcurrency = Math.max(1, Math.min(
   2_000,
-  Number(process.env.GUEST_STAR_LOAD_CONCURRENCY) || activityCount * guestsPerActivity
+  Number(process.env.GUEST_STAR_LOAD_CONCURRENCY) || Math.min(50, activityCount * guestsPerActivity)
 ));
 const publicReadCount = Math.max(1, Math.min(
   2_000,
   Number(process.env.GUEST_STAR_LOAD_READS) || 200
+));
+const publicReadConcurrency = Math.max(1, Math.min(
+  publicReadCount,
+  Number(process.env.GUEST_STAR_LOAD_READ_CONCURRENCY) || 50
 ));
 const loadContexts = Array.from({ length: activityCount }, (_, index) => {
   const suffix = String(index + 1).padStart(4, "0");
@@ -52,7 +66,8 @@ function record(table, id, data, scope = "master") {
 }
 
 async function executeStatements(db, source) {
-  for (const statement of String(source).split(";").map((value) => value.trim()).filter(Boolean)) {
+  const sql = String(source).split(/\r?\n/).filter(line => !line.trim().startsWith("--")).join("\n");
+  for (const statement of sql.split(";").map((value) => value.trim()).filter(Boolean)) {
     await db.prepare(statement).run();
   }
 }
@@ -60,7 +75,9 @@ async function executeStatements(db, source) {
 const bundleRoot = await mkdtemp(join(tmpdir(), "guest-star-worker-bundle-"));
 let miniflare;
 try {
-  await execute(wrangler, ["deploy", "--dry-run", "--outdir", bundleRoot], {
+  if (process.env.GUEST_STAR_WORKER_BUNDLE_DIR) {
+    await cp(resolve(process.env.GUEST_STAR_WORKER_BUNDLE_DIR), bundleRoot, { recursive: true });
+  } else await execute(wrangler, ["deploy", "--dry-run", "--outdir", bundleRoot], {
     cwd: packageRoot,
     env: { ...process.env, NO_COLOR: "1" },
     maxBuffer: 20 * 1024 * 1024
@@ -70,10 +87,14 @@ try {
   miniflare = new Miniflare({
     rootPath: bundleRoot,
     modulesRoot: bundleRoot,
-    modules: [{ type: "ESModule", path: bundlePath }],
+    modules: [{ type: "ESModule", path: bundlePath },
+      ...process.env.GUEST_STAR_WORKER_BUNDLE_DIR ? (await readdir(bundleRoot))
+        .filter(name => name !== "worker.js" && /\.(mjs|js)$/.test(name))
+        .map(name => ({ type: "ESModule", path: join(bundleRoot, name) })) : []],
     compatibilityDate: "2026-07-28",
     compatibilityFlags: ["nodejs_compat"],
     d1Databases: { GUEST_STAR_DB: "guest-star-http-load-test" },
+    durableObjects: { GUEST_STAR_REALTIME: "GuestStarRealtime" },
     bindings: {
       KARAOKE_APPS_SCRIPT_URL: "http://127.0.0.1:9/google-disabled",
       GOOGLE_OAUTH_CLIENT_ID: "local-test.apps.googleusercontent.com"
@@ -91,11 +112,30 @@ try {
     db,
     await readFile(resolve(packageRoot, "migrations/0001_guest_star_core.sql"), "utf8")
   );
+  await executeStatements(
+    db,
+    await readFile(resolve(packageRoot, "migrations/0002_atomic_request_queue.sql"), "utf8")
+  );
+  await executeStatements(
+    db,
+    await readFile(resolve(packageRoot, "migrations/0003_d1_hot_path_indexes.sql"), "utf8")
+  );
+  await executeStatements(
+    db,
+    await readFile(resolve(packageRoot, "migrations/0004_activity_kiosk_access.sql"), "utf8")
+  );
+  await executeStatements(
+    db,
+    await readFile(resolve(packageRoot, "migrations/0005_venue_room_access.sql"), "utf8")
+  );
+  for (const migration of ["0006_persistent_activity_access.sql", "0007_activity_runs.sql"]) {
+    await executeStatements(db, await readFile(resolve(packageRoot, "migrations", migration), "utf8"));
+  }
 
   const [{ hotelId, venueId, activityId, cycleId }] = loadContexts;
   const seed = [
     `INSERT OR REPLACE INTO guest_star_meta (key, value, updated_at) VALUES ('backend_mode', 'd1_primary', ${sqlText(stamp)})`,
-    `INSERT OR REPLACE INTO guest_star_meta (key, value, updated_at) VALUES ('session_hash_secret', 'local-load-test-secret', ${sqlText(stamp)})`,
+    `INSERT OR REPLACE INTO guest_star_meta (key, value, updated_at) VALUES ('session_hash_secret', ${sqlText(sessionSecret)}, ${sqlText(stamp)})`,
     ...loadContexts.flatMap((context, index) => [
       record("Hotels", context.hotelId, {
         hotelId: context.hotelId, name: context.hotelName,
@@ -140,7 +180,16 @@ try {
       VALUES ('old-cycle-request', 'old-cycle-request', ${sqlText(hotelId)}, ${sqlText(venueId)},
        ${sqlText(activityId)}, 'cycle-previous', 'Same Singer', 'Past Song', 'Past Artist', '',
        'Español', 'es', 240, 30, 270, 6930, '', 'Pendiente', '', 'public_request', '',
-       1, 'pending', '', 1, ${sqlText(stamp)}, ${sqlText(stamp)}, '')`
+       1, 'pending', '', 1, ${sqlText(stamp)}, ${sqlText(stamp)}, '')`,
+    `INSERT INTO guest_star_activity_access
+      (access_id, hotel_id, venue_id, activity_id, cycle_id, pin, pin_hash,
+       join_token, join_token_hash, access_version, status, default_messages_enabled,
+       custom_messages_json, created_at, updated_at, revoked_at)
+      VALUES ('http-kiosk-access', ${sqlText(hotelId)}, ${sqlText(venueId)},
+       ${sqlText(activityId)}, ${sqlText(cycleId)}, ${sqlText(kioskPin)},
+       ${sqlText(sessionHash(kioskPin))}, ${sqlText(kioskJoinToken)},
+       ${sqlText(sessionHash(kioskJoinToken))}, 1, 'active', 1, '[]',
+       ${sqlText(stamp)}, ${sqlText(stamp)}, '')`
   ].join(";\n");
   await executeStatements(db, seed);
 
@@ -155,22 +204,66 @@ try {
   assert.equal(bootstrapBody.accepting, true);
   assert.equal(bootstrapBody.hotel.name, "Moon Palace");
 
+  const kioskDeviceId = "http-kiosk-device-00000001";
+  const invalidPinResponse = await request("/api/karaoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.10" },
+    body: JSON.stringify({ action: "joinByPin", pin: "000000", guestDeviceId: kioskDeviceId })
+  }).then((response) => response.json());
+  assert.equal(invalidPinResponse.code, "INVALID_PIN");
+  const kioskJoinResponse = await request("/api/karaoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.10" },
+    body: JSON.stringify({ action: "joinByPin", pin: kioskPin, guestDeviceId: kioskDeviceId })
+  });
+  const kioskJoinBody = await kioskJoinResponse.json();
+  assert.equal(kioskJoinBody.ok, true);
+  assert.match(String(kioskJoinBody.activitySessionToken), /^[A-Za-z0-9_-]{40,}$/);
+  assert.match(kioskJoinResponse.headers.get("set-cookie") || "", /guest_star_activity_session=/);
+  assert.match(kioskJoinResponse.headers.get("set-cookie") || "", /HttpOnly/i);
+  const kioskResume = await request("/api/karaoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "resumeSession",
+      activitySessionToken: kioskJoinBody.activitySessionToken,
+      guestDeviceId: kioskDeviceId
+    })
+  }).then((response) => response.json());
+  assert.equal(kioskResume.ok, true);
+  assert.equal(kioskResume.activity.activityId, activityId);
+
   const readStartedAt = performance.now();
-  const publicReads = await Promise.all(Array.from({ length: publicReadCount }, async () => {
-    const requestStartedAt = performance.now();
-    try {
-      const response = await request(
-        `/api/karaoke?action=publicBootstrap&hotel=${encodeURIComponent(publicCode)}`
-      );
-      const body = await response.json();
-      return { status: response.status, body, latency: performance.now() - requestStartedAt };
-    } catch (error) {
-      return { status: 0, body: { ok: false, error: String(error) }, latency: performance.now() - requestStartedAt };
+  const publicReads = new Array(publicReadCount);
+  let nextPublicRead = 0;
+  async function publicReadWorker() {
+    while (nextPublicRead < publicReadCount) {
+      const index = nextPublicRead;
+      nextPublicRead += 1;
+      const requestStartedAt = performance.now();
+      try {
+        const response = await request(
+          `/api/karaoke?action=publicBootstrap&hotel=${encodeURIComponent(publicCode)}`
+        );
+        const body = await response.json();
+        publicReads[index] = { status: response.status, body, latency: performance.now() - requestStartedAt };
+      } catch (error) {
+        publicReads[index] = {
+          status: 0,
+          body: { ok: false, error: String(error) },
+          latency: performance.now() - requestStartedAt
+        };
+      }
     }
-  }));
+  }
+  await Promise.all(Array.from({ length: publicReadConcurrency }, () => publicReadWorker()));
   const readBurstMs = performance.now() - readStartedAt;
+  const failedPublicReads = publicReads.filter((result) => result.status !== 200 || result.body.ok !== true);
+  if (failedPublicReads.length) {
+    console.error("Concurrent public read failures", failedPublicReads.slice(0, 5));
+  }
   assert.equal(publicReads.filter((result) => result.status === 200 && result.body.ok === true).length, publicReadCount,
-    "concurrent public polling must remain available and return valid JSON");
+    "concurrent public reads must remain available and return valid JSON");
 
   const priorCycleResponse = await request("/api/karaoke", {
     method: "POST",
@@ -202,7 +295,7 @@ try {
       try {
         const response = await request("/api/karaoke", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.10" },
           body: JSON.stringify({
             publicCode: context.publicCode,
             guestDeviceId: `http-load-${String(activityIndex).padStart(4, "0")}-${String(guestIndex).padStart(6, "0")}`,
@@ -298,6 +391,7 @@ try {
     burstMs: Number(burstMs.toFixed(1)),
     p95Ms: Number(p95Ms.toFixed(1))
   });
+  await verifyLocalRequestDelivery({ miniflare, db, packageRoot, context: loadContexts[0], sessionHash, request });
 } finally {
   if (miniflare) await miniflare.dispose();
   await rm(bundleRoot, { recursive: true, force: true });

@@ -42,7 +42,7 @@ jobs:
         working-directory: karaoke-github-package
         run: npm audit --audit-level=low
 
-      - name: Test Bridge and Apps Script regression suite
+      - name: Test Bridge regression suite
         working-directory: karaoke-github-package/guest-star-bridge
         run: npm test
 
@@ -183,10 +183,15 @@ jobs:
             -mmacosx-version-min=11.0 \
             karaoke-github-package/guest-star-bridge/macos/GuestStarNativeHost.m \
             -framework Cocoa \
+            -framework CoreAudio \
+            -framework AVFoundation \
+            -framework AudioToolbox \
             -framework WebKit \
             -o "$native_host"
           lipo "$native_host" -verify_arch arm64 x86_64
           otool -L "$native_host" | grep -q '/Cocoa.framework/'
+          otool -L "$native_host" | grep -q '/AVFoundation.framework/'
+          otool -L "$native_host" | grep -q '/AudioToolbox.framework/'
           otool -L "$native_host" | grep -q '/WebKit.framework/'
 
       - name: Build and exercise the Universal AI Stems engine
@@ -216,6 +221,8 @@ jobs:
           test "$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" = "GuestStarBridge"
           lipo "$app/Contents/MacOS/GuestStarBridge" -verify_arch arm64 x86_64
           otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/Cocoa.framework/'
+          otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/AVFoundation.framework/'
+          otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/AudioToolbox.framework/'
           otool -L "$app/Contents/MacOS/GuestStarBridge" | grep -q '/WebKit.framework/'
           test ! -e "$app/Contents/Resources/bridge/macos/GuestStarWindow.js"
           test ! -e "$app/Contents/Resources/bridge/src/star-screen-window.jxa"
@@ -306,18 +313,14 @@ jobs:
                  "*.DS_Store"
           )
 
-          cp karaoke-github-package/google-apps-script/Code.gs \
-            "$GITHUB_WORKSPACE/release-output/Code.gs"
           cp karaoke-github-package/guest-star-bridge/macos/INSTALACION-OTRA-MAC.txt \
             "$GITHUB_WORKSPACE/release-output/INSTALACION-OTRA-MAC.txt"
           cp karaoke-github-package/guest-star-bridge/macos/GUIA-MAC-SOLO-BRIDGE.txt \
             "$GITHUB_WORKSPACE/release-output/GUIA-MAC-SOLO-BRIDGE.txt"
           zip -q -j \
             "$GITHUB_WORKSPACE/release-output/Guest-Star-Experience-v${VERSION}-Guides.zip" \
-            karaoke-github-package/MULTIUSER-SETUP.md \
             karaoke-github-package/SUPERHOST-GUIDE.md \
             karaoke-github-package/HOST-GUIDE.md \
-            karaoke-github-package/MIGRATION-V4.md \
             karaoke-github-package/SECURITY.md \
             karaoke-github-package/PUBLIC-LINK-AND-QR.md \
             karaoke-github-package/REVIEWS-AND-GUEST-EXPERIENCE.md \
@@ -336,7 +339,6 @@ jobs:
               "guest-star-experience-sync-v${VERSION}.zip" \
               "guest-star-bridge-v${VERSION}-source.zip" \
               "Guest-Star-Experience-v${VERSION}-Guides.zip" \
-              Code.gs \
               INSTALACION-OTRA-MAC.txt \
               GUIA-MAC-SOLO-BRIDGE.txt \
               > SHA256SUMS.txt
@@ -354,7 +356,6 @@ jobs:
             "release-output/guest-star-experience-sync-v${VERSION}.zip"
             "release-output/guest-star-bridge-v${VERSION}-source.zip"
             "release-output/Guest-Star-Experience-v${VERSION}-Guides.zip"
-            "release-output/Code.gs"
             "release-output/INSTALACION-OTRA-MAC.txt"
             "release-output/GUIA-MAC-SOLO-BRIDGE.txt"
             "release-output/SHA256SUMS.txt"

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   d1Health,
-  ensureD1Schema,
   getGuestStarD1,
   reserveDailyFreeTranslationBudget,
   type JsonObject
@@ -12,13 +11,14 @@ import {
   getWorkersAiBinding,
   prepareBrandingLocalization
 } from "@/lib/guest-star/translation";
+import { realtimeResponseHeaders } from "@/lib/guest-star/realtime-event";
 
 const SESSION_COOKIE = "guest_star_host_session";
 const MAX_HOST_BODY_BYTES = 128 * 1024;
 
 export const dynamic = "force-dynamic";
 
-function safeResponse(data: JsonObject, status = 200) {
+function safeResponse(data: JsonObject, status = 200, headers: Record<string, string> = {}) {
   const {
     authToken: _authToken,
     deviceToken: _deviceToken,
@@ -29,7 +29,7 @@ function safeResponse(data: JsonObject, status = 200) {
   } = data;
   return NextResponse.json(safe, {
     status,
-    headers: { "Cache-Control": "no-store" }
+    headers: { "Cache-Control": "no-store", ...headers }
   });
 }
 
@@ -86,8 +86,6 @@ export async function POST(request: NextRequest) {
         error: "Guest Star D1 is required for live operation."
       }, 503);
     }
-    await ensureD1Schema(db);
-
     if (action.startsWith("d1")) {
       if (action === "d1Status") {
         const identity = await handleD1HostAction(db, {
@@ -137,7 +135,8 @@ export async function POST(request: NextRequest) {
         ? 401
         : code === "D1_SERVICE_UNAVAILABLE"
           ? 503
-          : 200
+          : 200,
+      realtimeResponseHeaders("/api/host", action, payload, data)
     );
     if (
       data.ok === true &&

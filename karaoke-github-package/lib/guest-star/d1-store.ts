@@ -1,3 +1,4 @@
+import { ACTIVITY_RUN_SCHEMA } from "./activity-run";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export type JsonObject = Record<string, unknown>;
@@ -25,10 +26,11 @@ export interface D1DatabaseLike {
 }
 
 export const D1_BINDING = "GUEST_STAR_DB";
-export const D1_SCHEMA_VERSION = "4.2.0";
+export const D1_SCHEMA_VERSION = "4.5.1";
 export const DAILY_FREE_TRANSLATION_NEURON_BUDGET = 7_000;
 
 const SCHEMA_STATEMENTS = [
+  ...ACTIVITY_RUN_SCHEMA,
   `CREATE TABLE IF NOT EXISTS guest_star_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -51,6 +53,20 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS guest_star_records_public_code_json
   ON guest_star_records (json_extract(data_json, '$.publicCode'))
   WHERE scope = 'master' AND table_name = 'Hotels' AND json_valid(data_json)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_auth_session_hash
+  ON guest_star_records (json_extract(data_json, '$.sessionTokenHash'))
+  WHERE scope = 'master' AND table_name = 'AuthSessions' AND json_valid(data_json)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_bridge_commands_pending
+  ON guest_star_records (
+    json_extract(data_json, '$.deviceId'),
+    json_extract(data_json, '$.activityId'),
+    json_extract(data_json, '$.status'),
+    json_extract(data_json, '$.createdAt'),
+    record_id
+  )
+  WHERE scope = 'master' AND table_name = 'BridgeCommands' AND json_valid(data_json)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_records_created_order
+  ON guest_star_records (scope, table_name, created_at, record_id)`,
   `CREATE TABLE IF NOT EXISTS guest_star_requests (
   row_id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL,
@@ -93,6 +109,11 @@ const SCHEMA_STATEMENTS = [
   ON guest_star_requests (hotel_id, activity_id, cycle_id, song COLLATE NOCASE, artist COLLATE NOCASE, archived_at, status)`,
   `CREATE INDEX IF NOT EXISTS guest_star_requests_cycle_singer
   ON guest_star_requests (hotel_id, activity_id, cycle_id, singer COLLATE NOCASE, archived_at, status)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_requests_active_cycle
+  ON guest_star_requests (
+    hotel_id, activity_id, archived_at, cycle_id,
+    queue_position, created_at, row_id
+  )`,
   `CREATE TABLE IF NOT EXISTS guest_star_activity_runtime (
   activity_id TEXT PRIMARY KEY,
   hotel_id TEXT NOT NULL,
@@ -126,7 +147,59 @@ const SCHEMA_STATEMENTS = [
   last_error TEXT NOT NULL DEFAULT ''
 )`,
   `CREATE INDEX IF NOT EXISTS guest_star_outbox_pending
-  ON guest_star_outbox (status, created_at)`
+  ON guest_star_outbox (status, created_at)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_activity_access (
+  access_id TEXT PRIMARY KEY,
+  hotel_id TEXT NOT NULL,
+  venue_id TEXT NOT NULL DEFAULT '',
+  activity_id TEXT NOT NULL,
+  cycle_id TEXT NOT NULL DEFAULT '',
+  pin TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  join_token TEXT NOT NULL,
+  join_token_hash TEXT NOT NULL,
+  access_version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'active',
+  default_messages_enabled INTEGER NOT NULL DEFAULT 1,
+  custom_messages_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  revoked_at TEXT NOT NULL DEFAULT ''
+)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS guest_star_activity_access_active_identity
+  ON guest_star_activity_access (hotel_id, activity_id, venue_id)
+  WHERE status = 'active' AND activity_id <> ''`,
+  `CREATE INDEX IF NOT EXISTS guest_star_activity_access_active_venue_lookup
+  ON guest_star_activity_access (hotel_id, venue_id, status, created_at DESC)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS guest_star_activity_access_active_pin
+  ON guest_star_activity_access (pin_hash) WHERE status = 'active'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS guest_star_activity_access_join_token
+  ON guest_star_activity_access (join_token_hash)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_activity_access_pin_history
+  ON guest_star_activity_access (pin_hash, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_activity_sessions (
+  session_token_hash TEXT PRIMARY KEY,
+  access_id TEXT NOT NULL,
+  hotel_id TEXT NOT NULL,
+  venue_id TEXT NOT NULL DEFAULT '',
+  activity_id TEXT NOT NULL,
+  device_hash TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT NOT NULL DEFAULT ''
+)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_activity_sessions_access
+  ON guest_star_activity_sessions (access_id, revoked_at, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS guest_star_activity_sessions_venue
+  ON guest_star_activity_sessions (hotel_id, venue_id, revoked_at, expires_at)`,
+  `CREATE TABLE IF NOT EXISTS guest_star_pin_attempts (
+  attempt_key TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  window_expires_at TEXT NOT NULL,
+  blocked_until TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+)`
 ];
 
 const TABLE_ID_FIELDS: Record<string, string> = {
@@ -148,7 +221,8 @@ const TABLE_ID_FIELDS: Record<string, string> = {
   PlayerActivityRuntime: "playerRuntimeId",
   Reviews: "reviewId",
   ReviewInvitations: "invitationId",
-  GuestReminders: "reminderId"
+  GuestReminders: "reminderId",
+  TechnicalReports: "reportId"
 };
 
 const schemaReady = new WeakMap<object, Promise<void>>();
@@ -243,7 +317,6 @@ export async function reserveDailyFreeTranslationBudget(
 ) {
   const neurons = Math.max(1, Math.ceil(Number(requestedNeurons) || 0));
   if (neurons > DAILY_FREE_TRANSLATION_NEURON_BUDGET) return false;
-  await ensureD1Schema(db);
 
   // Workers AI's free allocation is daily. Keep a UTC-scoped, atomic application
   // budget below that allocation so concurrent saves cannot silently overrun it.
@@ -281,7 +354,6 @@ export async function reserveDailyFreeTranslationBudget(
 }
 
 export async function backendMode(db: D1DatabaseLike) {
-  await ensureD1Schema(db);
   return "d1_primary";
 }
 
@@ -336,6 +408,22 @@ export async function getRecord(
   return row ? JSON.parse(row.data_json) as JsonObject : null;
 }
 
+export async function findAuthSessionByTokenHash(
+  db: D1DatabaseLike,
+  sessionTokenHash: string
+) {
+  if (!sessionTokenHash) return null;
+  const row = await db.prepare(`
+    SELECT data_json FROM guest_star_records
+    WHERE scope = 'master'
+      AND table_name = 'AuthSessions'
+      AND json_valid(data_json)
+      AND json_extract(data_json, '$.sessionTokenHash') = ?
+    LIMIT 1
+  `).bind(sessionTokenHash).first<{ data_json: string }>();
+  return row ? JSON.parse(row.data_json) as JsonObject : null;
+}
+
 export function recordIdFor(tableName: string, record: JsonObject) {
   const field = TABLE_ID_FIELDS[tableName];
   const value = field ? stringValue(record[field]) : "";
@@ -365,6 +453,30 @@ export async function upsertRecord(
   return clean;
 }
 
+/** One atomic write prevents competing clients from creating the same active activity. */
+export async function insertActivityOnce(db: D1DatabaseLike, record: JsonObject) {
+  const clean = cleanRecord(record);
+  const matches = `scope = 'master' AND table_name = 'Activities'
+    AND json_extract(data_json, '$.hotelId') = ?
+    AND json_extract(data_json, '$.venueId') = ?
+    AND trim(json_extract(data_json, '$.name')) = ? COLLATE NOCASE
+    AND COALESCE(json_extract(data_json, '$.status'), '') <> 'inactive'`;
+  const identity = [clean.hotelId, clean.venueId, clean.name];
+  const result = await db.prepare(`
+    INSERT INTO guest_star_records
+      (scope, table_name, record_id, data_json, created_at, updated_at)
+    SELECT 'master', 'Activities', ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM guest_star_records WHERE ${matches})
+  `).bind(clean.activityId, JSON.stringify(clean), clean.createdAt, clean.updatedAt, ...identity).run();
+  if (Number(result.meta?.changes) > 0) return { activity: clean, created: true };
+  const existing = await db.prepare(`
+    SELECT data_json FROM guest_star_records WHERE ${matches}
+    ORDER BY created_at, record_id LIMIT 1
+  `).bind(...identity).first<{ data_json: string }>();
+  if (!existing) throw new Error("ACTIVITY_CREATION_RETRY_REQUIRED");
+  return { activity: JSON.parse(existing.data_json) as JsonObject, created: false };
+}
+
 export async function updateRecord(
   db: D1DatabaseLike,
   tableName: string,
@@ -389,6 +501,63 @@ export async function deleteRecord(
     DELETE FROM guest_star_records
     WHERE scope = ? AND table_name = ? AND record_id = ?
   `).bind(scope, tableName, recordId).run();
+}
+
+export async function pendingBridgeCommands(
+  db: D1DatabaseLike,
+  deviceId: string,
+  activityId: string,
+  limit = 25
+) {
+  if (!deviceId || !activityId) return [];
+  const result = await db.prepare(`
+    SELECT data_json FROM guest_star_records
+    WHERE scope = 'master'
+      AND table_name = 'BridgeCommands'
+      AND json_valid(data_json)
+      AND json_extract(data_json, '$.deviceId') = ?
+      AND json_extract(data_json, '$.activityId') = ?
+      AND json_extract(data_json, '$.status') = 'pending'
+    ORDER BY json_extract(data_json, '$.createdAt') ASC, record_id ASC
+    LIMIT ?
+  `).bind(
+    deviceId,
+    activityId,
+    Math.max(1, Math.min(25, Math.round(limit)))
+  ).all<{ data_json: string }>();
+  return (result.results || []).map((row) => JSON.parse(row.data_json) as JsonObject);
+}
+
+export async function transitionPendingBridgeCommand(
+  db: D1DatabaseLike,
+  command: JsonObject,
+  changes: JsonObject
+) {
+  const commandId = stringValue(command.commandId);
+  const deviceId = stringValue(command.deviceId);
+  const activityId = stringValue(command.activityId);
+  if (!commandId || !deviceId || !activityId) return null;
+  const updatedAt = stringValue(changes.updatedAt) || nowIso();
+  const next = cleanRecord({ ...command, ...changes, commandId, deviceId, activityId, updatedAt });
+  const row = await db.prepare(`
+    UPDATE guest_star_records
+    SET data_json = ?, updated_at = ?
+    WHERE scope = 'master'
+      AND table_name = 'BridgeCommands'
+      AND record_id = ?
+      AND json_valid(data_json)
+      AND json_extract(data_json, '$.deviceId') = ?
+      AND json_extract(data_json, '$.activityId') = ?
+      AND json_extract(data_json, '$.status') = 'pending'
+    RETURNING data_json
+  `).bind(
+    JSON.stringify(next),
+    updatedAt,
+    commandId,
+    deviceId,
+    activityId
+  ).first<{ data_json: string }>();
+  return row ? JSON.parse(row.data_json) as JsonObject : null;
 }
 
 export interface GuestStarRequest {
@@ -453,6 +622,18 @@ interface RequestRow {
   updated_at: string;
   archived_at: string;
 }
+
+const REQUEST_ROW_COLUMNS = `
+  rowid AS insertion_order,
+  row_id, request_id, hotel_id, venue_id, activity_id, cycle_id,
+  singer, song, artist, comment, language, language_code,
+  duration_seconds, transition_seconds, accumulated_seconds, remaining_seconds,
+  source_url, status, file_name, source_type, virtual_dj_item_id,
+  queue_position, sync_state, last_seen_at, state_revision,
+  created_at, updated_at, archived_at
+`;
+
+const ACTIVE_REQUEST_LIMIT = 1_000;
 
 function requestFromRow(row: RequestRow): GuestStarRequest {
   return {
@@ -567,20 +748,34 @@ export async function insertPublicRequestAtomically(
 export async function activeRequests(
   db: D1DatabaseLike,
   hotelId: string,
-  activityId = ""
+  activityId = "",
+  cycleId = "",
+  limit = ACTIVE_REQUEST_LIMIT
 ) {
-  const query = activityId
-    ? `SELECT rowid AS insertion_order, * FROM guest_star_requests
+  const boundedLimit = Math.max(1, Math.min(5_000, Math.round(limit)));
+  const query = activityId && cycleId
+    ? `SELECT ${REQUEST_ROW_COLUMNS} FROM guest_star_requests
+       WHERE hotel_id = ? AND activity_id = ? AND archived_at = ''
+         AND cycle_id IN ('', ?)
+       ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END ASC,
+                created_at ASC, row_id ASC
+       LIMIT ?`
+    : activityId
+    ? `SELECT ${REQUEST_ROW_COLUMNS} FROM guest_star_requests
        WHERE hotel_id = ? AND activity_id = ? AND archived_at = ''
        ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END ASC,
-                created_at ASC, row_id ASC`
-    : `SELECT rowid AS insertion_order, * FROM guest_star_requests
+                created_at ASC, row_id ASC
+       LIMIT ?`
+    : `SELECT ${REQUEST_ROW_COLUMNS} FROM guest_star_requests
        WHERE hotel_id = ? AND archived_at = ''
        ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END ASC,
-                created_at ASC, row_id ASC`;
-  const statement = activityId
-    ? db.prepare(query).bind(hotelId, activityId)
-    : db.prepare(query).bind(hotelId);
+                created_at ASC, row_id ASC
+       LIMIT ?`;
+  const statement = activityId && cycleId
+    ? db.prepare(query).bind(hotelId, activityId, cycleId, boundedLimit)
+    : activityId
+    ? db.prepare(query).bind(hotelId, activityId, boundedLimit)
+    : db.prepare(query).bind(hotelId, boundedLimit);
   const result = await statement.all<RequestRow>();
   return (result.results || []).map(requestFromRow);
 }
@@ -602,10 +797,28 @@ export async function updateActiveRequest(
   db: D1DatabaseLike,
   hotelId: string,
   requestId: string,
-  changes: Partial<GuestStarRequest>
+  changes: Partial<GuestStarRequest>,
+  expectedRevision?: number
 ) {
   const existing = await findActiveRequest(db, hotelId, requestId);
   if (!existing) return null;
+  if (expectedRevision !== undefined) {
+    // Opt-in CAS for Bridge metadata/VDJ events; all previous callers retain
+    // their existing behavior. Only explicit changed columns are written.
+    const columns: Partial<Record<keyof GuestStarRequest, string>> = {
+      singer: 'singer', song: 'song', artist: 'artist', status: 'status',
+      fileName: 'file_name', durationSeconds: 'duration_seconds', sourceUrl: 'source_url',
+      virtualDJItemId: 'virtual_dj_item_id', queuePosition: 'queue_position',
+      accumulatedSeconds: 'accumulated_seconds', remainingSeconds: 'remaining_seconds',
+      syncState: 'sync_state', lastSeenAt: 'last_seen_at', stateRevision: 'state_revision', updatedAt: 'updated_at'
+    };
+    const entries = Object.entries(changes).filter(([key]) => columns[key as keyof GuestStarRequest]);
+    if (!entries.length) return existing;
+    const result = await db.prepare(`UPDATE guest_star_requests SET ${entries.map(([key]) => `${columns[key as keyof GuestStarRequest]} = ?`).join(', ')}
+      WHERE hotel_id = ? AND request_id = ? AND archived_at = '' AND state_revision = ?`)
+      .bind(...entries.map(([, value]) => value), hotelId, requestId, expectedRevision).run();
+    return Number(result.meta?.changes) === 1 ? await findActiveRequest(db, hotelId, requestId) : null;
+  }
   const next: GuestStarRequest = {
     ...existing,
     ...changes,
@@ -615,6 +828,36 @@ export async function updateActiveRequest(
     updatedAt: stringValue(changes.updatedAt) || nowIso()
   };
   return upsertRequest(db, next);
+}
+
+// Reorder the existing records in one statement, against the current queue.
+// The client supplies identities, never an array that could drop new arrivals.
+export async function moveActiveRequestBefore(db: D1DatabaseLike, hotelId: string, activityId: string,
+  requestId: string, beforeId: string | null, expectedRevision: number, cycleId = '') {
+  const stamp = nowIso();
+  const result = await db.prepare(`
+    WITH ordered AS MATERIALIZED (
+      SELECT row_id, request_id, state_revision, queue_position,
+        ROW_NUMBER() OVER (ORDER BY CASE WHEN queue_position > 0 THEN queue_position ELSE rowid END, created_at, rowid) AS pos
+      FROM guest_star_requests WHERE hotel_id = ? AND activity_id = ? AND archived_at = ''
+        AND cycle_id IN ('', ?)
+        AND status NOT IN ('Ya cantó', 'Saltado', 'Eliminada', 'Cancelada', 'Retirada del Player', 'Retirada de rotación')
+    ), movement AS MATERIALIZED (
+      SELECT source.pos AS start, CASE WHEN ? IS NULL THEN (SELECT COUNT(*) FROM ordered)
+        ELSE target.pos - CASE WHEN source.pos < target.pos THEN 1 ELSE 0 END END AS finish
+      FROM ordered source LEFT JOIN ordered target ON target.request_id = ?
+      WHERE source.request_id = ? AND source.state_revision = ? AND (? IS NULL OR target.row_id IS NOT NULL)
+    ), positions AS MATERIALIZED (
+      SELECT row_id, CASE WHEN pos = start THEN finish
+        WHEN start < finish AND pos > start AND pos <= finish THEN pos - 1
+        WHEN start > finish AND pos >= finish AND pos < start THEN pos + 1 ELSE pos END AS next_pos
+      FROM ordered CROSS JOIN movement
+    )
+    UPDATE guest_star_requests SET queue_position = (SELECT next_pos FROM positions WHERE positions.row_id = guest_star_requests.row_id),
+      sync_state = 'manual_order', state_revision = state_revision + 1, updated_at = ?
+    WHERE row_id IN (SELECT row_id FROM positions)
+  `).bind(hotelId, activityId, cycleId, beforeId, beforeId, requestId, expectedRevision, beforeId, stamp).run();
+  return Number(result.meta?.changes) > 0 ? await findActiveRequest(db, hotelId, requestId) : null;
 }
 
 export async function archiveActiveRequests(
@@ -694,82 +937,6 @@ export async function upsertActivityRuntime(db: D1DatabaseLike, runtime: Activit
     runtime.lastAction, runtime.lastSource, runtime.updatedAt
   ).run();
   return runtime;
-}
-
-export async function appendOutbox(
-  db: D1DatabaseLike,
-  action: string,
-  payload: JsonObject
-) {
-  const eventId = crypto.randomUUID();
-  await db.prepare(`
-    INSERT INTO guest_star_outbox
-      (event_id, action, payload_json, status, attempts, created_at, processed_at, last_error)
-    VALUES (?, ?, ?, 'pending', 0, ?, '', '')
-  `).bind(eventId, action, JSON.stringify(payload), nowIso()).run();
-  return eventId;
-}
-
-export interface OutboxEvent {
-  eventId: string;
-  action: string;
-  payload: JsonObject;
-  attempts: number;
-  createdAt: string;
-}
-
-export async function pendingOutbox(db: D1DatabaseLike, limit = 50) {
-  const result = await db.prepare(`
-    SELECT event_id, action, payload_json, attempts, created_at
-    FROM guest_star_outbox
-    WHERE status = 'pending'
-    ORDER BY created_at ASC
-    LIMIT ?
-  `).bind(Math.max(1, Math.min(100, Math.round(limit)))).all<{
-    event_id: string;
-    action: string;
-    payload_json: string;
-    attempts: number;
-    created_at: string;
-  }>();
-  return (result.results || []).map((row) => ({
-    eventId: row.event_id,
-    action: row.action,
-    payload: JSON.parse(row.payload_json) as JsonObject,
-    attempts: Number(row.attempts) || 0,
-    createdAt: row.created_at
-  } satisfies OutboxEvent));
-}
-
-export async function markOutboxProcessed(db: D1DatabaseLike, eventIds: string[]) {
-  const processedAt = nowIso();
-  await runBatches(db, eventIds.map((eventId) => db.prepare(`
-    UPDATE guest_star_outbox
-    SET status = 'processed', processed_at = ?, last_error = ''
-    WHERE event_id = ?
-  `).bind(processedAt, eventId)));
-}
-
-export async function markOutboxFailed(
-  db: D1DatabaseLike,
-  eventIds: string[],
-  error: string
-) {
-  const message = String(error || "Backup delivery failed.").slice(0, 1000);
-  await runBatches(db, eventIds.map((eventId) => db.prepare(`
-    UPDATE guest_star_outbox
-    SET attempts = attempts + 1, last_error = ?
-    WHERE event_id = ? AND status = 'pending'
-  `).bind(message, eventId)));
-}
-
-export async function outboxCounts(db: D1DatabaseLike) {
-  const result = await db.prepare(`
-    SELECT status, COUNT(*) AS count FROM guest_star_outbox GROUP BY status
-  `).all<{ status: string; count: number }>();
-  const counts: Record<string, number> = { pending: 0, processed: 0 };
-  for (const row of result.results || []) counts[row.status] = Number(row.count) || 0;
-  return counts;
 }
 
 export async function checkRateLimit(
@@ -1037,14 +1204,12 @@ export async function importD1Snapshot(db: D1DatabaseLike, snapshot: D1Migration
 }
 
 export async function d1Health(db: D1DatabaseLike) {
-  await ensureD1Schema(db);
-  const [mode, status, importedAt, counts, youtubeApiKey, backup] = await Promise.all([
+  const [mode, status, importedAt, counts, youtubeApiKey] = await Promise.all([
     getMeta(db, "backend_mode"),
     getMeta(db, "migration_status"),
     getMeta(db, "migration_imported_at"),
     getMeta(db, "migration_counts"),
-    getMeta(db, "youtube_api_key"),
-    outboxCounts(db)
+    getMeta(db, "youtube_api_key")
   ]);
   return {
     ok: true,
@@ -1054,7 +1219,6 @@ export async function d1Health(db: D1DatabaseLike) {
     migrationStatus: status || "not_started",
     importedAt,
     counts: counts ? JSON.parse(counts) : null,
-    youtubeConfigured: Boolean(youtubeApiKey),
-    backup
+    youtubeConfigured: Boolean(youtubeApiKey)
   };
 }

@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureD1Schema, getGuestStarD1, type JsonObject } from "@/lib/guest-star/d1-store";
+import { getGuestStarD1, type JsonObject } from "@/lib/guest-star/d1-store";
 import { handleD1HostAction, loginD1WithVerifiedGoogle } from "@/lib/guest-star/d1-actions";
 import { verifyGoogleIdentityToken } from "@/lib/guest-star/google-identity";
 import { runtimeEnvString } from "@/lib/guest-star/runtime-env";
+import { realtimeResponseHeaders } from "@/lib/guest-star/realtime-event";
 const MAX_BODY_BYTES = 512 * 1024;
 
 export const dynamic = "force-dynamic";
 
-function response(data: JsonObject, status = 200) {
+function response(data: JsonObject, status = 200, headers: Record<string, string> = {}) {
   return NextResponse.json(data, {
     status,
     headers: {
       "Cache-Control": "no-store",
-      "X-Guest-Star-Bridge-Proxy": "4.4.0"
+      "X-Guest-Star-Bridge-Proxy": "4.4.0",
+      ...headers
     }
   });
 }
@@ -59,18 +61,29 @@ export async function POST(request: NextRequest) {
         rememberLogin: payload.rememberLogin !== false
       };
       if (db) {
-        await ensureD1Schema(db);
         return response(await loginD1WithVerifiedGoogle(db, verified.email, loginPayload));
       }
       return response({ ok: false, code: "GOOGLE_LOGIN_NOT_READY" }, 503);
     }
     if (db) {
-      await ensureD1Schema(db);
       const data = await handleD1HostAction(db, payload) || {
         ok: false,
         code: "D1_ACTION_NOT_IMPLEMENTED"
       };
-      return response(data, data.ok === false && data.code === "UNAUTHORIZED" ? 401 : 200);
+      const code = String(data.code || "");
+      return response(
+        data,
+        data.ok === false && code === "UNAUTHORIZED"
+          ? 401
+          : data.ok === false && code === "FORBIDDEN"
+            ? 403
+            : data.ok === false && ["INVALID_DIAGNOSTIC_REPORT", "DIAGNOSTIC_REPORT_TOO_LARGE"].includes(code)
+              ? 400
+              : data.ok === false && code === "DIAGNOSTIC_REPORT_ID_CONFLICT"
+                ? 409
+                : 200,
+        realtimeResponseHeaders("/api/bridge", action, payload, data)
+      );
     }
     return response({
       ok: false,
