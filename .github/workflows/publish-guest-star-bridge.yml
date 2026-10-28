@@ -10,6 +10,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/connectivity-p0-20261027
     paths:
       - .github/workflows/publish-guest-star-bridge.yml
       - "karaoke-github-package/**"
@@ -55,6 +56,12 @@ jobs:
         env:
           GUEST_STAR_TEST_FFMPEG: ffmpeg
         run: npm test
+
+      - name: Test authoritative game rules, composed shows and real local HTTP
+        working-directory: karaoke-github-package
+        run: |
+          npm run test:games
+          npm run test:games:http
 
       - name: Check Bridge browser and supervisor syntax
         working-directory: karaoke-github-package

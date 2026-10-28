@@ -1,0 +1,22 @@
+{
+  "scope": "karaoke-source-folders",
+  "authorization": {
+    "source": "explicit user request 2026-10-28",
+    "request": "Reparar selecci\u00f3n de carpetas de audio/video, actualizaci\u00f3n de biblioteca y vinculaci\u00f3n de archivos de solicitudes; proteger despu\u00e9s de solucionado."
+  },
+  "files": [
+    "karaoke-github-package/guest-star-bridge/src/server.mjs",
+    "karaoke-github-package/guest-star-bridge/public/player-media-preferences.js",
+    "karaoke-github-package/guest-star-bridge/test/karaoke-source-folders-http.test.mjs",
+    "karaoke-github-package/guest-star-bridge/test/karaoke-source-preferences.test.mjs",
+    "docs/INTOCABLES.md"
+  ],
+  "validation": [
+    "531/531 full Bridge tests",
+    "4/4 focused tests of final code",
+    "installed app library=58 realtime=true",
+    "native preferences save verified",
+    "codesign deep strict verified"
+  ],
+  "release": "Local repair only. Stable v4.6.1 DMG remains the published original; no PR or cloud deployment created."
+}

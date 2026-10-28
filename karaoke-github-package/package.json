@@ -13,7 +13,9 @@
     "d1:migrate:local": "wrangler d1 migrations apply guest-star-experience --local",
     "d1:migrate:remote": "wrangler d1 migrations apply guest-star-experience --remote",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && wrangler deploy"
+    "deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "test:games": "node --test scripts/game-engine-test.mjs scripts/show-composer-test.mjs",
+    "test:games:http": "node scripts/game-engine-http-test.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.42.2",
@@ -23,19 +25,22 @@
     "react-dom": "19.2.6"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.20.2",
+    "@opennextjs/cloudflare": "1.20.12",
     "@tailwindcss/postcss": "^4.2.1",
     "@types/node": "^22.19.19",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3",
-    "wrangler": "^4.119.0"
+    "wrangler": "4.154.0"
   },
   "overrides": {
     "nanoid": "3.3.18",
     "undici": "7.30.1",
     "brace-expansion@^2.0.0": "2.1.7",
-    "brace-expansion@^5.0.0": "5.0.12"
+    "brace-expansion@^5.0.0": "5.0.12",
+    "@node-minify/core": {
+      "glob": "10.5.0"
+    }
   }
 }

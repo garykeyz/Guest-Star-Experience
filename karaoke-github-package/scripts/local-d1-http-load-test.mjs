@@ -83,8 +83,8 @@ try {
     maxBuffer: 20 * 1024 * 1024
   });
   const bundlePath = join(bundleRoot, "worker.js");
-  const { Miniflare } = await import("miniflare");
-  miniflare = new Miniflare({
+  const { Miniflare, convertV4MiniflareOptions } = await import("miniflare");
+  miniflare = new Miniflare(convertV4MiniflareOptions({
     rootPath: bundleRoot,
     modulesRoot: bundleRoot,
     modules: [{ type: "ESModule", path: bundlePath },
@@ -105,7 +105,7 @@ try {
     logRequests: false,
     unsafeDevRegistryPath: "",
     telemetry: { enabled: false }
-  });
+  }));
 
   const db = await miniflare.getD1Database("GUEST_STAR_DB");
   await executeStatements(
@@ -197,7 +197,7 @@ try {
   const bootstrap = await request(
     `/api/karaoke?action=publicBootstrap&hotel=${encodeURIComponent(publicCode)}`
   );
-  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.status, 200, await bootstrap.clone().text());
   assert.equal(bootstrap.headers.get("x-guest-star-backend"), "d1-only");
   const bootstrapBody = await bootstrap.json();
   assert.equal(bootstrapBody.ok, true);

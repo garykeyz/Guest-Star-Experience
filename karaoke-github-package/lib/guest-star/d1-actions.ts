@@ -58,7 +58,7 @@ const PERMISSIONS = [
   "canViewHistory", "canViewReviews", "canDeleteReviews", "canViewGuestContact",
   "canManageHosts", "canManageDevices", "canViewQR", "canDownloadQR",
   "canCopyPublicLink", "canScheduleNextActivity", "canManageRecurrence",
-  "canManageHotelBranding", "canManageReviewDestinations"
+  "canManageHotelBranding", "canManageReviewDestinations", "canCorrectGameScores"
 ] as const;
 
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
@@ -3774,4 +3774,34 @@ export async function createMigrationSession(db: D1DatabaseLike, userId: string)
   const session = await createSession(db, user, "", true);
   await audit(db, { userId, action: "d1.migration.activated" });
   return { ...session, user };
+}
+
+/** Reuse platform authorization; game clients never supply their own role or actor ID. */
+export async function authorizeGameActor(db: D1DatabaseLike, body: JsonObject) {
+  let hotel: JsonObject | null = null, activity: JsonObject | null = null;
+  let id = "", role = "guest", venueId = "", deviceId = "", canAdjustScores = false;
+  if (body.authToken) {
+    const auth = await requireAuth(db, body);
+    if (!["host", "superhost"].includes(text(auth.user.role))) throw Error("FORBIDDEN");
+    const context = await tenantContext(db, auth, body);
+    requirePermission(context, "canStartActivity");
+    canAdjustScores = context.permissions.all === true || context.permissions.canCorrectGameScores === true;
+    if (auth.user.mustChangePassword === true) throw Error("FORBIDDEN");
+    hotel = context.hotel; activity = context.activity; venueId = text(context.venue?.venueId);
+    id = `host:${text(auth.user.userId)}`; role = text(auth.user.role); deviceId = text(auth.device?.deviceId);
+  } else {
+    const resolved = await resolveActivitySession(db, text(body.activitySessionToken), publicDeviceId(body.guestDeviceId));
+    if ("code" in resolved) throw Error(resolved.code);
+    const access = resolved.access;
+    [hotel, activity] = await Promise.all([getRecord(db, "Hotels", access.hotel_id), getRecord(db, "Activities", access.activity_id)]);
+    venueId = access.venue_id;
+    // Same device-bound activity identity across refreshed tokens and browser views.
+    id = `guest:${await sha256Hex(`${access.hotel_id}|${access.activity_id}|${resolved.session.device_hash}`)}`;
+  }
+  if (!hotel || !activity || text(hotel.status) !== "active" || text(activity.hotelId) !== text(hotel.hotelId)
+      || text(activity.venueId) !== venueId || ["inactive", "finished", "cancelled", "canceled"].includes(text(activity.status))) throw Error("ACTIVITY_UNAVAILABLE");
+  const run = await activityRun(db, activity);
+  const runId = text(run?.runId || activity.currentCycleId);
+  if (!runId || ["finished", "cancelled"].includes(text(run?.status))) throw Error("ACTIVITY_RUN_REQUIRED");
+  return { id, role, deviceId, canAdjustScores, scope: {hotelId:text(hotel.hotelId),venueId,activityId:text(activity.activityId),runId} };
 }

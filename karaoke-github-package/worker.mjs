@@ -1,3 +1,5 @@
+import {createGamesWorker} from './worker-games-scope.mjs';
+export {GuestStarGames} from './worker-games-scope.mjs';
 import {createLyricsWorker} from './worker-lyrics-scope.mjs';
 import { processHotelAutomation, nextHotelAutomationWake } from './lib/guest-star/run-automation.ts';
 import openNextWorker from "./.open-next/worker.js";
@@ -473,4 +475,4 @@ const workerWithExistingRoutes = {
   }
 };
 
-export default createLyricsWorker(workerWithExistingRoutes);
+export default createGamesWorker(createLyricsWorker(workerWithExistingRoutes));

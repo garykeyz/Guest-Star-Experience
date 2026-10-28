@@ -1,3 +1,4 @@
+import {initExperienceConsole} from './experience-console.js';
 import {installPlayerMediaPreferences} from './player-media-preferences.js';
 import { createActivityAutomation } from './activity-automation.js';
 import {buildActivitySummary} from './shared/activity-coverage.js';
@@ -101,6 +102,7 @@ async function mountWorkspace(mode) {
   await import('./adaptive-host.js');
 }
 function showEntrySelection() {
+  if(typeof experienceConsole!=='undefined' && experienceConsole.open())return;
   const remembered=rememberedActivity(state);
   $('#rememberedActivityChoice').hidden=!remembered;
   $('#resumeFreeActivity').hidden=!(state?.account?.user?.role==='superhost' && state?.entryContext?.resumableFreeSession);
@@ -119,6 +121,7 @@ function enterSelectedContext() {
     location.replace('/operate?mode='+encodeURIComponent(state.operatingMode.selected)+'&context='+encodeURIComponent(entryContextId(state)));
     return;
   }
+  if(typeof experienceConsole!=='undefined' && experienceConsole.openExperiences())return;
   openPlaybackModeDialog();
 }
 async function initializeEntry() {
@@ -131,6 +134,7 @@ async function initializeEntry() {
     enterSelectedContext();
     return;
   }
+  if(typeof experienceConsole!=='undefined' && experienceConsole.open())return;
   if(rememberedActivity(state))await useRememberedActivity();
   else showEntrySelection();
 }
@@ -485,6 +489,7 @@ function updateAccountNavigation() {
 }
 
 function updateStatus() {
+  if(typeof experienceConsole!=='undefined')experienceConsole.render();
   // Hotel identity is local to the operational view; editing a hotel never themes Superhost.
   const administrativeView=superhostPanel.isOpen();
   document.body.classList.toggle('gs-superhost-view',administrativeView);
@@ -2194,7 +2199,7 @@ async function selectPlaybackMode(mode) {
       method: "POST",
       body: JSON.stringify({ mode })
     });
-    location.replace('/operate?mode='+encodeURIComponent(mode)+'&context='+encodeURIComponent(entryContextId(next)));
+    location.replace('/operate?mode='+encodeURIComponent(mode)+'&context='+encodeURIComponent(entryContextId(next))+'&prepare=1');
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -2923,11 +2928,20 @@ function connectRealtime() {
   };
 }
 
+const experienceConsole=initExperienceConsole({
+  getState:()=>state,api,applyState,getMountedMode:()=>mountedMode,
+  readBrand:id=>superhostPanel.hotelBranding(id),selectEngine:selectPlaybackMode,
+  openPreferences:()=>$('#preferencesButton').click(),
+  openPreparation:()=>controlActivity('open'),
+  openParticipants:()=>{const target=mountedMode==='player'?$('#playerQueue'):$('#requests');target?.scrollIntoView({behavior:'auto',block:'start'});},
+  openStarScreen:()=>$('#playerOpenStarScreen').click(),openPreview:()=>$('#playerStarScreenPreview').scrollIntoView({behavior:'auto',block:'center'}),notify:showNotice
+});
+
 if(workspaceRoute) {
   state=await api('/api/state');
   const params=new URLSearchParams(location.search),mode=params.get('mode');
   if(!['player','bridge'].includes(mode) || state.operatingMode?.selected!==mode || entryContextId(state)!==params.get('context'))location.replace('/');
-  else {await mountWorkspace(mode);applyState(state);showHostForSelectedMode();}
+  else {await mountWorkspace(mode);applyState(state);showHostForSelectedMode();if(params.get('prepare')==='1')experienceConsole.open('PREPARE_EXPERIENCE');}
 }else{
   await api('/api/entry/prepare',{method:'POST',body:'{}'});
   await refresh();
