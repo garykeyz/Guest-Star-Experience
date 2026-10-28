@@ -1,0 +1,2 @@
+export type GameClientOptions={credentials?:()=>Record<string,unknown>;onChange?:(event?:unknown)=>void;onConnection?:(connected:boolean)=>void;endpoint?:string;fetcher?:typeof fetch};
+export function createGameClient(options:GameClientOptions):{request(body:unknown):Promise<unknown>;command(game:{id:string;revision:number;round?:{id:string}|null},type:string,payload?:Record<string,unknown>,id?:string):Promise<unknown>;start():void;close():void;readonly connected:boolean};

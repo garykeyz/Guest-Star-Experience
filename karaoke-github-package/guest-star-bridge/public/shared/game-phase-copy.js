@@ -1,0 +1,2 @@
+const labels={CONFIGURING:'En preparación',REGISTRATION_OPEN:'Inscripciones abiertas',READY:'Listo para comenzar',INTRO:'Presentación',ROUND_PREPARING:'Ronda preparada',ROUND_ACTIVE:'Ronda en curso',ROUND_LOCKED:'Ronda cerrada',ROUND_RESULTS:'Resultados de ronda',FINAL_RESULTS:'Resultados finales',COMPLETED:'Completado',CANCELLED:'Cancelado',PAUSED:'En pausa',RUNNING:'Show en curso',SCHEDULED:'Programado',PREPARED:'Preparado',ACTIVE:'Activo',SKIPPED:'Omitido'};
+export const gameStateLabel=value=>labels[value] || value;

@@ -17,6 +17,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      {"name":"GUEST_STAR_GAMES","class_name":"GuestStarGames"},
       {
         "name": "GUEST_STAR_REALTIME",
         "class_name": "GuestStarRealtime"
@@ -27,7 +28,8 @@
     {
       "tag": "realtime-v1",
       "new_sqlite_classes": ["GuestStarRealtime"]
-    }
+    },
+    {"tag":"games-v1","new_sqlite_classes":["GuestStarGames"]}
   ],
   "ai": {
     "binding": "AI"

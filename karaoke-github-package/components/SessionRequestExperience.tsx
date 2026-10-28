@@ -4,6 +4,7 @@ import { closureMessage } from "@/lib/guest-star/closure-message";
 
 import type { CSSProperties } from "react";
 import BrandLogos from "./BrandLogos";
+import GameParticipation from "./GameParticipation";
 import { brandingTheme } from "@/guest-star-bridge/public/shared/branding-theme";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -604,6 +605,7 @@ export default function SessionRequestExperience({
           <button type="button" className="sessionQrClose" onClick={()=>setQrOpen(false)} aria-label={copy.closeQr}>×</button><span>{copy.access}</span><img src={access.qrViewUrl} alt={copy.share}/><strong>PIN {access.pin}</strong><small>{initialState.activity?.name} · {initialState.venue?.name}</small><a href={access.joinUrl} target="_blank" rel="noreferrer">{copy.share}</a>
         </motion.section>
       </motion.div>}</AnimatePresence>
+      <GameParticipation activitySessionToken={sessionToken} kioskMode={kioskMode} language={language}/>
       <KaraokeExperienceClient activitySessionToken={sessionToken} initialState={initialState}
         uiLanguage={language} onUiLanguageChange={chooseLanguage}
         onSessionInvalid={code=>{if(entry)markExpired(entry.key);rejectSession(code);}}
