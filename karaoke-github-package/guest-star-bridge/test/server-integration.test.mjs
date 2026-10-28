@@ -416,7 +416,8 @@ test("reconcilia retiro, reingreso, orden y opciones de YouTube", async (t) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "https://www.youtube.com/watch?v=karaoke123" })
+      // Browser Clipboard API path, independent of macOS-only pbcopy.
+      body: JSON.stringify({ url: "https://www.youtube.com/watch?v=karaoke123", clipboardCopied: true })
     }
   ).then((response) => response.json());
   assert.equal(youtubeLinked.ok, true);

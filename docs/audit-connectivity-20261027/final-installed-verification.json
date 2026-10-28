@@ -1,0 +1,19 @@
+{
+  "verifiedAt": "2026-10-28T03:58:06.151Z",
+  "version": "4.6.1",
+  "build": "3e3d9436410fd860b037b3d599ce28013edcfc35304eb1a58714b6c85c083c3d",
+  "realProductionDataRestored": true,
+  "selectionMatchesProductionConfig": true,
+  "cloudHostname": "request.gstarxp.com",
+  "activityRunning": false,
+  "requestCount": 25,
+  "operatingMode": {
+    "selected": "",
+    "lastSelected": "bridge",
+    "locked": false,
+    "canChange": true
+  },
+  "earlierPreflightRequestCount": 3,
+  "earlierPreflightIsHistorical": true,
+  "selectionChangedDuringAudit": true
+}

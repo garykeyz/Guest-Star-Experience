@@ -1,0 +1,5 @@
+
+> guest-star-karaoke@4.4.0 test:http
+> node scripts/production-http-test.mjs
+
+Production build fail-closed HTTP test passed { appsScriptCalls: 0, rootP95Ms: 4.69, hotelPageP95Ms: 3.23 }

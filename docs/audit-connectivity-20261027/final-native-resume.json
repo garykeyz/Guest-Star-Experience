@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-27T23:05:22.141Z",
+  "status": 200,
+  "elapsedMs": 1883.504917,
+  "version": "4.6.1",
+  "build": "3e3d9436410fd860b037b3d599ce28013edcfc35304eb1a58714b6c85c083c3d",
+  "requestsBefore": 881,
+  "requestsAfter": 881,
+  "delivery": {
+    "snapshots": 30,
+    "failures": 3,
+    "reconnects": 2,
+    "lastDurationMs": 3572,
+    "lastRequestCount": 881,
+    "lastReceivedAt": "2026-10-27T23:05:19.445Z",
+    "realtimeReady": true,
+    "pendingRefresh": false,
+    "lastTransportAt": "2026-10-27T23:05:15.873Z"
+  }
+}

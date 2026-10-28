@@ -1,0 +1,1115 @@
+{
+  "run": "mvraczc4",
+  "prefix": "AUDIT-mvraczc4",
+  "startedAt": "2026-10-27T22:57:31.108Z",
+  "base": "https://guest-star-connectivity-audit-20261027.garyinirio421.workers.dev",
+  "hotelId": "eb8257de-9a41-42fd-86f4-06043850e78d",
+  "activityId": "11ac1cdb-b649-4337-b119-c5f2a3b6f6fc",
+  "architecture": "real remote Worker and D1, 100 independent sessions/public WebSockets, installed native Host and installed Node/code, loopback fault proxy only for Host transport",
+  "claims": {
+    "physicalDevices": 0,
+    "virtualClients": 100,
+    "publicIP": "single machine egress NAT, no spoofed IP headers"
+  },
+  "passed": true,
+  "endedAt": "2026-10-27T23:15:21.205Z",
+  "connectedClients": 100,
+  "maxConnected": 100,
+  "distinctSessions": 100,
+  "methods": {
+    "pin": 50,
+    "join": 50
+  },
+  "clientRetries": [
+    {
+      "stage": "join/resume",
+      "attempt": 1,
+      "message": "fetch failed",
+      "code": "UND_ERR_CONNECT_TIMEOUT",
+      "at": 1793141977540
+    },
+    {
+      "stage": "join/resume",
+      "attempt": 2,
+      "message": "fetch failed",
+      "code": "UND_ERR_CONNECT_TIMEOUT",
+      "at": 1793141988543
+    },
+    {
+      "stage": "join/resume",
+      "attempt": 1,
+      "message": "The operation was aborted due to timeout",
+      "at": 1793142057351
+    },
+    {
+      "stage": "join/resume",
+      "attempt": 3,
+      "message": "The operation was aborted due to timeout",
+      "at": 1793142079948
+    }
+  ],
+  "socketCloses": [
+    {
+      "client": 59,
+      "code": 1006,
+      "reason": "",
+      "at": 1793141935914
+    },
+    {
+      "client": 65,
+      "code": 1006,
+      "reason": "",
+      "at": 1793141962986
+    },
+    {
+      "client": 63,
+      "code": 1006,
+      "reason": "",
+      "at": 1793141967459
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793141988976
+    },
+    {
+      "client": 74,
+      "code": 1006,
+      "reason": "",
+      "at": 1793141994754
+    },
+    {
+      "client": 77,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142004563
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142023611
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142038765
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142038771
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142040274
+    },
+    {
+      "client": 77,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142041154
+    },
+    {
+      "client": 75,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142041773
+    },
+    {
+      "client": 77,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142041774
+    },
+    {
+      "client": 4,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142170760
+    },
+    {
+      "client": 64,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142198920
+    },
+    {
+      "client": 68,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142208585
+    },
+    {
+      "client": 71,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142235140
+    },
+    {
+      "client": 4,
+      "code": 1000,
+      "reason": "mobile background",
+      "at": 1793142267022
+    },
+    {
+      "client": 66,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142274350
+    },
+    {
+      "client": 39,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142277647
+    },
+    {
+      "client": 14,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142291673
+    },
+    {
+      "client": 19,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296890
+    },
+    {
+      "client": 18,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296890
+    },
+    {
+      "client": 17,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 16,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 15,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 13,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 12,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 11,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 10,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 9,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 8,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 7,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 6,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 5,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 3,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 2,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 1,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 0,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142296891
+    },
+    {
+      "client": 30,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142301689
+    },
+    {
+      "client": 66,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142304500
+    },
+    {
+      "client": 42,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142320919
+    },
+    {
+      "client": 60,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142330156
+    },
+    {
+      "client": 45,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142331963
+    },
+    {
+      "client": 40,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142339935
+    },
+    {
+      "client": 37,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142366987
+    },
+    {
+      "client": 35,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142368222
+    },
+    {
+      "client": 25,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142411565
+    },
+    {
+      "client": 27,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142457144
+    },
+    {
+      "client": 28,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142516651
+    },
+    {
+      "client": 31,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142538797
+    },
+    {
+      "client": 62,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142539724
+    },
+    {
+      "client": 22,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142543165
+    },
+    {
+      "client": 70,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142545748
+    },
+    {
+      "client": 51,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142549078
+    },
+    {
+      "client": 73,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142552995
+    },
+    {
+      "client": 50,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142553141
+    },
+    {
+      "client": 38,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142554073
+    },
+    {
+      "client": 52,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142558804
+    },
+    {
+      "client": 58,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142560341
+    },
+    {
+      "client": 65,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142564041
+    },
+    {
+      "client": 54,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142564230
+    },
+    {
+      "client": 53,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142574468
+    },
+    {
+      "client": 57,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142580320
+    },
+    {
+      "client": 48,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142582003
+    },
+    {
+      "client": 36,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142583131
+    },
+    {
+      "client": 61,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142587092
+    },
+    {
+      "client": 55,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142588455
+    },
+    {
+      "client": 29,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142589393
+    },
+    {
+      "client": 56,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142601179
+    },
+    {
+      "client": 59,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142618809
+    },
+    {
+      "client": 76,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142621269
+    },
+    {
+      "client": 47,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142622122
+    },
+    {
+      "client": 24,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142633237
+    },
+    {
+      "client": 67,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142634312
+    },
+    {
+      "client": 23,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142634893
+    },
+    {
+      "client": 43,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142638379
+    },
+    {
+      "client": 33,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142639268
+    },
+    {
+      "client": 20,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142644142
+    },
+    {
+      "client": 21,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142666179
+    },
+    {
+      "client": 46,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142675946
+    },
+    {
+      "client": 44,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142701117
+    },
+    {
+      "client": 41,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142707970
+    },
+    {
+      "client": 69,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142711006
+    },
+    {
+      "client": 78,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142712232
+    },
+    {
+      "client": 34,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142725277
+    },
+    {
+      "client": 32,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142725843
+    },
+    {
+      "client": 49,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142726759
+    },
+    {
+      "client": 26,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142731726
+    },
+    {
+      "client": 49,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142757966
+    },
+    {
+      "client": 74,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142774632
+    },
+    {
+      "client": 63,
+      "code": 1006,
+      "reason": "",
+      "at": 1793142866793
+    }
+  ],
+  "reconnections": [
+    {
+      "client": 59,
+      "at": 1793141938692
+    },
+    {
+      "client": 65,
+      "at": 1793141964321
+    },
+    {
+      "client": 63,
+      "at": 1793141969357
+    },
+    {
+      "client": 74,
+      "at": 1793142002128
+    },
+    {
+      "client": 77,
+      "at": 1793142043782
+    },
+    {
+      "client": 75,
+      "at": 1793142043797
+    },
+    {
+      "client": 4,
+      "at": 1793142172300
+    },
+    {
+      "client": 64,
+      "at": 1793142199855
+    },
+    {
+      "client": 68,
+      "at": 1793142210333
+    },
+    {
+      "client": 71,
+      "at": 1793142236235
+    },
+    {
+      "client": 39,
+      "at": 1793142285407
+    },
+    {
+      "client": 30,
+      "at": 1793142303352
+    },
+    {
+      "client": 66,
+      "at": 1793142306386
+    },
+    {
+      "client": 42,
+      "at": 1793142321494
+    },
+    {
+      "client": 60,
+      "at": 1793142332173
+    },
+    {
+      "client": 45,
+      "at": 1793142333983
+    },
+    {
+      "client": 40,
+      "at": 1793142341124
+    },
+    {
+      "client": 37,
+      "at": 1793142368135
+    },
+    {
+      "client": 35,
+      "at": 1793142369489
+    },
+    {
+      "client": 25,
+      "at": 1793142413584
+    },
+    {
+      "client": 27,
+      "at": 1793142458233
+    },
+    {
+      "client": 28,
+      "at": 1793142517946
+    },
+    {
+      "client": 62,
+      "at": 1793142540707
+    },
+    {
+      "client": 31,
+      "at": 1793142541019
+    },
+    {
+      "client": 22,
+      "at": 1793142545545
+    },
+    {
+      "client": 70,
+      "at": 1793142546573
+    },
+    {
+      "client": 51,
+      "at": 1793142549507
+    },
+    {
+      "client": 73,
+      "at": 1793142554005
+    },
+    {
+      "client": 50,
+      "at": 1793142554166
+    },
+    {
+      "client": 38,
+      "at": 1793142555694
+    },
+    {
+      "client": 52,
+      "at": 1793142560237
+    },
+    {
+      "client": 58,
+      "at": 1793142561517
+    },
+    {
+      "client": 65,
+      "at": 1793142564481
+    },
+    {
+      "client": 54,
+      "at": 1793142566389
+    },
+    {
+      "client": 53,
+      "at": 1793142575015
+    },
+    {
+      "client": 57,
+      "at": 1793142581128
+    },
+    {
+      "client": 48,
+      "at": 1793142582685
+    },
+    {
+      "client": 36,
+      "at": 1793142584050
+    },
+    {
+      "client": 61,
+      "at": 1793142588574
+    },
+    {
+      "client": 29,
+      "at": 1793142590039
+    },
+    {
+      "client": 55,
+      "at": 1793142590735
+    },
+    {
+      "client": 56,
+      "at": 1793142602390
+    },
+    {
+      "client": 59,
+      "at": 1793142620105
+    },
+    {
+      "client": 76,
+      "at": 1793142623231
+    },
+    {
+      "client": 47,
+      "at": 1793142623263
+    },
+    {
+      "client": 67,
+      "at": 1793142635386
+    },
+    {
+      "client": 24,
+      "at": 1793142635612
+    },
+    {
+      "client": 23,
+      "at": 1793142637096
+    },
+    {
+      "client": 43,
+      "at": 1793142639856
+    },
+    {
+      "client": 33,
+      "at": 1793142641049
+    },
+    {
+      "client": 20,
+      "at": 1793142645653
+    },
+    {
+      "client": 21,
+      "at": 1793142666845
+    },
+    {
+      "client": 46,
+      "at": 1793142677333
+    },
+    {
+      "client": 44,
+      "at": 1793142702623
+    },
+    {
+      "client": 41,
+      "at": 1793142708621
+    },
+    {
+      "client": 69,
+      "at": 1793142711777
+    },
+    {
+      "client": 78,
+      "at": 1793142714446
+    },
+    {
+      "client": 34,
+      "at": 1793142726815
+    },
+    {
+      "client": 32,
+      "at": 1793142727026
+    },
+    {
+      "client": 26,
+      "at": 1793142733254
+    },
+    {
+      "client": 49,
+      "at": 1793142759875
+    },
+    {
+      "client": 74,
+      "at": 1793142776339
+    },
+    {
+      "client": 63,
+      "at": 1793142868273
+    }
+  ],
+  "attempts": 393,
+  "acceptedUnique": 283,
+  "visibleUnique": 283,
+  "missing": 0,
+  "duplicates": 0,
+  "soakRequests": 44,
+  "results": [
+    {
+      "name": "batch3",
+      "count": 3,
+      "concurrent": false,
+      "visible": 3,
+      "durationMs": 67256
+    },
+    {
+      "name": "batch10",
+      "count": 10,
+      "concurrent": false,
+      "visible": 10,
+      "durationMs": 9775
+    },
+    {
+      "name": "batch25",
+      "count": 25,
+      "concurrent": true,
+      "visible": 25,
+      "durationMs": 5637
+    },
+    {
+      "name": "batch50",
+      "count": 50,
+      "concurrent": true,
+      "visible": 50,
+      "durationMs": 6021
+    },
+    {
+      "name": "concurrent100",
+      "count": 100,
+      "concurrent": true,
+      "visible": 100,
+      "durationMs": 4019
+    },
+    {
+      "name": "Host disconnected, cloud acceptance retained",
+      "count": 20,
+      "recovered": 20
+    },
+    {
+      "name": "silent lost invalidation with live pong",
+      "count": 1,
+      "recovered": 1,
+      "e2eMs": 22805
+    },
+    {
+      "name": "latency1700",
+      "count": 10,
+      "concurrent": true,
+      "visible": 10,
+      "durationMs": 36747
+    },
+    {
+      "name": "during-updates",
+      "count": 20,
+      "concurrent": true,
+      "visible": 20,
+      "durationMs": 3618
+    },
+    {
+      "name": "concurrent request metadata/status updates",
+      "count": 20
+    }
+  ],
+  "errors": [
+    {
+      "stage": "initial_socket_retry",
+      "client": 59,
+      "message": "socket open timeout 59"
+    },
+    {
+      "stage": "socket",
+      "client": 59,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "socket",
+      "client": 65,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "initial_socket_retry",
+      "client": 65,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "initial_socket_retry",
+      "client": 63,
+      "message": "socket open timeout 63"
+    },
+    {
+      "stage": "socket",
+      "client": 63,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "initial_socket_retry",
+      "client": 75,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "socket",
+      "client": 74,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "initial_socket_retry",
+      "client": 74,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "initial_socket_retry",
+      "client": 77,
+      "message": "socket open timeout 77"
+    },
+    {
+      "stage": "socket",
+      "client": 77,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "reconnect",
+      "client": 75,
+      "message": "socket open timeout 75"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "reconnect",
+      "client": 77,
+      "message": "socket open timeout 77"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "reconnect",
+      "client": 75,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "reconnect",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "reconnect",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "socket",
+      "client": 77,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "socket",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "reconnect",
+      "client": 75,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "socket",
+      "client": 77,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "reconnect",
+      "client": 77,
+      "message": "getaddrinfo ENOTFOUND guest-star-connectivity-audit-20261027.garyinirio421.workers.dev"
+    },
+    {
+      "stage": "reconnect",
+      "client": 66,
+      "message": "socket open timeout 66"
+    },
+    {
+      "stage": "socket",
+      "client": 66,
+      "message": "Opening handshake has timed out"
+    },
+    {
+      "stage": "reconnect",
+      "client": 49,
+      "message": "socket open timeout 49"
+    },
+    {
+      "stage": "socket",
+      "client": 49,
+      "message": "Opening handshake has timed out"
+    }
+  ],
+  "socketInvalidations": 9850,
+  "pongs": 7769,
+  "http": {
+    "meanMs": 1713.2421437314488,
+    "p95Ms": 2447.068499999994,
+    "maxMs": 65157.555292000005
+  },
+  "endToEnd": {
+    "meanMs": 6520.233215547703,
+    "p95Ms": 18764,
+    "maxMs": 65238
+  },
+  "finalDelivery": {
+    "snapshots": 81,
+    "failures": 3,
+    "reconnects": 2,
+    "lastDurationMs": 1726,
+    "lastRequestCount": 924,
+    "lastReceivedAt": "2026-10-27T23:15:11.079Z",
+    "realtimeReady": true,
+    "pendingRefresh": false,
+    "lastTransportAt": "2026-10-27T23:15:11.584Z"
+  },
+  "proxy": {
+    "offline": false,
+    "delay": 0,
+    "discard": false,
+    "calls": 3862,
+    "failures": 889,
+    "droppedFrames": 0,
+    "sockets": 1
+  }
+}

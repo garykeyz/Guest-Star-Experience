@@ -1,0 +1,16 @@
+
+> guest-star-karaoke@4.4.0 test:d1
+> esbuild scripts/d1-backend-test.ts --bundle --platform=node --format=esm --packages=external --alias:@opennextjs/cloudflare=./scripts/cloudflare-test-stub.ts --outfile=/tmp/guest-star-d1-test.mjs && node /tmp/guest-star-d1-test.mjs
+
+
+  ../../../../../../../../tmp/guest-star-d1-test.mjs  335.9kb
+
+⚡ Done in 9ms
+(node:53516) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+D1 backend tests passed {
+  users: 1,
+  publicRequestId: '80b6b92d-3250-4e3d-b3bd-378cea73e0d4',
+  burst200Ms: 96.1,
+  sessionP95Ms: 0.124
+}

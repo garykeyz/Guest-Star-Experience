@@ -1,3 +1,5 @@
+> **Estado sustituido:** la entrega actual y sus resultados están en [FINAL.md](FINAL.md). El texto siguiente conserva la auditoría inicial de rc.1.
+
 # Auditoría real de conectividad — 27 de octubre de 2026
 
 **Estado: correcciones documentadas y código publicado para revisión; promoción a estable bloqueada.** La aplicación habitual quedó restaurada en `/Applications/Guest Star Experience.app`, versión 4.6, bundle `450c1dd38bb9bb3387b2d791fce3473290b5a54cb33a48d9cacb65fda8ab6ce8`, con las mismas tres solicitudes y la actividad detenida. No se desplegó ningún cambio en el Worker ni en D1 de producción. El candidato 4.6.1 es un borrador de laboratorio; no se instaló para el show.
