@@ -138,3 +138,5 @@ Las rutas privadas de respaldo están en `console-game-engine-20261028/rollback`
 La captura nativa de la app instalada se conserva localmente en `console-game-engine-20261028/installed-home.png`. Las capturas versionadas de este informe usan únicamente el entorno sintético aislado. Las pruebas auxiliares se ejecutaron con Node22.22.0. La app queda abierta, sin iniciar reproducción, VirtualDJ ni otra actividad.
 
 La PR previa49 de la entrega4.6.1 sigue abierta. Esta entrega se conserva en una rama separada y una PR apilada sobre su base, para no ampliar ni reescribir esa revisión existente. El pipeline de validación admite esa base; el evento pull_request sigue omitiendo despliegue y publicación automáticos.
+
+Pruebas reproducibles: `npm run test:games`, `npm run test:games:http`, `npm run test:d1` y `npm test` dentro del Bridge. La CI de la PR incluye las nuevas suites de dominio/HTTP; su resultado hospedado se debe distinguir de las pruebas locales aprobadas.

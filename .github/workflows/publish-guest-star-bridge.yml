@@ -57,6 +57,12 @@ jobs:
           GUEST_STAR_TEST_FFMPEG: ffmpeg
         run: npm test
 
+      - name: Test authoritative game rules, composed shows and real local HTTP
+        working-directory: karaoke-github-package
+        run: |
+          npm run test:games
+          npm run test:games:http
+
       - name: Check Bridge browser and supervisor syntax
         working-directory: karaoke-github-package
         run: |

@@ -13,7 +13,9 @@
     "d1:migrate:local": "wrangler d1 migrations apply guest-star-experience --local",
     "d1:migrate:remote": "wrangler d1 migrations apply guest-star-experience --remote",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && wrangler deploy"
+    "deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "test:games": "node --test scripts/game-engine-test.mjs scripts/show-composer-test.mjs",
+    "test:games:http": "node scripts/game-engine-http-test.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.42.2",
