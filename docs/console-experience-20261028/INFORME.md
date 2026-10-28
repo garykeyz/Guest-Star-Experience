@@ -1,5 +1,7 @@
 # Guest Star Interactive Entertainment — entrega 4.7.0
 
+**Entrega final: build471, fuente5c58e8a8966db0e1a531350b7be2c5675e65ecd8, Workerfabb7592-a64c-470a-b921-956fff62f216. App instalada y abierta; DMG verificado.**
+
 Fecha: 28 octubre 2026. Fuente real: `release-audit-20261027/release-source`, rama de entrega `codex/interactive-shows-20261028`, basada en `codex/connectivity-p0-20261027`. La carpeta histórica `candidate` no se utilizó. Este documento distingue ejecución local controlada, hardware nativo y comprobaciones de producción.
 
 ## A. Arquitectura implementada
@@ -112,7 +114,7 @@ No se certificó un salón con 150 teléfonos, acústica real, micrófono de eve
 
 Checkpoint del arreglo de carpetas previamente instalado: `4a50ce6`. Núcleo y participación: `9be2407`. Consola/nativo/adaptadores: `cce6a790f63a706f65e5a1975c09eaebb4f461e8`.
 
-Paquete generado: 4.7.0/build470, ARM64, macOS15.5+, bundle `com.gstarxp.guest-star`, firma ad hoc, sin notarización. Huella del bundle: `404b6134351599f88a3c87b89f034ce58340f2f3c2ab943f3ffc083370299846`. No se presenta como distribución notarizada.
+Primer paquete generado: 4.7.0/build470, ARM64, macOS15.5+, bundle `com.gstarxp.guest-star`, firma ad hoc, sin notarización. Huella del bundle: `404b6134351599f88a3c87b89f034ce58340f2f3c2ab943f3ffc083370299846`. No se presenta como distribución notarizada.
 
 Antes de promover se creó copia verificada de la app instalada, exportación D1 privada y registro de 25 solicitudes, biblioteca58, actividad detenida y reproducción detenida. El rollback del Worker anterior corresponde a `8a159f8e-d13a-4d67-aa41-2536b38582b4`; los nuevos objetos/tablas son aditivos y no se deben borrar al revertir código.
 
@@ -126,7 +128,7 @@ Las rutas privadas de respaldo están en `console-game-engine-20261028/rollback`
 - La prueba masiva no certifica WiFi, dispositivos físicos, percepción sonora ni continuidad durante una actuación real de público. La suite valida contratos y regresiones; no sustituye ensayo técnico de evento.
 - Los shows y actuaciones no se sincronizan como cola de VirtualDJ. Su ejecución musical conserva los controles del motor seleccionado.
 
-## Cierre verificado
+## Cierre inicial verificado — build470, sustituido por build471
 
 - Suite final Bridge: **549/549**, cero fallos, omitidos o cancelados. Dominio: **38/38**. La aserción de versión visible detectó el texto antiguo del encabezado durante el incremento de versión; se corrigió la interfaz y se repitió la suite completa, sin omitir la prueba.
 - Migraciones remotas 0008 y0009 aplicadas correctamente. Worker desplegado: **3884c127-ab5c-4fcf-9f45-b5e77997a14e**, etiqueta `guest-star-4.7.0`, código fuente `cce6a79`. Sitio: [request.gstarxp.com](https://request.gstarxp.com). Presupuesto del handler: 3,880,459 bytes / 1,147,272 gzip; sin traducciones públicas filtradas al runtime.
@@ -142,3 +144,17 @@ La PR previa49 de la entrega4.6.1 sigue abierta. Esta entrega se conserva en una
 Pruebas reproducibles: `npm run test:games`, `npm run test:games:http`, `npm run test:d1` y `npm test` dentro del Bridge. La CI de la PR incluye las nuevas suites de dominio/HTTP; su resultado hospedado se debe distinguir de las pruebas locales aprobadas.
 
 Revisión build471: la unión de clasificados se puede configurar, guardar y asignar a Grand Final desde el Director. [Captura real de esa selección](capturas/mixed-final-qualification.jpg). El catálogo usa todos los formatos autorizados recibidos del servidor, sin limitarse a los nueve descriptores de la fase inicial. Se retiró el texto obsoleto que afirmaba que los juegos estaban pendientes. Una aserción de carga que suponía empate por coincidencia de milisegundo se corrigió: ahora contrasta la decisión con los tiempos reales confirmados y exige empate o ganador correcto según corresponda, manteniendo íntegros los totales de puntos y deduplicación.
+
+
+## Entrega final — build471
+
+Se completó y verificó desde la consola la creación de una regla que une los clasificados de Lip Sync y talento y su asignación persistente a Grand Final. Se retiró el mensaje obsoleto de juegos pendientes y el catálogo muestra todos y sólo los formatos autorizados recibidos del servidor. La captura nueva usa el entorno aislado; no se cambiaron participantes reales.
+
+- Fuente de app y Worker: **5c58e8a8966db0e1a531350b7be2c5675e65ecd8**. App4.7.0/build471, bundle**edc3bd85484aed3b73095952d127b5af152afbebca8ffee1679c6b564274d837**. Firma ad hoc deep/strict verificada, ARM64macOS15.5+, sin notarización.
+- Worker definitivo: **fabb7592-a64c-470a-b921-956fff62f216**, etiqueta `guest-star-4.7.0-build471`. No hicieron falta otras migraciones. Además de los rechazos correctos de actividad cerrada/anónimo, una lectura autenticada de una actividad autorizada disponible obtuvo **HTTP200,27definiciones,0juegos,0shows** del Durable Object en producción. Esa comprobación no inició actividades ni creó partidas/resultados ficticios.
+- Preservación posterior a la segunda instalación: autenticación conservada,25solicitudes idénticas por digest de IDs/estados/revisiones/orden; biblioteca58/realtime=true; actividad y reproducción detenidas. La app queda abierta en Home.
+- Suite de dominio ampliada: **38/38**. El escenario HTTP de150identidades vuelve a pasar creando las reglas de clasificación mediante comandos del Director, incluida la unión de cohortes. Los27casos enfocados de navegación/adaptadores/entrada vuelven a pasar; la suite íntegra549/549 se conserva como regresión previa y se replica en CI de esta revisión.
+- DMG final: `console-game-engine-20261028/Guest-Star-Experience-4.7.0-build471-arm64.dmg`. SHA-256: **365c42d333ce4825704f42a14bb2615bc4bd4caef1205c0f3894c1bea37add9d**. Verificado con hdiutil, montaje de sólo lectura, firma y procedencia exacta. El DMG470intermedio se trasladó al rollback privado; el release público4.6.1 sigue intacto.
+- Captura nativa final: `console-game-engine-20261028/installed-home-build471.jpg`. La validación hospedada corresponde al código5c58e8a; su resultado final se registra en la PR50 y el cierre de continuidad, sin confundirlo con las pruebas locales.
+
+CI hospedada del código final **5c58e8a** aprobada por completo: [GitHub Actions40669880941](https://github.com/garykeyz/Guest-Star-Experience/actions/runs/40669880941). Regresiones549/549, dominio38/38,150WS/pongs, escenario150participantes, tipos, D1, Next, OpenNext, presupuesto y dry-run aprobados en Linux; compilación nativa ARM64, firma y DMG aprobados también en macOS. El pipeline de PR omitió correctamente despliegue/publicación automáticos: la instalación y despliegue efectivos se verificaron por separado como se describe arriba. La revisión posterior del informe sólo cambia Markdown, sin modificar los inputs del código validado.
