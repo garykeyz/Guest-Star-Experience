@@ -2776,7 +2776,7 @@ function scheduleRealtimeScan() {
 
 function startLibraryWatchers() {
   closeLibraryWatchers();
-  for (const folder of config.libraryFolders) {
+  for (const folder of playerMediaFolders(config)) {
     try {
       const watcher = watch(
         folder,
@@ -2800,7 +2800,7 @@ function startLibraryWatchers() {
   broadcastState();
 }
 
-async function scanNow() {
+async function scanNow({ localOnly = false } = {}) {
   if (scanning) {
     scanAgain = true;
     return;
@@ -2809,8 +2809,11 @@ async function scanNow() {
   libraryError = "";
   broadcastState();
   try {
-    libraryFiles = await scanLibrary(config.libraryFolders);
+    const legacyFiles = await scanLibrary(config.libraryFolders);
     await scanPlayerFolders();
+    // One karaoke generation drives browsing, matching and file links in both modes.
+    // Background music sources never enter this index.
+    libraryFiles = [...new Set([...legacyFiles, ...playerExtraFiles])];
     lastScanAt = new Date().toISOString();
   } catch (error) {
     libraryError = errorMessage(error);
@@ -2819,11 +2822,14 @@ async function scanNow() {
   }
   await scanBackgroundMusicNow();
   refreshLocalAvailability();
-  broadcastState();
-  await reportLocalStates();
-  await prepareMissingYoutube();
   await autoLinkSafeMatches();
   broadcastState();
+  // Folder changes must finish locally even while cloud/YouTube is unavailable.
+  if (!localOnly) {
+    await reportLocalStates();
+    await prepareMissingYoutube();
+    broadcastState();
+  }
   if (scanAgain) {
     scanAgain = false;
     scheduleRealtimeScan();
@@ -3079,7 +3085,7 @@ async function assertAllowedFile(filePath) {
   const target = await realpath(String(filePath || ""));
   const info = await stat(target);
   if (!info.isFile()) throw new Error("The selected track is not a file.");
-  for (const folder of config.libraryFolders) {
+  for (const folder of playerMediaFolders(config)) {
     try {
       const root = await realpath(folder);
       if (target === root || target.startsWith(`${root}${sep}`)) return target;
@@ -3092,7 +3098,7 @@ async function assertAllowedFile(filePath) {
 
 async function stemCacheRootForFile(filePath) {
   const target = await realpath(String(filePath || ""));
-  for (const folder of config.libraryFolders) {
+  for (const folder of playerMediaFolders(config)) {
     try {
       const root = await realpath(folder);
       if (target !== root && !target.startsWith(`${root}${sep}`)) continue;
@@ -5840,7 +5846,11 @@ async function api(request, response, url) {
     if(request.method==='POST'){
       requireSignedInBridge();const body=await readJson(request);
       config=await saveConfig(sanitizeConfig({playerAudioFolders:body.audioFolders,playerVideoFolders:body.videoFolders,playerMediaPriority:body.priority},config));
-      await scanPlayerFolders();broadcastState();
+      startLibraryWatchers();
+      // A simultaneous periodic scan may still hold the previous generation.
+      while (scanning) await new Promise(resolve => setTimeout(resolve, 25));
+      await scanNow({ localOnly: true });
+      if (libraryError) throw new Error(libraryError);
     }
     json(response,200,{audioFolders:config.playerAudioFolders,videoFolders:config.playerVideoFolders,priority:config.playerMediaPriority});return;
   }
