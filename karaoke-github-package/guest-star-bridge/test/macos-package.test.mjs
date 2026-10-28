@@ -7,7 +7,7 @@ import test from "node:test";
 
 const bridgeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(bridgeRoot, "../..");
-const [buildSource, shellSource, nativeHostSource, workflowSource, guideSource, engineInstallSource, engineSmokeSource] =
+const [buildSource, shellSource, nativeHostSource, workflowSource, guideSource, engineInstallSource, engineSmokeSource, releaseBuildSource, nativeBuildSource] =
   await Promise.all([
     readFile(resolve(bridgeRoot, "macos/build_installer.py"), "utf8"),
     readFile(resolve(bridgeRoot, "macos/GuestStarBridge"), "utf8"),
@@ -18,7 +18,9 @@ const [buildSource, shellSource, nativeHostSource, workflowSource, guideSource, 
     ),
     readFile(resolve(bridgeRoot, "macos/INSTALACION-OTRA-MAC.txt"), "utf8"),
     readFile(resolve(bridgeRoot, "scripts/install-stem-engine-macos.sh"), "utf8"),
-    readFile(resolve(bridgeRoot, "scripts/stems-engine-smoke.mjs"), "utf8")
+    readFile(resolve(bridgeRoot, "scripts/stems-engine-smoke.mjs"), "utf8"),
+    readFile(resolve(bridgeRoot, "macos/build_release_46.py"), "utf8"),
+    readFile(resolve(bridgeRoot, "macos/build_vocal_stream.py"), "utf8")
   ]);
 
 test("construye una app Cocoa/WebKit Universal con identidad propia", () => {
@@ -140,8 +142,10 @@ test("incluye y ejercita Spleeter rápido y Demucs HQ en el motor Universal", ()
   assert.match(engineSmokeSource, /--output-vocals-wav=/);
   assert.match(engineSmokeSource, /--output-accompaniment-wav=/);
   assert.match(engineInstallSource, /stems-engine-smoke\.mjs/);
-  assert.match(workflowSource, /install-stem-engine-macos\.sh/);
-  assert.match(workflowSource, /--stem-engine-root "\$RUNNER_TEMP\/guest-star-stem-engine"/);
+  assert.match(releaseBuildSource, /dependenciesPreservedFromAuditedApp/);
+  assert.match(releaseBuildSource, /stem-engine/);
+  assert.match(workflowSource, /bootstrap\.dmg.*shasum -a 256 -c/);
+  assert.match(workflowSource, /build_vocal_stream\.py/);
   assert.match(buildSource, /lib\/libonnxruntime\.dylib/);
   assert.match(buildSource, /smoke_test_packaged_stem_engine/);
   assert.match(buildSource, /destination \/ "scripts"/);
@@ -155,14 +159,13 @@ test("firma y valida plist, frameworks, binario final, DMG y ZIP", () => {
     /\["lipo", str\(destination\), "-verify_arch", "arm64", "x86_64"\]/
   );
   assert.match(buildSource, /\["plutil", "-lint"/);
-  assert.match(workflowSource, /xcrun clang/);
-  assert.match(workflowSource, /-framework Cocoa/);
-  assert.match(workflowSource, /-framework AVFoundation/);
-  assert.match(workflowSource, /-framework AudioToolbox/);
-  assert.match(workflowSource, /-framework WebKit/);
-  assert.match(workflowSource, /lipo[^\n]*native_host[^\n]*-verify_arch arm64 x86_64/);
-  assert.match(workflowSource, /otool -L[^\n]*native_host/);
-  assert.match(workflowSource, /plutil -lint/);
+  assert.match(nativeBuildSource, /clang\+\+/);
+  for (const framework of ['Cocoa','AVFoundation','AudioToolbox','WebKit'])
+    assert.ok(nativeBuildSource.includes(framework));
+  assert.match(workflowSource, /lipo[^\n]*-verify_arch arm64/);
+  assert.match(releaseBuildSource, /'plutil', '-lint'/);
+  assert.match(workflowSource, /codesign --verify --deep --strict/);
+  assert.match(workflowSource, /hdiutil verify/);
   assert.match(workflowSource, /Contents\/MacOS\/GuestStarBridge/);
   assert.match(buildSource, /app_bundle\.rename\(distributed_app\)/);
   assert.match(buildSource, /"--sequesterRsrc"/);
@@ -190,16 +193,21 @@ test("selecciona automáticamente el runtime correcto en cada Mac", () => {
   assert.match(shellSource, /LEGACY_SUPPORT_DIR=.*Guest Star Bridge/);
 });
 
-test("la publicación deriva Guest Star Universal de la versión del paquete", () => {
-  assert.match(workflowSource, /release_meta\.outputs\.version/);
-  assert.match(workflowSource, /Guest-Star-Universal-v\$\{VERSION\}-app\.zip/);
-  assert.match(buildSource, /APP_NAME = "Guest Star\.app"/);
+test("la publicación ARM64 deriva versión y procedencia del código y preserva releases existentes", () => {
+  assert.match(workflowSource, /package\.json.*version/);
+  assert.match(workflowSource, /Guest-Star-Experience-arm64\.dmg/);
   assert.match(workflowSource, /karaoke-github-package\/\*\*/);
-  assert.match(workflowSource, /node-v22\.22\.0-darwin-arm64/);
-  assert.match(workflowSource, /node-v22\.22\.0-darwin-x64/);
-  assert.match(guideSource, /Mac Intel y Mac Apple Silicon M1, M2, M3, M4 y M5/);
+  assert.match(workflowSource, /onnxruntime-osx-arm64-1\.26\.0/);
+  assert.match(workflowSource, /--source-commit "\$GITHUB_SHA"/);
+  assert.match(workflowSource, /gh release view "v\$version"/);
+  assert.match(workflowSource, /gh release create.*--draft/);
+  assert.doesNotMatch(workflowSource, /--clobber|Guest-Star-Universal/);
+  assert.match(releaseBuildSource, /Source commit mismatch/);
+  assert.match(releaseBuildSource, /Build requires committed source/);
+  assert.match(releaseBuildSource, /CFBundleShortVersionString=version/);
+  assert.match(releaseBuildSource, /release-provenance\.json/);
+  assert.match(releaseBuildSource, /lyrics-engine/);
   assert.match(guideSource, /No necesitas instalar Node, npm ni usar Terminal/);
-  assert.match(guideSource, /clic derecho sobre Guest Star y elige Abrir/);
 });
 
 test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare", () => {
@@ -217,5 +225,5 @@ test("bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudfl
   assert.match(workflowSource, /environment: production/);
   assert.match(workflowSource, /secrets\.CLOUDFLARE_API_TOKEN/);
   assert.match(workflowSource, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
-  assert.match(workflowSource, /release:\s*\n\s*if:.*\n\s*needs: validate/);
+  assert.match(workflowSource, /release:\s*\n\s*if:.*\n\s*needs: \[validate, macos-package-check\]/);
 });
