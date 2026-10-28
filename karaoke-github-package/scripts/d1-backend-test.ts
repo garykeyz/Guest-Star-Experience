@@ -200,14 +200,11 @@ assert.doesNotMatch(bridgeServerSource, /"setDefaultPublicExperience"/,
   "the local Bridge proxy must not expose the disabled root-domain setting");
 assert.doesNotMatch(bridgeServerSource, /"setDefaultGoogleFallback"/,
   "the local Guest Star service must not proxy the retired Google request fallback");
-assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
-  "the public experience must normalize Google Drive logo links");
-assert.match(publicExperienceSource, /className="tenantLogo"/,
-  "hotel logos must render inside a dedicated presentation frame");
-assert.match(globalCssSource, /\.tenantLogo\{width:92px;height:92px/,
-  "hotel logos with built-in whitespace must remain large enough to identify");
-assert.match(globalCssSource, /filter:brightness\(\.58\) contrast\(1\.85\)/,
-  "very pale hotel logos must receive enough contrast to remain visible");
+const publicBrandingSource=readFileSync('components/BrandLogos.tsx','utf8');
+assert.match(publicExperienceSource,/BrandLogos/,"public experience delegates its hotel/team logo composition");
+assert.match(publicBrandingSource,/normalizeBrandImageUrl/,"the shared public logo renderer normalizes Google Drive links");
+assert.match(publicBrandingSource,/renderBrandLogos/,"the shared renderer uses the same branding pipeline as Host");
+assert.match(globalCssSource,/brandLogos/,"public logo composition has its presentation styles");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
   "migration, backup, and legacy storage controls must stay out of the operational panel");
 assert.doesNotMatch(publicExperienceSource, /setInterval\(refreshStatus/,
@@ -664,9 +661,11 @@ const earlyOpenSchedule = await handleD1HostAction(db, {
   recurrenceType: "none", recurrenceInterval: 1
 });
 assert.equal(earlyOpenSchedule?.ok, true);
+await new Promise(resolve=>setTimeout(resolve,2100)); // Respect the public scheduler throttle after replacing a schedule.
 const earlyOpenPublicState = await handleD1PublicGet(db, publicParams);
-assert.equal(earlyOpenPublicState.accepting, true,
-  "a one-time activity must open inside its configured pre-event window");
+assert.ok((await activeRequests(db,hotelId,activityId)).length>0,"this fixture retains a previous queue");
+assert.equal(earlyOpenPublicState.accepting, false,
+  "an automatic pre-event opening cannot consent to keeping or clearing a previous queue for the Host");
 assert.equal(earlyOpenPublicState.activityRunning, false,
   "opening requests early must never start Player or Bridge");
 assert.equal((await handleD1HostAction(db, {
@@ -678,16 +677,22 @@ const dueSchedule = await handleD1HostAction(db, {
   action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
   scheduledStartAt: new Date(Date.now() - 1000).toISOString(),
   durationSeconds: 7200, requestOpeningLeadSeconds: 600,
-  autoOpenRequests: true, autoStartActivity: true, showCountdown: true,
+  autoOpenRequests: true, autoStartActivity: false, showCountdown: true,
   recurrenceType: "none", recurrenceInterval: 1
 });
 assert.equal(dueSchedule?.ok, true);
-assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "completed");
+assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "active");
 assert.equal((dueSchedule?.schedule as Record<string, unknown>).autoStartActivity, false,
   "schedules must never choose or start a playback engine automatically");
 assert.equal((await handleD1HostAction(db, {
   action: "activityState", ...superAuth, hotelId, venueId, activityId
 }))?.ok, true, "due schedules must be processed by Host/Bridge state reads");
+
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId
+}))?.code, "PLAYBACK_MODE_REQUIRED", "an activity cannot start without a playback mode");
+const explicitPreparation=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,autoOpenRequests:true,openBeforeStart:true,queueChoice:'keep'});
+assert.equal(explicitPreparation?.ok,true,JSON.stringify(explicitPreparation));
 
 const scheduledPublicState = await handleD1PublicGet(db, publicParams);
 assert.equal(scheduledPublicState.ok, true);
@@ -696,9 +701,6 @@ assert.equal((scheduledPublicState as Record<string, unknown>).activityRunning, 
   "a due schedule may open requests but must wait for the Host to select Player or Bridge");
 assert.equal((scheduledPublicState as Record<string, unknown>).queuePeopleCount, 1,
   "legacy requests without tenant IDs must inherit the active hotel activity during import");
-assert.equal((await handleD1HostAction(db, {
-  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId
-}))?.code, "PLAYBACK_MODE_REQUIRED", "an activity cannot start without a playback mode");
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
 }))?.ok, true, "the Host can explicitly start the internal Player");
@@ -1065,6 +1067,8 @@ assert.equal((await handleD1PublicPost(db, {
   action:"joinByPin",pin:secondSessionPin,guestDeviceId:"ended-pin-device-1234567890"
 })).ok,true,
 "a finished occurrence retains its public activity PIN");
+const nextCycle=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'clear'});
+assert.equal(nextCycle?.ok,true,JSON.stringify(nextCycle));
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
 }))?.ok, true, "restarting the same configured activity must create a fresh cycle");
@@ -1100,6 +1104,8 @@ assert.equal(retainedPin, secondSessionPin,
 assert.equal((await handleD1PublicPost(db, {
   action: "joinByPin", pin: secondSessionPin, guestDeviceId: "finish-reset-old-pin-123456"
 })).ok, true, "Finish must keep the public join access available");
+const bridgeCycle=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'bridge',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'clear'});
+assert.equal(bridgeCycle?.ok,true,JSON.stringify(bridgeCycle));
 assert.equal((await handleD1HostAction(db, {
   action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "bridge"
 }))?.ok, true, "after finishing, a new cycle may explicitly choose Bridge");
@@ -1160,6 +1166,7 @@ assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId)
 const editableActivity = secondHotel?.activity as Record<string, unknown>;
 const editableActivityId = String(editableActivity.activityId);
 const editableVenueId = String((secondHotel?.venue as Record<string, unknown>).venueId);
+assert.equal((await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId:otherHotelId,venueId:editableVenueId,activityId:editableActivityId,sessionMode:'free',source:'bridge',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'keep'}))?.ok,true);
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
   venueId: editableVenueId, activityId: editableActivityId, source: "bridge"
@@ -1250,7 +1257,7 @@ const recurringRecord = recurringSchedule?.schedule as Record<string, unknown>;
 assert.equal(recurringRecord.recurrenceType, "weekly");
 assert.equal(recurringRecord.recurrenceInterval, 2);
 assert.deepEqual(JSON.parse(String(recurringRecord.recurrenceDaysJson)), [1, 3]);
-assert.equal(recurringRecord.recurrenceDayOfMonth, 19);
+assert.equal(recurringRecord.recurrenceDayOfMonth, null,"weekly recurrence must not retain the obsolete monthly day");
 assert.equal(nextScheduleOccurrence({
   scheduledStartAt: "2026-08-19T20:00:00.000Z", recurrenceType: "weekly",
   recurrenceInterval: 2, recurrenceDaysJson: JSON.stringify([1, 3])
@@ -1277,8 +1284,9 @@ const liveRecurringSchedule = await handleD1HostAction(db, {
 assert.equal(liveRecurringSchedule?.ok, true);
 const liveScheduleRecord = liveRecurringSchedule?.schedule as Record<string, unknown>;
 assert.equal(String(liveScheduleRecord.status), "active", "a weekly series must advance instead of completing");
-assert.ok(Date.parse(String(liveScheduleRecord.scheduledStartAt)) > Date.now(),
-  "a weekly series must keep its next occurrence in the future");
+assert.ok(Date.parse(String(nextScheduleOccurrence(liveScheduleRecord,"UTC"))) > Date.now(),
+  "a weekly series must calculate a future next occurrence without silently consuming an unprepared run");
+assert.equal((await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId:otherHotelId,venueId:editableVenueId,activityId:editableActivityId,sessionMode:'scheduled',scheduleId:liveScheduleRecord.scheduleId,source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'keep'}))?.ok,true);
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
   venueId: editableVenueId, activityId: editableActivityId, source: "player"
