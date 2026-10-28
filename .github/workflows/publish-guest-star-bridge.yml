@@ -170,10 +170,14 @@ jobs:
           hdiutil verify "$RUNNER_TEMP/bootstrap.dmg"
           mkdir "$RUNNER_TEMP/audited"
           hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/audited" "$RUNNER_TEMP/bootstrap.dmg"
+          # APFS clone-copy requires source and destination on the same volume.
+          # Materialize verified read-only dependencies before packaging.
+          mkdir "$RUNNER_TEMP/bootstrap-local"
+          ditto "$RUNNER_TEMP/audited/Guest Star Experience.app" "$RUNNER_TEMP/bootstrap-local/Guest Star Experience.app"
       - name: Compile current native source and package current Bridge source
         run: |
           bridge=karaoke-github-package/guest-star-bridge
-          audited="$RUNNER_TEMP/audited/Guest Star Experience.app"
+          audited="$RUNNER_TEMP/bootstrap-local/Guest Star Experience.app"
           python3 "$bridge/macos/build_vocal_stream.py" --ort-sdk "$RUNNER_TEMP/onnxruntime-osx-arm64-1.26.0" --model "$audited/Contents/Resources/bridge/stem-engine/gs-vocalrt/vocal-stream.onnx" --output "$RUNNER_TEMP/native"
           python3 "$bridge/macos/build_release_46.py" --audited-app "$audited" --native-executable "$RUNNER_TEMP/native/GuestStarBridge" --output "$RUNNER_TEMP/package" --source-commit "$GITHUB_SHA" --build "$GITHUB_RUN_NUMBER" --minimum-macos 15.5
           app="$RUNNER_TEMP/package/distribution/Guest Star Experience.app"
