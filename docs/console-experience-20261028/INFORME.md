@@ -41,7 +41,7 @@ La identidad del huésped sigue siendo la del dispositivo de la sesión Guest St
 Capturas reales del navegador, con hoteles y participantes de un entorno local aislado, sin alterar actividades de producción:
 
 - [Home](capturas/home.png), [Hotel Select](capturas/hotel-select-a.png), [Activity Select](capturas/activities.png).
-- [Experience Select](capturas/experiences.png), [Karaoke](capturas/karaoke-engine.png), [Game Arena](capturas/game-arena.png).
+- [Experience Select](capturas/experiences.png), [Karaoke](capturas/karaoke-engine.png), [Game Arena](capturas/game-arena.jpg).
 - [Show Director](capturas/director-segment.png), [Prepare Experience](capturas/prepare-experience.png), [reglas de segmento](capturas/segment-rules.png).
 - [Request móvil](capturas/public-mobile-show.png), [respuesta confirmada](capturas/public-answer-accepted.png).
 - [Star Screen](capturas/star-screen-show.png) y [Preview](capturas/preview-show.png): misma escena y canvas existente de 1920×1080.
@@ -83,7 +83,7 @@ Las pruebas de dominio cubren los once juegos base y reglas compartidas. El show
 
 Resultados y límites de la validación final se registran en el cierre de entrega. Evidencia ya confirmada:
 
-- Dominio de Game Engine y Show Composer: 37/37, incluyendo 50/100/150/250 participantes controlados, respuestas/votos únicos, puntuaciones esperadas, recuperación, aislamiento, rondas, siete decisiones públicas y reglas de importación.
+- Dominio de Game Engine y Show Composer: 38/38, incluyendo 50/100/150/250 participantes controlados, respuestas/votos únicos, puntuaciones esperadas, recuperación, aislamiento, rondas, siete decisiones públicas y reglas de importación.
 - HTTP local real: Cloudflare workerd + Durable Object SQLite + D1 + autorización de plataforma. 100 participantes, cinco rondas, 500 respuestas; ganador esperado de 500 puntos; reintentos deduplicados y 1126 eventos persistidos sin duplicados.
 - Show HTTP local: 150 accesos reales mediante el mismo PIN; 300 respuestas, 426 papeletas escénicas, cuatro finalistas y campeón esperado Huésped 4; cinco segmentos dentro de la misma actividad; resultados fuente conservados y contribuciones normalizadas.
 - 150 WebSockets autenticados sobre TCP local, 150 conexiones abiertas y 150/150 pong, cierre controlado. No se extrapola a 150 teléfonos físicos o WiFi de hotel.
@@ -128,7 +128,7 @@ Las rutas privadas de respaldo están en `console-game-engine-20261028/rollback`
 
 ## Cierre verificado
 
-- Suite final Bridge: **549/549**, cero fallos, omitidos o cancelados. Dominio: **37/37**. La aserción de versión visible detectó el texto antiguo del encabezado durante el incremento de versión; se corrigió la interfaz y se repitió la suite completa, sin omitir la prueba.
+- Suite final Bridge: **549/549**, cero fallos, omitidos o cancelados. Dominio: **38/38**. La aserción de versión visible detectó el texto antiguo del encabezado durante el incremento de versión; se corrigió la interfaz y se repitió la suite completa, sin omitir la prueba.
 - Migraciones remotas 0008 y0009 aplicadas correctamente. Worker desplegado: **3884c127-ab5c-4fcf-9f45-b5e77997a14e**, etiqueta `guest-star-4.7.0`, código fuente `cce6a79`. Sitio: [request.gstarxp.com](https://request.gstarxp.com). Presupuesto del handler: 3,880,459 bytes / 1,147,272 gzip; sin traducciones públicas filtradas al runtime.
 - Producción: `/` y `/join` responden200; `/api/games` rechaza anónimo con403 y rechaza correctamente con409/`ACTIVITY_UNAVAILABLE` la actividad real seleccionada que ya estaba finalizada. No se inició una actividad real ni se introdujeron resultados ficticios en producción. La validación masiva sigue siendo local controlada.
 - App **4.7.0/build470** instalada en `/Applications/Guest Star Experience.app`, firma deep/strict verificada y abierta en Home. Autenticación conservada. Configuración JSON idéntica antes/después. **25 solicitudes con los mismos IDs, estados, revisiones y orden; biblioteca58 y vigilancia activa**. Reproducción y actividad detenidas. El arranque administrativo no monta un motor hasta entrar a operación; no se cambió la preferencia guardada de reproducción.
@@ -140,3 +140,5 @@ La captura nativa de la app instalada se conserva localmente en `console-game-en
 La PR previa49 de la entrega4.6.1 sigue abierta. Esta entrega se conserva en una rama separada y una PR apilada sobre su base, para no ampliar ni reescribir esa revisión existente. El pipeline de validación admite esa base; el evento pull_request sigue omitiendo despliegue y publicación automáticos.
 
 Pruebas reproducibles: `npm run test:games`, `npm run test:games:http`, `npm run test:d1` y `npm test` dentro del Bridge. La CI de la PR incluye las nuevas suites de dominio/HTTP; su resultado hospedado se debe distinguir de las pruebas locales aprobadas.
+
+Revisión build471: la unión de clasificados se puede configurar, guardar y asignar a Grand Final desde el Director. [Captura real de esa selección](capturas/mixed-final-qualification.jpg). El catálogo usa todos los formatos autorizados recibidos del servidor, sin limitarse a los nueve descriptores de la fase inicial. Se retiró el texto obsoleto que afirmaba que los juegos estaban pendientes. Una aserción de carga que suponía empate por coincidencia de milisegundo se corrigió: ahora contrasta la decisión con los tiempos reales confirmados y exige empate o ganador correcto según corresponda, manteniendo íntegros los totales de puntos y deduplicación.
