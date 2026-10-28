@@ -524,6 +524,8 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   let intentionalMediaReset = false;
   let intentionalBackgroundReset = false;
   let backgroundCurrentId = '';
+  let gameMediaReserved=false;
+  window.addEventListener('gueststar:game-media-lease',event=>{gameMediaReserved=event.detail?.active===true;});
   let backgroundPendingId = '';
   let backgroundShuffle = [];
   let lastBackgroundId = '';
@@ -2626,6 +2628,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function startKaraoke() {
+    if(gameMediaReserved){showNotice('Detén el audio del juego antes de reproducir karaoke.',true);return;}
     recordAudio('KARAOKE_START_REQUEST', 'INFO', { trackId: currentId, stageMode, transitionBusy });
     if (!playerReady()) { showNotice('Inicia la actividad en modo Player antes de reproducir.', true); return; }
     if (transitionBusy) return;
@@ -2849,6 +2852,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function playNextBackground({ resetFailures = false, preferredId = '' } = {}) {
+    if(gameMediaReserved)return;
     if (!playerPreparationReady() || stageMode === 'karaoke') return;
     if (!backgroundTracks().length) { renderBackground(); return; }
     if (backgroundTransition) return backgroundTransition;
@@ -2941,6 +2945,7 @@ export function initPlayerBeta({ api, showNotice, confirmAction, diagnostics = n
   }
 
   async function ensureBackgroundPlaying() {
+    if(gameMediaReserved)return;
     if (!playerPreparationReady() || stageMode === 'karaoke' || !backgroundTracks().length) return;
     const pending = backgroundPending();
     if (!backgroundAudio.src || (!backgroundCurrent() && !pending)) return playNextBackground();

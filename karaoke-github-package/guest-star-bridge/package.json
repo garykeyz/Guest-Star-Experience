@@ -1,9 +1,9 @@
 {
   "name": "guest-star",
-  "version": "4.6.1",
+  "version": "4.7.0",
   "private": true,
   "type": "module",
-  "description": "Aplicación local Guest Star con Player interno y Bridge opcional para VirtualDJ.",
+  "description": "Aplicaci\u00f3n local Guest Star con Player interno y Bridge opcional para VirtualDJ.",
   "engines": {
     "node": ">=22"
   },

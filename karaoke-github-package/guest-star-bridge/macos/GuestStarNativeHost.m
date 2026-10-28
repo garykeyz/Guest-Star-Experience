@@ -752,6 +752,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     AVAudioFramePosition start = (AVAudioFramePosition)floor(bounded * file.processingFormat.sampleRate);
     if (start >= file.length) continue;
     AVAudioFrameCount frames = (AVAudioFrameCount)MIN((AVAudioFramePosition)UINT32_MAX, file.length - start);
+    if([self.name isEqualToString:@"game"]){AVAudioFramePosition end=MIN(file.length,(AVAudioFramePosition)floor(self.duration*file.processingFormat.sampleRate));if(end<=start)continue;frames=(AVAudioFrameCount)MIN((AVAudioFramePosition)frames,end-start);}
     [player scheduleSegment:file startingFrame:start frameCount:frames atTime:nil completionHandler:nil];
   }
   for (NSString *slot in self.gsxReaders) {
@@ -1031,6 +1032,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 @property(nonatomic) BOOL nativeAudioIdleSuspended;
 @property(nonatomic, strong) GSAudioDeck *karaokeAudioDeck;
 @property(nonatomic, strong) GSAudioDeck *backgroundAudioDeck;
+@property(nonatomic, strong) GSAudioDeck *gameAudioDeck;
+@property(nonatomic, copy) NSString *gameAudioOwner;
 @property(nonatomic, strong) AVAudioMixerNode *nativeOutputMix;
 @property(nonatomic, strong) AVAudioUnitEQ *nativeMasterGain;
 @property(nonatomic, strong) AVAudioMixerNode *nativeMeterMix;
@@ -1149,6 +1152,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   [self.backgroundWaveformTimer invalidate];
   [self.karaokeAudioDeck stopAndClear];
   [self.backgroundAudioDeck stopAndClear];
+  [self.gameAudioDeck stopAndClear];
   [self.mainWebView.configuration.userContentController
       removeScriptMessageHandlerForName:GSNativeHandlerName];
 }
@@ -1595,7 +1599,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   return [path hasPrefix:@"/api/player/media/"] ||
       [path hasPrefix:@"/api/player/background/media/"] ||
       [path hasPrefix:@"/api/player/stems/"] ||
-      [path hasPrefix:@"/api/player/library-media/"];
+      [path hasPrefix:@"/api/player/library-media/"] || [path hasPrefix:@"/api/games/media/"];
 }
 
 - (BOOL)ensureNativeAudioEngine:(NSError **)error {
@@ -1663,24 +1667,26 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   NSString *name = [payload[@"deck"] isKindOfClass:NSString.class] ? payload[@"deck"] : @"";
   if ([name isEqualToString:@"karaoke"]) return self.karaokeAudioDeck;
   if ([name isEqualToString:@"background"]) return self.backgroundAudioDeck;
+  if ([name isEqualToString:@"game"]) return self.gameAudioDeck;
   if (message != NULL) *message = @"El deck de audio nativo no es válido.";
   return nil;
 }
 
 - (NSDictionary *)nativeAudioStatePayload {
+  NSMutableArray *decks = [NSMutableArray arrayWithArray:@[self.karaokeAudioDeck != nil ? [self.karaokeAudioDeck state] : @{@"deck":@"karaoke",@"playing":@NO},self.backgroundAudioDeck != nil ? [self.backgroundAudioDeck state] : @{@"deck":@"background",@"playing":@NO}]];
+  if(self.gameAudioDeck != nil)[decks addObject:[self.gameAudioDeck state]];
   return @{
     @"engine": @"AVAudioEngine",
+    @"capabilities": @{@"gameFragments":@YES},
+    @"gameOwner": self.gameAudioOwner ?: @"",
     @"audioEngineCount": @(self.nativeAudioEngine != nil ? 1 : 0),
     @"audioContextCount": @0,
-    @"timePitchNodeCount": @(self.nativeAudioEngine != nil ? 2 : 0),
+    @"timePitchNodeCount": @(self.nativeAudioEngine != nil ? (self.gameAudioDeck != nil ? 3 : 2) : 0),
     @"running": @(self.nativeAudioEngine.isRunning),
     @"idleSuspended": @(self.nativeAudioIdleSuspended),
     @"masterDb": @(self.nativeMasterDb),
     @"outputDeviceId": self.nativeAudioOutputID ?: @"",
-    @"decks": @[
-      self.karaokeAudioDeck != nil ? [self.karaokeAudioDeck state] : @{ @"deck": @"karaoke", @"engine": @"AVAudioEngine", @"playing": @NO },
-      self.backgroundAudioDeck != nil ? [self.backgroundAudioDeck state] : @{ @"deck": @"background", @"engine": @"AVAudioEngine", @"playing": @NO }
-    ]
+    @"decks": decks
   };
 }
 
@@ -1702,7 +1708,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 - (void)nativeAudioStateTick:(NSTimer *)timer {
   (void)timer;
   if (self.nativeAudioEngine != nil &&
-      (self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing)) {
+      (self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing || self.gameAudioDeck.playing)) {
     [self emitNativeAudioState];
   }
 }
@@ -1710,7 +1716,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
 - (void)nativeAudioMeterTick:(NSTimer *)timer {
   (void)timer;
   if (!self.mainPageReady || self.terminating || self.nativeAudioEngine == nil) return;
-  if (!(self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing)) return;
+  if (!(self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing || self.gameAudioDeck.playing)) return;
   [self dispatchEvent:GSOutputMeterEventName detail:@{
     @"rmsL": @(self.outputRmsLeft),
     @"rmsR": @(self.outputRmsRight),
@@ -1751,6 +1757,12 @@ static SInt64 GSXGetSizeProc(void *clientData) {
     [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:engineError.localizedDescription];
     return;
   }
+  if([payload[@"deck"] isEqual:@"game"]){
+    if(![payload[@"gameId"] isKindOfClass:NSString.class] || [payload[@"gameId"] length]<8){[self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:@"La experiencia no está identificada."];return;}
+    if(self.gameAudioDeck.playing && ![self.gameAudioOwner isEqual:payload[@"gameId"]]){[self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:@"Otra experiencia controla el audio."];return;}
+    if(self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing){[self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:@"Detén la reproducción actual antes de preparar audio de juego."];return;}
+    if(self.gameAudioDeck == nil)self.gameAudioDeck=[[GSAudioDeck alloc] initWithName:@"game" engine:self.nativeAudioEngine destination:self.nativeOutputMix];
+  }
   NSString *deckError = nil;
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
   NSArray *rawSources = [payload[@"sources"] isKindOfClass:NSArray.class] ? payload[@"sources"] : @[];
@@ -1781,6 +1793,11 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   deck.stemEngine = [payload[@"stemEngine"] isKindOfClass:NSString.class] ? payload[@"stemEngine"] : @"spleeter";
   [deck loadSources:sources position:position completion:^(BOOL ok, NSString *error, NSTimeInterval duration) {
     if (!ok) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:error]; return; }
+    if([deck.name isEqualToString:@"game"]){
+      NSTimeInterval end=[payload[@"endPosition"] doubleValue];
+      if(!(isfinite(end) && end>position && end-position<=120 && end<=duration)){[deck stopAndClear];[self emitNativeAudioFailureForPayload:payload action:@"nativeAudioLoad" error:@"El fragmento solicitado no es válido para este recurso."];return;}
+      deck.duration=end;self.gameAudioOwner=payload[@"gameId"];
+    }
     // loadSources applies each source's neutral transport gain.  Apply the
     // user-controlled voice gain only after that work, so the visual slider and
     // the actual AVAudioMixerNode always agree from the first audible frame.
@@ -1820,6 +1837,11 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   if (![self ensureNativeAudioEngine:&engineError]) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioPlay" error:engineError.localizedDescription]; return; }
   NSString *deckError = nil;
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
+  const BOOL gameTarget=[payload[@"deck"] isEqual:@"game"];
+  if((gameTarget && (self.karaokeAudioDeck.playing || self.backgroundAudioDeck.playing)) || (!gameTarget && self.gameAudioDeck.playing)){
+    [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioPlay" error:@"La salida pertenece a otra experiencia. Detén su audio antes de cambiar."];return;
+  }
+
   NSError *playError = nil;
   if (deck == nil || ![deck playAtPosition:MAX(0.0, [payload[@"position"] doubleValue]) error:&playError]) {
     [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioPlay" error:deckError ?: playError.localizedDescription];
@@ -1884,12 +1906,13 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   GSAudioDeck *deck = [self nativeDeckForPayload:payload error:&deckError];
   if (deck == nil) { [self emitNativeAudioFailureForPayload:payload action:@"nativeAudioStop" error:deckError]; return; }
   [deck cancelPendingLoadsAndStop];
+  if([deck.name isEqualToString:@"game"])self.gameAudioOwner=nil;
   [self pauseNativeAudioEngineIfIdle];
   [self emitNativeAudioSuccessForPayload:payload action:@"nativeAudioStop" detail:@{ @"deck": deck.name }];
 }
 
 - (void)pauseNativeAudioEngineIfIdle {
-  if (self.nativeAudioEngine.isRunning && !self.karaokeAudioDeck.playing && !self.backgroundAudioDeck.playing) {
+  if (self.nativeAudioEngine.isRunning && !self.karaokeAudioDeck.playing && !self.backgroundAudioDeck.playing && !self.gameAudioDeck.playing) {
     [self.nativeAudioEngine pause];
     self.nativeAudioIdleSuspended = YES;
   }
@@ -1900,6 +1923,8 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   if (self.nativeAudioEngine == nil || self.terminating) return;
   BOOL karaokePlaying = self.karaokeAudioDeck.playing;
   BOOL backgroundPlaying = self.backgroundAudioDeck.playing;
+  BOOL gamePlaying = self.gameAudioDeck.playing;
+  NSTimeInterval gamePosition = [self.gameAudioDeck currentPosition];
   NSTimeInterval karaokePosition = [self.karaokeAudioDeck currentPosition];
   NSTimeInterval backgroundPosition = [self.backgroundAudioDeck currentPosition];
   [self.nativeAudioEngine stop];
@@ -1910,6 +1935,7 @@ static SInt64 GSXGetSizeProc(void *clientData) {
   }
   if (karaokePlaying) [self.karaokeAudioDeck playAtPosition:karaokePosition error:nil];
   if (backgroundPlaying) [self.backgroundAudioDeck playAtPosition:backgroundPosition error:nil];
+  if (gamePlaying) [self.gameAudioDeck playAtPosition:gamePosition error:nil];
   [self emitNativeAudioState];
 }
 

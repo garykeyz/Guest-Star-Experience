@@ -1,3 +1,5 @@
+import {createGameMediaRegistry} from './game-media-registry.mjs';
+import {createGameProxy} from './game-proxy.mjs';
 import {createVdjOverlayHttp,projectVdjDisplay} from './vdj-overlay.mjs';
 import {createVdjHostCommandGate,assertVdjHostIntent} from './virtualdj-host-intent.mjs';
 import { clearConfirmedFutureQueue } from './virtualdj-finish.mjs';
@@ -140,7 +142,7 @@ const STEM_ENGINE_VERIFICATION_PATH = resolve(STEM_DATA_ROOT, "data", "stem-engi
 const DEMUCS_ENGINE_CLI = process.env.GUEST_STAR_DEMUCS_CLI ||
   resolve(STEM_ENGINE_ROOT, "node_modules", "demucs", "dist", "cli.js");
 const stemEngineRequire = createRequire(resolve(STEM_ENGINE_ROOT, "package.json"));
-const BRIDGE_VERSION = "4.6.1";
+const BRIDGE_VERSION = "4.7.0";
 const BRIDGE_PROTOCOL_VERSION = "4.2.0";
 const requestedPort = Number(process.env.GUEST_STAR_PORT || 0);
 const WEB_BETA = process.env.GUEST_STAR_WEB_BETA === "1";
@@ -5570,7 +5572,17 @@ async function songStorageView() {
   return songStorageScan;
 }
 
+const gameProxy=createGameProxy({getConfig:()=>config,getState:stateView});
+const gameMediaRegistry=createGameMediaRegistry({root:resolve(ROOT,'data'),getScope:()=>config.lastActivityId?JSON.stringify([config.lastHotelId,config.lastVenueId,config.lastActivityId,tenantState.session?.runId || tenantState.activity?.currentCycleId || activityState.activityStartedAt]):'',resolveLibraryFile:async token=>assertPlayerFile(decodeMediaToken(token))});
+
 async function api(request, response, url) {
+  if(url.pathname.startsWith('/api/games') && request.headers.origin && request.headers.origin!==`http://${String(request.headers.host||'')}`){json(response,403,{ok:false,code:'ORIGIN_DENIED'});return;}
+  if(url.pathname==='/api/games/media' && ['GET','POST'].includes(request.method)){requireSignedInBridge();json(response,200,{ok:true,resources:request.method==='POST'?[await gameMediaRegistry.register(await readJson(request))]:await gameMediaRegistry.list()});return;}
+  const gameMediaMatch=url.pathname.match(/^\/api\/games\/media\/([a-f0-9-]{36})$/);
+  if(request.method==='GET' && gameMediaMatch){requireSignedInBridge();await streamPlayerMedia(request,response,await gameMediaRegistry.resolve(gameMediaMatch[1]));return;}
+  if(request.method==='GET' && url.pathname==='/api/games/presentation'){json(response,200,gameProxy.presentation());return;}
+  if(request.method==='POST' && url.pathname==='/api/games'){requireSignedInBridge();try{json(response,200,await gameProxy.request(await readJson(request)));}catch(error){json(response,409,{ok:false,code:error.message});}return;}
+
   const { pathname } = url;
   if((pathname.startsWith('/api/player/source/')||pathname.startsWith('/api/player/media-preferences')||pathname==='/api/player/media/choose-folder') && request.headers.origin && request.headers.origin!==`http://${String(request.headers.host||'')}`){json(response,403,{ok:false});return;}
 

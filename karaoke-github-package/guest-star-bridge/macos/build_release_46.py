@@ -51,7 +51,8 @@ info.update(CFBundleDisplayName='Guest Star Experience',
             CFBundleName='Guest Star Experience',
             CFBundleShortVersionString=version, CFBundleVersion=args.build,
             LSMinimumSystemVersion=args.minimum_macos,
-            LSArchitecturePriority=['arm64'])
+            LSArchitecturePriority=['arm64'],
+            NSMicrophoneUsageDescription='Guest Star usa el micrófono, con tu autorización, para calibrar y medir reacciones del público.')
 with (contents / 'Info.plist').open('wb') as handle:
     plistlib.dump(info, handle)
 shutil.copy2(args.native_executable, macos / 'GuestStarBridge')

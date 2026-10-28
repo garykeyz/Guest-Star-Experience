@@ -1,0 +1,29 @@
+import {gameStateLabel} from './shared/game-phase-copy.js';
+/** Same scene DOM and fixed canvas for Preview and Star Screen. No media commands. */
+export function installGameScenes(canvas){
+ const region=document.createElement('section');region.className='star-game-scene';region.hidden=true;region.setAttribute('aria-label','Game Arena');canvas.append(region);
+ const channel=new BroadcastChannel('guest-star-games');let revision='',refreshing=false,pending=false,timer=0,deadline=null,offset=0;
+ const add=(tag,text,className)=>{const n=document.createElement(tag);n.textContent=text;if(className)n.className=className;return n;};
+ async function refresh(){if(refreshing){pending=true;return;}refreshing=true;try{
+  const start=Date.now(),response=await fetch('/api/games/presentation',{cache:'no-store'});if(!response.ok)return;const data=await response.json(),presentation=data.presentation,show=presentation?.show,game=presentation?.game;
+  if(!show&&(!game || game.id!==presentation.lease?.gameId)){region.hidden=true;canvas.classList.remove('game-presenting');revision='';return;}
+  if(show&&!game){const scene=presentation.lease?.scene || 'auto',key=show.id+':'+show.revision+':'+scene;if(key===revision)return;revision=key;deadline=null;region.replaceChildren();region.append(add('p','GUEST STAR LIVE','star-game-eyebrow'),add('h1',show.title),add('p',show.status==='COMPLETED'?'Gracias por ser parte del espectáculo':show.registrationOpen?'Únete al show · elige cómo quieres participar':gameStateLabel(show.status),'star-game-status'));if(show.registrationOpen)region.append(add('p',`${show.participantCount} participantes · mismo PIN de la actividad`,'star-game-clue'));const next=show.segments.find(s=>['PREPARED','SCHEDULED'].includes(s.status));if(next&&show.status!=='COMPLETED')region.append(add('p','Próximo desafío · '+next.title,'star-game-clue'));const board=show.results?.leaderboard || show.leaderboard;if(board?.length&&scene!=='qualifiers'&&scene!=='welcome'){const list=add('ol','','star-game-board');for(const p of board.slice(0,show.status==='COMPLETED'?3:8))list.append(add('li',`${p.rank}. ${p.name}   ${p.score}`));region.append(list);}if(scene==='qualifiers'){region.append(add('h2','Clasificados'));for(const [name,ids]of Object.entries(show.cohorts || {}).slice(-3))region.append(add('p',name+' · '+ids.map(id=>board?.find(p=>p.id===id)?.name || 'Participante').join(' · '),'star-game-clue'));}if(show.status==='COMPLETED'||scene==='awards')for(const award of (show.awards || []).slice(-3)){const ids=award.winners?.map(v=>v.id) || [award.winnerId];region.append(add('p',award.category+' · '+ids.map(id=>board?.find(p=>p.id===id)?.name || 'Estrella del show').join(' · '),'star-game-clue'));}appendAccess();region.hidden=false;canvas.classList.add('game-presenting');return;}
+  offset=game.serverNow-(start+Date.now())/2;const key=game.id+':'+game.revision;if(key===revision)return;revision=key;deadline=game.status==='ROUND_ACTIVE'?game.round?.deadline:null;
+  region.replaceChildren();region.append(add('p',game.definition.name,'star-game-eyebrow'),add('h1',game.round?.scene?.prompt || game.definition.name));
+  region.append(add('p',game.status==='REGISTRATION_OPEN'?'Únete desde Request con el PIN de esta actividad':game.status==='PAUSED'?'Partida en pausa':gameStateLabel(game.status),'star-game-status'));
+  for(const clue of game.round?.scene?.clues || [])region.append(add('p',clue,'star-game-clue'));
+  const options=add('div','','star-game-options');for(const [i,text] of (game.round?.scene?.options || []).entries())options.append(add('div',`${String.fromCharCode(65+i)}  ${text}`));if(options.children.length)region.append(options);
+  if(game.round?.scene?.performers?.length){const list=add('div','','star-game-options');for(const person of game.round.scene.performers.slice(0,8))list.append(add('div',person.name));region.append(list);}
+  if(deadline)region.append(add('output','','star-game-timer'));
+  const leaderboard=game.results?.podium || game.leaderboard || [];if(leaderboard.length){const list=add('ol','','star-game-board');for(const p of leaderboard.slice(0,show.status==='COMPLETED'?3:8))list.append(add('li',`${p.rank}. ${p.name}   ${p.score}`));region.append(list);}
+  if(game.status==='REGISTRATION_OPEN')region.append(add('p',`${game.participants.length} participantes`));
+  appendAccess();
+  region.hidden=false;canvas.classList.add('game-presenting');updateClock();
+ }catch{/* Keep last confirmed scene during transient disconnect. */}finally{refreshing=false;if(pending){pending=false;void refresh();}}}
+ function appendAccess(){const access=document.querySelector('#starScreenActivityAccess');if(access&&!access.hidden){const box=add('aside','','star-game-access');const qr=access.querySelector('img');if(qr?.src){const image=document.createElement('img');image.src=qr.src;image.alt='QR de la actividad';box.append(image);}box.append(add('span','PIN '+(document.querySelector('#starScreenActivityPin')?.textContent || '')));region.append(box);}}
+ function updateClock(){const out=region.querySelector('output');if(out&&deadline)out.textContent=String(Math.max(0,Math.ceil((deadline-Date.now()-offset)/1000)));}
+ channel.onmessage=event=>{if(event.data?.type==='game-presentation-invalidated')void refresh();};
+ timer=setInterval(()=>{if(!region.hidden)updateClock();},250);void refresh();
+ window.addEventListener('focus',refresh);const accessObserver=new MutationObserver(()=>{if(!region.hidden){region.querySelector('.star-game-access')?.remove();appendAccess();}});const accessSource=document.querySelector('#starScreenActivityAccess');if(accessSource)accessObserver.observe(accessSource,{subtree:true,childList:true,attributes:true,characterData:true});
+ return {refresh,destroy(){accessObserver.disconnect();channel.close();clearInterval(timer);window.removeEventListener('focus',refresh);region.remove();}};
+}
