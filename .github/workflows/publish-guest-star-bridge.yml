@@ -10,6 +10,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/connectivity-p0-20261027
     paths:
       - .github/workflows/publish-guest-star-bridge.yml
       - "karaoke-github-package/**"
