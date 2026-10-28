@@ -42,8 +42,18 @@ jobs:
         working-directory: karaoke-github-package
         run: npm audit --audit-level=low
 
+      - name: Require a decoder for waveform integration tests
+        run: |
+          if ! command -v ffmpeg; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -version
+
       - name: Test Bridge regression suite
         working-directory: karaoke-github-package/guest-star-bridge
+        env:
+          GUEST_STAR_TEST_FFMPEG: ffmpeg
         run: npm test
 
       - name: Check Bridge browser and supervisor syntax

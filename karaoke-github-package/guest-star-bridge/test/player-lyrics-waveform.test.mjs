@@ -11,7 +11,7 @@ import {validateAlignment} from '../src/lyric-version-store.mjs';
 import {activeWordIndex,constrainWord,normalizeWordIntervals,secondsToX,xToSeconds} from '../public/shared/lyric-timeline.js';
 import {timedLyricsLines} from '../public/shared/timed-lyrics.js';
 
-const ffmpeg='/Applications/Guest Star Experience.app/Contents/Resources/bridge/stem-engine/node_modules/ffmpeg-static/ffmpeg';
+const ffmpeg=process.env.GUEST_STAR_TEST_FFMPEG || '/Applications/Guest Star Experience.app/Contents/Resources/bridge/stem-engine/node_modules/ffmpeg-static/ffmpeg';
 const fixture=async fn=>{const root=await mkdtemp(join(tmpdir(),'gs-lyric-wave-'));try{await fn(root);}finally{await rm(root,{recursive:true,force:true});}};
 
 test('timeline seeks forward/backward among thousands of words without accumulated clock state',()=>{
