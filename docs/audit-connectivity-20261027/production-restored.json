@@ -1,0 +1,33 @@
+{
+  "at": "2026-10-27T22:28:10.953961+00:00",
+  "version": "4.6",
+  "build": "450c1dd38bb9bb3387b2d791fce3473290b5a54cb33a48d9cacb65fda8ab6ce8",
+  "activityRunning": false,
+  "activityIdUnchanged": true,
+  "requestIdsUnchanged": true,
+  "requestCount": 3,
+  "requestStatuses": [
+    {
+      "id": "req-16d1b4e4ab71729563d60a58e657317f",
+      "status": "No est\u00e1 local",
+      "stateRevision": 2
+    },
+    {
+      "id": "req-5e254b0a56d12731719d1f2b1d077725",
+      "status": "No est\u00e1 local",
+      "stateRevision": 3
+    },
+    {
+      "id": "req-e29a9af7918891483cd31dd28cfc2e07",
+      "status": "No est\u00e1 local",
+      "stateRevision": 3
+    }
+  ],
+  "operatingMode": {
+    "selected": "",
+    "lastSelected": "bridge",
+    "locked": false,
+    "canChange": true
+  },
+  "originalProductionDataPathRestored": true
+}

@@ -1,23 +1,31 @@
 "use client";
 
+import { closureMessage } from "@/lib/guest-star/closure-message";
+
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { normalizeBrandImageUrl } from "@/lib/guest-star/media-url";
+import WrongActivityExit from "./WrongActivityExit";
+import BrandLogos from "./BrandLogos";
+import { brandingTheme } from "@/guest-star-bridge/public/shared/branding-theme";
+import { guestDeviceId, storePublicActivityContext } from "@/lib/guest-star/public-device";
+import PlanBSuggestions, { type GuestLanguage } from "@/components/PlanBSuggestions";
+import { FUNNY_MESSAGES, GUEST_LANGUAGES, LANGUAGE_BY_CODE } from "@/guest-star-bridge/public/shared/guest-locales.js";
 import {
-  ArrowRight, Bell, CalendarPlus, Check, ChevronDown, Clock3, Headphones,
-  Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
+  ArrowRight, Bell, CalendarPlus, Check, Clock3, Headphones,
+  Globe2, Hourglass, Mail, MessageCircleMore, Mic2, Music2, RotateCcw, Send, Star,
   Sparkles, UserRound, UsersRound, XCircle
 } from "lucide-react";
 
-type Lang = "es" | "en" | "fr" | "it" | "de" | "ru" | "pt";
+export type Lang = GuestLanguage;
 type FieldKey = "name" | "song" | "artist" | "comment";
 type Copy = {
-  live: string; title: string; sub: string; desc: string; fields: Record<FieldKey, [string, string]>;
+  live: string; sub: string; desc: string; fields: Record<FieldKey, [string, string]>;
   error: string; submit: string; sending: string; success: string; stage: string;
   again: string; closed: string; closedText: string; failed: string; steps: string[];
 };
 
-type ApiState = {
+export type ApiState = {
+  realtimeChannel?: string;
   accepting?: boolean;
   activityHours?: number;
   activityStartedAt?: string;
@@ -29,8 +37,8 @@ type ApiState = {
   activityId?: string;
   serverNow?: string;
   _receivedAt?: number;
-  hotel?: { name?: string; slug?: string; publicUrl?: string; timezone?: string };
-  venue?: { name?: string } | null;
+  hotel?: { hotelId?: string; name?: string; slug?: string; publicUrl?: string; timezone?: string };
+  venue?: { venueId?: string; name?: string } | null;
   activity?: {
     activityId?: string;
     name?: string;
@@ -54,11 +62,22 @@ type ApiState = {
     activityName?: string;
     venueName?: string;
     scheduledStartAt?: string;
+    requestOpeningAt?: string;
     durationSeconds?: number;
     showCountdown?: boolean;
   }>;
+  session?: {startsAt?:string;autoStart?:boolean};
+  finalExperience?: {finished?:boolean;message?:string;nextActivity?: {scheduledStartAt?:string;hotelName?:string;venueName?:string;activityName?:string;timezone?:string}|null}|null;
+  nextOccurrenceAt?: string;
+  upcomingOccurrences?: string[];
+  accessState?: "live" | "upcoming" | "no_date";
+  kioskAccess?: {
+    accessId?: string; hotelId?: string; activityId?: string; venueId?: string;
+    pin?: string; joinUrl?: string; kioskUrl?: string; qrViewUrl?: string;
+    accessVersion?: number; defaultMessagesEnabled?: boolean; customMessages?: string[];
+  } | null;
 };
-type ApiResponse = ApiState & {
+export type ApiResponse = ApiState & {
   ok?: boolean;
   code?: string;
   error?: string;
@@ -104,38 +123,21 @@ type ModuleCopy = {
 };
 
 const ENDPOINT = "/api/karaoke";
-const GUEST_DEVICE_STORAGE_KEY = "guest-star-public-device-v1";
 const TRANSIENT_RETRY_DELAYS_MS = [200, 500, 1000, 2000, 4000, 6000];
-let ephemeralGuestDeviceId = "";
+const UI_LANGUAGE_STORAGE_KEY = "guest-star-request-ui-language-v1";
+const DEVANAGARI_PATTERN = /[\u0900-\u097F\uA8E0-\uA8FF\u{11B00}-\u{11B5F}]/u;
+const HINDI_LATIN_EXAMPLES: Record<Exclude<FieldKey,"comment">,string> = {
+  name:"Rahul",song:"Tum Hi Ho",artist:"Arijit Singh"
+};
+const HINDI_LATIN_HELP = "कृपया अंग्रेज़ी अक्षरों में लिखें, जैसे:";
 
-function newGuestDeviceId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`;
+function containsDevanagari(value:string) {
+  return DEVANAGARI_PATTERN.test(value);
 }
 
-function guestDeviceId() {
-  if (ephemeralGuestDeviceId) return ephemeralGuestDeviceId;
-  try {
-    const saved = window.localStorage.getItem(GUEST_DEVICE_STORAGE_KEY) || "";
-    if (/^[a-z0-9._:-]{16,128}$/i.test(saved)) {
-      ephemeralGuestDeviceId = saved;
-      return saved;
-    }
-    ephemeralGuestDeviceId = newGuestDeviceId();
-    window.localStorage.setItem(GUEST_DEVICE_STORAGE_KEY, ephemeralGuestDeviceId);
-    return ephemeralGuestDeviceId;
-  } catch {
-    ephemeralGuestDeviceId = newGuestDeviceId();
-    return ephemeralGuestDeviceId;
-  }
-}
-
-const languages: [Lang, string, string, string][] = [
-  ["es","🇪🇸","Spanish","Español"],["en","🇺🇸","English","English"],["fr","🇫🇷","French","Français"],
-  ["it","🇮🇹","Italian","Italiano"],["de","🇩🇪","German","Deutsch"],["ru","🇷🇺","Russian","Русский"],["pt","🇵🇹","Portuguese","Português"]
-];
+const languages = GUEST_LANGUAGES.map((language)=>([
+  language.code,language.flag,language.englishName,language.nativeName
+] as [Lang,string,string,string]));
 const duplicateCopy: Record<Lang, DuplicateCopy> = {
   en: {title:"Please confirm",singer:"You already have another request in this activity.",active:"This song has already been requested and is still active.",completed:"This song has already been sung during this activity.",question:"Do you still want to submit it?",continue:"Yes, continue",cancel:"Go back"},
   es: {title:"Confirma antes de continuar",singer:"Ya tienes otra solicitud en esta actividad.",active:"Esta canción ya fue solicitada y sigue activa.",completed:"Esta canción ya fue cantada durante esta actividad.",question:"¿Aun así quieres enviarla?",continue:"Sí, continuar",cancel:"Volver"},
@@ -143,7 +145,8 @@ const duplicateCopy: Record<Lang, DuplicateCopy> = {
   it: {title:"Conferma prima di continuare",singer:"Hai già un’altra richiesta in questa attività.",active:"Questo brano è già stato richiesto ed è ancora attivo.",completed:"Questo brano è già stato cantato durante questa attività.",question:"Vuoi inviarlo comunque?",continue:"Sì, continua",cancel:"Indietro"},
   de: {title:"Bitte bestätigen",singer:"Du hast bereits einen weiteren Wunsch für diese Veranstaltung.",active:"Dieser Song wurde bereits gewünscht und ist noch aktiv.",completed:"Dieser Song wurde während dieser Veranstaltung bereits gesungen.",question:"Möchtest du ihn trotzdem senden?",continue:"Ja, fortfahren",cancel:"Zurück"},
   ru: {title:"Подтвердите отправку",singer:"У вас уже есть другая заявка в этом мероприятии.",active:"Эта песня уже заказана и ещё активна.",completed:"Эту песню уже исполняли во время этого мероприятия.",question:"Всё равно отправить заявку?",continue:"Да, продолжить",cancel:"Назад"},
-  pt: {title:"Confirme antes de continuar",singer:"Já tem outro pedido nesta atividade.",active:"Esta música já foi pedida e continua ativa.",completed:"Esta música já foi cantada durante esta atividade.",question:"Deseja enviá-la mesmo assim?",continue:"Sim, continuar",cancel:"Voltar"}
+  pt: {title:"Confirme antes de continuar",singer:"Já tem outro pedido nesta atividade.",active:"Esta música já foi pedida e continua ativa.",completed:"Esta música já foi cantada durante esta atividade.",question:"Deseja enviá-la mesmo assim?",continue:"Sim, continuar",cancel:"Voltar"},
+  hi: {title:"कृपया पुष्टि करें",singer:"इस एक्टिविटी में आपका एक और रिक्वेस्ट पहले से है।",active:"यह गाना पहले ही माँगा गया है और अभी सक्रिय है।",completed:"यह गाना इस एक्टिविटी में पहले ही गाया जा चुका है।",question:"क्या फिर भी भेजना चाहते हैं?",continue:"हाँ, जारी रखें",cancel:"वापस जाएँ"}
 };
 const activityCopy: Record<Lang, ActivityCopy> = {
   en: {label:"ACTIVITY STATUS",notStarted:"The activity has not started",running:"Activity in progress",finished:"Scheduled time completed",elapsed:"Elapsed",remaining:"Remaining",queue:"People in queue"},
@@ -152,7 +155,8 @@ const activityCopy: Record<Lang, ActivityCopy> = {
   it: {label:"STATO DELL’ATTIVITÀ",notStarted:"L’attività non è ancora iniziata",running:"Attività in corso",finished:"Tempo previsto terminato",elapsed:"Trascorso",remaining:"Rimanente",queue:"Persone in coda"},
   de: {label:"AKTIVITÄTSSTATUS",notStarted:"Die Aktivität hat noch nicht begonnen",running:"Aktivität läuft",finished:"Geplante Zeit beendet",elapsed:"Vergangen",remaining:"Verbleibend",queue:"Personen in der Warteschlange"},
   ru: {label:"СТАТУС МЕРОПРИЯТИЯ",notStarted:"Мероприятие ещё не началось",running:"Мероприятие идёт",finished:"Запланированное время завершено",elapsed:"Прошло",remaining:"Осталось",queue:"Людей в очереди"},
-  pt: {label:"ESTADO DA ATIVIDADE",notStarted:"A atividade ainda não começou",running:"Atividade em curso",finished:"Tempo programado concluído",elapsed:"Decorrido",remaining:"Restante",queue:"Pessoas na fila"}
+  pt: {label:"ESTADO DA ATIVIDADE",notStarted:"A atividade ainda não começou",running:"Atividade em curso",finished:"Tempo programado concluído",elapsed:"Decorrido",remaining:"Restante",queue:"Pessoas na fila"},
+  hi: {label:"एक्टिविटी स्थिति",notStarted:"एक्टिविटी अभी शुरू नहीं हुई",running:"एक्टिविटी चल रही है",finished:"निर्धारित समय पूरा हुआ",elapsed:"बीता समय",remaining:"बाकी समय",queue:"कतार में लोग"}
 };
 const announcementCopy: Record<Lang,{following:string;returns:string}> = {
   en:{following:"COMING UP AT THIS HOTEL",returns:"GUEST STAR RETURNS"},
@@ -161,7 +165,8 @@ const announcementCopy: Record<Lang,{following:string;returns:string}> = {
   it:{following:"A SEGUIRE IN QUESTO HOTEL",returns:"GUEST STAR RITORNA"},
   de:{following:"ALS NÄCHSTES IN DIESEM HOTEL",returns:"GUEST STAR KEHRT ZURÜCK"},
   ru:{following:"ДАЛЕЕ В ЭТОМ ОТЕЛЕ",returns:"GUEST STAR ВЕРНЁТСЯ"},
-  pt:{following:"A SEGUIR NESTE HOTEL",returns:"GUEST STAR REGRESSA"}
+  pt:{following:"A SEGUIR NESTE HOTEL",returns:"GUEST STAR REGRESSA"},
+  hi:{following:"इस होटल में आगे",returns:"GUEST STAR फिर लौटेगा"}
 };
 const moduleCopy: Record<Lang,ModuleCopy> = {
   en:{unavailableTitle:"Link unavailable",unavailableText:"This hotel link is unavailable or no longer active.",startsIn:"STARTS IN",nextActivity:"NEXT ACTIVITY",defaultActivity:"Guest Star Activity",addCalendar:"Add to Calendar",reminderEmail:"Email for one reminder",reminderConsent:"Yes, send me one reminder for this activity.",remindMe:"Remind Me",reminderScheduled:"Your one-time reminder is scheduled.",reminderRequired:"Enter your email and confirm consent for one reminder.",reminderFailed:"The reminder could not be created. Please try again.",reviewLabel:"OPTIONAL REVIEW",reviewInvitation:"How was your Guest Star experience?",reviewGeneral:"No review is required to continue or to use any other option.",ratingLabel:"Rating from one to five",star:"star",stars:"stars",optionalComment:"Optional comment",optionalEmail:"Email (optional)",followUpConsent:"Yes, I would like one follow-up message about my experience.",submitReview:"Submit Optional Review",reviewSaved:"Thank you. Your review was saved.",ratingRequired:"Choose a rating before submitting.",reviewFailed:"Your review could not be submitted. Please try again.",separateReview:"Leave a separate {provider} review",optionalExternalReview:"Leave an optional {provider} review",hotel:"hotel",unsubscribed:"You have been unsubscribed from future Guest Star messages.",unsubscribeInvalid:"This unsubscribe link is invalid or has expired."},
@@ -170,11 +175,12 @@ const moduleCopy: Record<Lang,ModuleCopy> = {
   it:{unavailableTitle:"Link non disponibile",unavailableText:"Questo link dell’hotel non è disponibile o non è più attivo.",startsIn:"INIZIA TRA",nextActivity:"PROSSIMA ATTIVITÀ",defaultActivity:"Attività Guest Star",addCalendar:"Aggiungi al calendario",reminderEmail:"E-mail per un promemoria",reminderConsent:"Sì, inviami un promemoria per questa attività.",remindMe:"Ricordamelo",reminderScheduled:"Il promemoria singolo è stato programmato.",reminderRequired:"Inserisci l’e-mail e conferma il consenso per ricevere un promemoria.",reminderFailed:"Impossibile creare il promemoria. Riprova.",reviewLabel:"RECENSIONE FACOLTATIVA",reviewInvitation:"Com’è stata la tua esperienza Guest Star?",reviewGeneral:"Non è richiesta alcuna recensione per continuare o usare altre opzioni.",ratingLabel:"Valutazione da uno a cinque",star:"stella",stars:"stelle",optionalComment:"Commento facoltativo",optionalEmail:"E-mail (facoltativa)",followUpConsent:"Sì, desidero ricevere un messaggio di follow-up sulla mia esperienza.",submitReview:"Invia recensione facoltativa",reviewSaved:"Grazie. La recensione è stata salvata.",ratingRequired:"Scegli una valutazione prima di inviare.",reviewFailed:"Impossibile inviare la recensione. Riprova.",separateReview:"Lascia un’altra recensione su {provider}",optionalExternalReview:"Lascia una recensione facoltativa su {provider}",hotel:"l’hotel",unsubscribed:"Non riceverai più i futuri messaggi Guest Star.",unsubscribeInvalid:"Questo link di annullamento non è valido o è scaduto."},
   de:{unavailableTitle:"Link nicht verfügbar",unavailableText:"Dieser Hotellink ist nicht verfügbar oder nicht mehr aktiv.",startsIn:"BEGINNT IN",nextActivity:"NÄCHSTE AKTIVITÄT",defaultActivity:"Guest-Star-Aktivität",addCalendar:"Zum Kalender hinzufügen",reminderEmail:"E-Mail für eine Erinnerung",reminderConsent:"Ja, senden Sie mir eine Erinnerung für diese Aktivität.",remindMe:"Erinnern",reminderScheduled:"Ihre einmalige Erinnerung ist geplant.",reminderRequired:"Geben Sie Ihre E-Mail ein und bestätigen Sie die Zustimmung für eine Erinnerung.",reminderFailed:"Die Erinnerung konnte nicht erstellt werden. Versuchen Sie es erneut.",reviewLabel:"OPTIONALE BEWERTUNG",reviewInvitation:"Wie war Ihr Guest-Star-Erlebnis?",reviewGeneral:"Eine Bewertung ist nicht erforderlich, um fortzufahren oder andere Optionen zu nutzen.",ratingLabel:"Bewertung von eins bis fünf",star:"Stern",stars:"Sterne",optionalComment:"Optionaler Kommentar",optionalEmail:"E-Mail (optional)",followUpConsent:"Ja, ich möchte eine Rückmeldung zu meinem Erlebnis erhalten.",submitReview:"Optionale Bewertung senden",reviewSaved:"Vielen Dank. Ihre Bewertung wurde gespeichert.",ratingRequired:"Wählen Sie vor dem Senden eine Bewertung.",reviewFailed:"Ihre Bewertung konnte nicht gesendet werden. Versuchen Sie es erneut.",separateReview:"Separate Bewertung bei {provider} abgeben",optionalExternalReview:"Optionale Bewertung bei {provider} abgeben",hotel:"dem Hotel",unsubscribed:"Sie wurden von zukünftigen Guest-Star-Nachrichten abgemeldet.",unsubscribeInvalid:"Dieser Abmeldelink ist ungültig oder abgelaufen."},
   ru:{unavailableTitle:"Ссылка недоступна",unavailableText:"Эта ссылка отеля недоступна или больше не активна.",startsIn:"ДО НАЧАЛА",nextActivity:"СЛЕДУЮЩЕЕ МЕРОПРИЯТИЕ",defaultActivity:"Мероприятие Guest Star",addCalendar:"Добавить в календарь",reminderEmail:"Эл. почта для одного напоминания",reminderConsent:"Да, отправьте мне одно напоминание об этом мероприятии.",remindMe:"Напомнить",reminderScheduled:"Одноразовое напоминание запланировано.",reminderRequired:"Введите эл. почту и подтвердите согласие на одно напоминание.",reminderFailed:"Не удалось создать напоминание. Попробуйте ещё раз.",reviewLabel:"НЕОБЯЗАТЕЛЬНЫЙ ОТЗЫВ",reviewInvitation:"Как вам впечатления от Guest Star?",reviewGeneral:"Отзыв не обязателен для продолжения или использования других функций.",ratingLabel:"Оценка от одного до пяти",star:"звезда",stars:"звёзд",optionalComment:"Необязательный комментарий",optionalEmail:"Эл. почта (необязательно)",followUpConsent:"Да, я хочу получить одно сообщение о моём опыте.",submitReview:"Отправить необязательный отзыв",reviewSaved:"Спасибо. Ваш отзыв сохранён.",ratingRequired:"Выберите оценку перед отправкой.",reviewFailed:"Не удалось отправить отзыв. Попробуйте ещё раз.",separateReview:"Оставить отдельный отзыв на {provider}",optionalExternalReview:"Оставить необязательный отзыв на {provider}",hotel:"сайте отеля",unsubscribed:"Вы отписались от будущих сообщений Guest Star.",unsubscribeInvalid:"Эта ссылка для отписки недействительна или устарела."},
-  pt:{unavailableTitle:"Link indisponível",unavailableText:"Este link do hotel não está disponível ou já não está ativo.",startsIn:"COMEÇA EM",nextActivity:"PRÓXIMA ATIVIDADE",defaultActivity:"Atividade Guest Star",addCalendar:"Adicionar ao calendário",reminderEmail:"E-mail para um lembrete",reminderConsent:"Sim, envie-me um lembrete para esta atividade.",remindMe:"Lembrar-me",reminderScheduled:"O seu lembrete único foi agendado.",reminderRequired:"Introduza o e-mail e confirme o consentimento para receber um lembrete.",reminderFailed:"Não foi possível criar o lembrete. Tente novamente.",reviewLabel:"AVALIAÇÃO OPCIONAL",reviewInvitation:"Como foi a sua experiência Guest Star?",reviewGeneral:"Não é necessário avaliar para continuar ou utilizar qualquer outra opção.",ratingLabel:"Avaliação de uma a cinco",star:"estrela",stars:"estrelas",optionalComment:"Comentário opcional",optionalEmail:"E-mail (opcional)",followUpConsent:"Sim, gostaria de receber uma mensagem de acompanhamento sobre a minha experiência.",submitReview:"Enviar avaliação opcional",reviewSaved:"Obrigado. A sua avaliação foi guardada.",ratingRequired:"Escolha uma avaliação antes de enviar.",reviewFailed:"Não foi possível enviar a avaliação. Tente novamente.",separateReview:"Deixar outra avaliação em {provider}",optionalExternalReview:"Deixar uma avaliação opcional em {provider}",hotel:"o hotel",unsubscribed:"Cancelou os futuros e-mails da Guest Star.",unsubscribeInvalid:"Este link para cancelar os e-mails é inválido ou expirou."}
+  pt:{unavailableTitle:"Link indisponível",unavailableText:"Este link do hotel não está disponível ou já não está ativo.",startsIn:"COMEÇA EM",nextActivity:"PRÓXIMA ATIVIDADE",defaultActivity:"Atividade Guest Star",addCalendar:"Adicionar ao calendário",reminderEmail:"E-mail para um lembrete",reminderConsent:"Sim, envie-me um lembrete para esta atividade.",remindMe:"Lembrar-me",reminderScheduled:"O seu lembrete único foi agendado.",reminderRequired:"Introduza o e-mail e confirme o consentimento para receber um lembrete.",reminderFailed:"Não foi possível criar o lembrete. Tente novamente.",reviewLabel:"AVALIAÇÃO OPCIONAL",reviewInvitation:"Como foi a sua experiência Guest Star?",reviewGeneral:"Não é necessário avaliar para continuar ou utilizar qualquer outra opção.",ratingLabel:"Avaliação de uma a cinco",star:"estrela",stars:"estrelas",optionalComment:"Comentário opcional",optionalEmail:"E-mail (opcional)",followUpConsent:"Sim, gostaria de receber uma mensagem de acompanhamento sobre a minha experiência.",submitReview:"Enviar avaliação opcional",reviewSaved:"Obrigado. A sua avaliação foi guardada.",ratingRequired:"Escolha uma avaliação antes de enviar.",reviewFailed:"Não foi possível enviar a avaliação. Tente novamente.",separateReview:"Deixar outra avaliação em {provider}",optionalExternalReview:"Deixar uma avaliação opcional em {provider}",hotel:"o hotel",unsubscribed:"Cancelou os futuros e-mails da Guest Star.",unsubscribeInvalid:"Este link para cancelar os e-mails é inválido ou expirou."},
+  hi:{unavailableTitle:"लिंक उपलब्ध नहीं",unavailableText:"यह होटल लिंक उपलब्ध नहीं है या अब सक्रिय नहीं है।",startsIn:"शुरू होने में",nextActivity:"अगली एक्टिविटी",defaultActivity:"Guest Star एक्टिविटी",addCalendar:"कैलेंडर में जोड़ें",reminderEmail:"रिमाइंडर के लिए ईमेल",reminderConsent:"हाँ, इस एक्टिविटी का एक रिमाइंडर भेजें।",remindMe:"मुझे याद दिलाएँ",reminderScheduled:"आपका एक बार का रिमाइंडर तय हो गया है।",reminderRequired:"ईमेल दर्ज करें और एक रिमाइंडर की सहमति दें।",reminderFailed:"रिमाइंडर नहीं बन सका। फिर कोशिश करें।",reviewLabel:"वैकल्पिक समीक्षा",reviewInvitation:"आपका Guest Star अनुभव कैसा रहा?",reviewGeneral:"आगे बढ़ने के लिए समीक्षा आवश्यक नहीं है।",ratingLabel:"एक से पाँच तक रेटिंग",star:"स्टार",stars:"स्टार",optionalComment:"वैकल्पिक टिप्पणी",optionalEmail:"ईमेल (वैकल्पिक)",followUpConsent:"हाँ, मैं अपने अनुभव के बारे में एक फॉलो-अप संदेश चाहता/चाहती हूँ।",submitReview:"वैकल्पिक समीक्षा भेजें",reviewSaved:"धन्यवाद। आपकी समीक्षा सहेज ली गई।",ratingRequired:"भेजने से पहले रेटिंग चुनें।",reviewFailed:"समीक्षा नहीं भेजी जा सकी। फिर कोशिश करें।",separateReview:"{provider} पर अलग समीक्षा दें",optionalExternalReview:"{provider} पर वैकल्पिक समीक्षा दें",hotel:"होटल",unsubscribed:"भविष्य के Guest Star संदेश बंद कर दिए गए हैं।",unsubscribeInvalid:"यह सदस्यता समाप्त करने वाला लिंक अमान्य या समाप्त हो चुका है।"}
 };
-const languageLocales: Record<Lang,string> = {es:"es-DO",en:"en-US",fr:"fr-FR",it:"it-IT",de:"de-DE",ru:"ru-RU",pt:"pt-PT"};
+const languageLocales: Record<Lang,string> = Object.fromEntries(GUEST_LANGUAGES.map(language=>[language.code,language.locale])) as Record<Lang,string>;
 const common = (x: Partial<Copy>): Copy => ({
-  live:"LIVE EXPERIENCE",title:"KARAOKE NIGHT",sub:"Ready to sing?",desc:"Request your favorite song and get ready to shine on stage.",
+  live:"LIVE EXPERIENCE",sub:"Ready to sing?",desc:"Request your favorite song and get ready to shine on stage.",
   fields:{name:["Your Name","What should we call you?"],song:["Song Title","What would you like to sing?"],artist:["Artist","Who performs it?"],comment:["Comment","Optional dedication or note..."]},
   error:"Please complete this field.",submit:"Submit Request",sending:"Sending...",
   success:"Your song request has been sent!",stage:"Get ready to take the stage!",again:"Submit another song",
@@ -185,7 +191,7 @@ const common = (x: Partial<Copy>): Copy => ({
 const copy: Record<Lang, Copy> = {
   en: common({}),
   es: common({
-    live:"EXPERIENCIA EN VIVO",title:"NOCHE DE KARAOKE",sub:"¿Listo para cantar?",
+    live:"EXPERIENCIA EN VIVO",sub:"¿Listo para cantar?",
     desc:"Pide tu canción favorita y prepárate para brillar en el escenario.",
     fields:{name:["Tu nombre","¿Cómo quieres que te llamemos?"],song:["Título de la canción","¿Qué te gustaría cantar?"],artist:["Artista","¿Quién la interpreta?"],comment:["Comentario","Dedicatoria o nota opcional..."]},
     error:"Completa este campo.",submit:"Enviar solicitud",sending:"Enviando...",
@@ -195,7 +201,7 @@ const copy: Record<Lang, Copy> = {
     steps:["Completa el formulario","Espera tu turno","¡Canta y disfruta!"]
   }),
   fr: common({
-    live:"EXPÉRIENCE EN DIRECT",title:"SOIRÉE KARAOKÉ",sub:"Prêt à chanter ?",
+    live:"EXPÉRIENCE EN DIRECT",sub:"Prêt à chanter ?",
     desc:"Demandez votre chanson préférée et préparez-vous à briller sur scène.",
     fields:{name:["Votre nom","Comment souhaitez-vous être appelé ?"],song:["Titre de la chanson","Que souhaitez-vous chanter ?"],artist:["Artiste","Qui interprète cette chanson ?"],comment:["Commentaire","Dédicace ou remarque facultative..."]},
     error:"Veuillez remplir ce champ.",submit:"Envoyer la demande",sending:"Envoi en cours...",
@@ -205,7 +211,7 @@ const copy: Record<Lang, Copy> = {
     steps:["Remplissez le formulaire","Attendez votre tour","Chantez et amusez-vous !"]
   }),
   it: common({
-    live:"ESPERIENZA DAL VIVO",title:"SERATA KARAOKE",sub:"Pronto a cantare?",
+    live:"ESPERIENZA DAL VIVO",sub:"Pronto a cantare?",
     desc:"Richiedi la tua canzone preferita e preparati a brillare sul palco.",
     fields:{name:["Il tuo nome","Come vuoi che ti chiamiamo?"],song:["Titolo della canzone","Cosa vorresti cantare?"],artist:["Artista","Chi la interpreta?"],comment:["Commento","Dedica o nota facoltativa..."]},
     error:"Compila questo campo.",submit:"Invia richiesta",sending:"Invio in corso...",
@@ -215,7 +221,7 @@ const copy: Record<Lang, Copy> = {
     steps:["Compila il modulo","Aspetta il tuo turno","Canta e divertiti!"]
   }),
   de: common({
-    live:"LIVE-ERLEBNIS",title:"KARAOKE-NACHT",sub:"Bereit zum Singen?",
+    live:"LIVE-ERLEBNIS",sub:"Bereit zum Singen?",
     desc:"Wünsch dir deinen Lieblingssong und mach dich bereit, auf der Bühne zu glänzen.",
     fields:{name:["Dein Name","Wie dürfen wir dich nennen?"],song:["Songtitel","Was möchtest du singen?"],artist:["Interpret/in","Von wem ist der Song?"],comment:["Kommentar","Optionale Widmung oder Nachricht..."]},
     error:"Bitte fülle dieses Feld aus.",submit:"Songwunsch senden",sending:"Wird gesendet...",
@@ -225,7 +231,7 @@ const copy: Record<Lang, Copy> = {
     steps:["Formular ausfüllen","Warte, bis du dran bist","Singen und Spaß haben!"]
   }),
   ru: common({
-    live:"ЖИВОЕ ШОУ",title:"ВЕЧЕР КАРАОКЕ",sub:"Готовы петь?",
+    live:"ЖИВОЕ ШОУ",sub:"Готовы петь?",
     desc:"Закажите любимую песню и приготовьтесь блистать на сцене.",
     fields:{name:["Ваше имя","Как к вам обращаться?"],song:["Название песни","Что вы хотите спеть?"],artist:["Исполнитель","Кто исполняет эту песню?"],comment:["Комментарий","Посвящение или примечание — необязательно..."]},
     error:"Заполните это поле.",submit:"Отправить заявку",sending:"Отправка...",
@@ -235,7 +241,7 @@ const copy: Record<Lang, Copy> = {
     steps:["Заполните форму","Дождитесь своей очереди","Пойте и получайте удовольствие!"]
   }),
   pt: common({
-    live:"EXPERIÊNCIA AO VIVO",title:"NOITE DE KARAOKE",sub:"Pronto para cantar?",
+    live:"EXPERIÊNCIA AO VIVO",sub:"Pronto para cantar?",
     desc:"Peça a sua música favorita e prepare-se para brilhar no palco.",
     fields:{name:["O seu nome","Como gostaria de ser chamado?"],song:["Título da música","O que gostaria de cantar?"],artist:["Artista","Quem interpreta esta música?"],comment:["Comentário","Dedicatória ou nota opcional..."]},
     error:"Preencha este campo.",submit:"Enviar pedido",sending:"A enviar...",
@@ -243,6 +249,16 @@ const copy: Record<Lang, Copy> = {
     closed:"Pedidos encerrados",closedText:"O anfitrião encerrou temporariamente os pedidos de músicas.",
     failed:"Não foi possível enviar o pedido. Tente novamente.",
     steps:["Preencha o formulário","Aguarde a sua vez","Cante e divirta-se!"]
+  }),
+  hi: common({
+    live:"लाइव अनुभव",sub:"गाने के लिए तैयार हैं?",
+    desc:"अपना पसंदीदा गाना माँगें और मंच पर चमकने के लिए तैयार हो जाएँ।",
+    fields:{name:["आपका नाम","Rahul"],song:["गाने का नाम","Tum Hi Ho"],artist:["कलाकार","Arijit Singh"],comment:["टिप्पणी","वैकल्पिक समर्पण या संदेश..."]},
+    error:"कृपया यह फ़ील्ड पूरा करें।",submit:"रिक्वेस्ट भेजें",sending:"भेज रहे हैं...",
+    success:"आपका गाने का रिक्वेस्ट भेज दिया गया है!",stage:"मंच पर आने के लिए तैयार हो जाएँ!",again:"एक और गाना माँगें",
+    closed:"रिक्वेस्ट बंद हैं",closedText:"होस्ट ने कुछ समय के लिए गानों के रिक्वेस्ट बंद किए हैं।",
+    failed:"आपका रिक्वेस्ट नहीं भेजा जा सका। फिर कोशिश करें।",
+    steps:["फ़ॉर्म भरें","अपनी बारी का इंतज़ार करें","गाएँ और आनंद लें!"]
   })
 };
 const icons = { name: UserRound, song: Music2, artist: Mic2, comment: MessageCircleMore };
@@ -317,15 +333,34 @@ function activityDuration(seconds: number) {
   return `${hours}:${String(minutes).padStart(2,"0")}:${String(remainder).padStart(2,"0")}`;
 }
 
-export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: string }) {
-  const [lang,setLang]=useState<Lang|null>(null);
-  const [menu,setMenu]=useState(false);
+export default function KaraokeExperience({
+  hotelCode = "",
+  activitySessionToken = "",
+  initialState,
+  onSessionInvalid,
+  onPublicUnavailable,
+  onStateChange,
+  onRequestConfirmed,
+  uiLanguage: providedUiLanguage,
+  onUiLanguageChange
+}: {
+  hotelCode?: string;
+  activitySessionToken?: string;
+  initialState?: ApiResponse | null;
+  onSessionInvalid?: (code: string) => void;
+  onPublicUnavailable?: () => void;
+  onStateChange?: (state: ApiResponse) => void;
+  onRequestConfirmed?: () => void;
+  uiLanguage?: Lang;
+  onUiLanguageChange?: (language: Lang) => void;
+}) {
+  const [uiLang,setUiLang]=useState<Lang>(providedUiLanguage||"en");
   const [values,setValues]=useState<Record<FieldKey,string>>({name:"",song:"",artist:"",comment:""});
   const [touched,setTouched]=useState<Partial<Record<FieldKey,boolean>>>({});
   const [loading,setLoading]=useState(false);
   const [done,setDone]=useState(false);
-  const [accepting,setAccepting]=useState(true);
-  const [activity,setActivity]=useState<ApiState>({});
+  const [accepting,setAccepting]=useState(initialState?acceptingFrom(initialState):true);
+  const [activity,setActivity]=useState<ApiState>(initialState?stateFrom(initialState):{});
   const [clockNow,setClockNow]=useState(()=>Date.now());
   const [bootstrapError,setBootstrapError]=useState("");
   const [submitError,setSubmitError]=useState("");
@@ -342,17 +377,19 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   const hasLoadedPublicState=useRef(false);
   const unavailableConfirmations=useRef(0);
   const [externalReview,setExternalReview]=useState<{provider?:string;url?:string}|null>(null);
-  const text=copy[lang||"en"];
-  const warningText=duplicateCopy[lang||"en"];
-  const statusText=activityCopy[lang||"en"];
-  const moduleText=moduleCopy[lang||"en"];
-  const announcementText=announcementCopy[lang||"en"];
+  const text=copy[uiLang];
+  const warningText=duplicateCopy[uiLang];
+  const statusText=activityCopy[uiLang];
+  const moduleText=moduleCopy[uiLang];
+  const announcementText=announcementCopy[uiLang];
   const allowedLanguageCodes=activity.activity?.allowedLanguages?.length
     ? activity.activity.allowedLanguages
-    : (["es","en","fr","it","de","ru","pt"] as Lang[]);
-  const availableLanguages=languages.filter(x=>allowedLanguageCodes.includes(x[0]));
-  const active=availableLanguages.find(x=>x[0]===lang)||availableLanguages[0]||languages[0];
-  const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim());
+    : GUEST_LANGUAGES.map(language=>language.code as Lang);
+  const active=languages.find(x=>x[0]===uiLang)||languages[0];
+  const hindiLatinRequired=active[0]==="hi";
+  const hasHindiScriptError=hindiLatinRequired&&(["name","song","artist"] as const)
+    .some(field=>containsDevanagari(values[field]));
+  const complete=Boolean(values.name.trim()&&values.song.trim()&&values.artist.trim())&&!hasHindiScriptError;
   const serverOffset=Number.isFinite(Date.parse(String(activity.serverNow||"")))
     ? Date.parse(String(activity.serverNow))-Number(activity._receivedAt||clockNow)
     : 0;
@@ -375,22 +412,20 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     if(raw&&typeof raw==="object")return raw as Record<string,Record<string,string>>;
     try{return JSON.parse(String(raw||"{}")) as Record<string,Record<string,string>>;}catch{return {};}
   })();
-  const brandingMessage=(field:string)=>localizedMessages[lang||"en"]?.[field]||branding[field]||"";
+  const brandingMessage=(field:string)=>localizedMessages[uiLang]?.[field]||branding[field]||"";
   const scheduledAt=Date.parse(String(activity.activity?.scheduledStartAt||""));
   const countdownSeconds=Number.isFinite(scheduledAt)
     ? Math.max(0,Math.floor((scheduledAt-synchronizedNow)/1000))
     : 0;
-  const brandStyle={
-    "--p":String(branding.primaryColor||"#ff2d95"),
-    "--v":String(branding.secondaryColor||"#8b3dff"),
-    "--b":String(branding.accentColor||"#00c8ff")
-  } as CSSProperties;
+  const brandStyle=brandingTheme(branding) as CSSProperties;
   const replaceMessage=(input:unknown)=>String(input||"")
     .replaceAll("{hotel_name}",String(activity.hotel?.name||""))
     .replaceAll("{activity_name}",String(activity.activity?.name||""))
     .replaceAll("{venue_name}",String(activity.venue?.name||""));
   const activityStatus=String(activity.activity?.status||"");
   const endingSoon=activityStatus==="in_progress"&&targetSeconds>0&&remainingSeconds>0&&remainingSeconds<=900;
+  const finalCopy=uiLang==="es"?{title:"GRACIAS POR ACOMPAÑARNOS",message:"Nos vemos la próxima vez.",returns:"VOLVEREMOS"}:uiLang==="fr"?{title:"MERCI D’AVOIR ÉTÉ AVEC NOUS",message:"À la prochaine.",returns:"NOUS REVIENDRONS"}:{title:"THANK YOU FOR JOINING US",message:"See you next time.",returns:"WE’LL BE BACK"};
+  const finalNext=activity.finalExperience?.nextActivity;
   const publicMessage=activityStatus==="finished"
     ? [brandingMessage("activityFinishedTitle"),brandingMessage("activityFinishedMessage")||brandingMessage("activityEndingMessage")]
     : activityStatus==="in_progress"&&!accepting
@@ -418,37 +453,235 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     :moduleError==="UNSUBSCRIBE_INVALID"?moduleText.unsubscribeInvalid
     :moduleError;
 
+  const chooseUiLanguage=(next:Lang)=>{
+    setUiLang(next);
+    onUiLanguageChange?.(next);
+    try{window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY,next);}catch{/* optional preference */}
+  };
+
+  useEffect(()=>{
+    if(providedUiLanguage){setUiLang(providedUiLanguage);return;}
+    try{
+      const saved=window.localStorage.getItem(UI_LANGUAGE_STORAGE_KEY) as Lang|null;
+      const browser=navigator.language.split("-")[0].toLowerCase() as Lang;
+      const next=languages.some(language=>language[0]===saved)?saved:languages.some(language=>language[0]===browser)?browser:"en";
+      if(next)setUiLang(next);
+    }catch{/* English remains the safe default. */}
+  },[providedUiLanguage]);
+
+
   useEffect(()=>{
     let mounted=true;
-    const refreshStatus=async()=>{
-      try{
-        const query=new URLSearchParams({
-          action:hotelCode?"publicBootstrap":"status",
-          t:String(Date.now())
-        });
-        if(hotelCode)query.set("hotel",hotelCode);
-        const data=await api(`${ENDPOINT}?${query.toString()}`,undefined,{transientRetries:2});
-        if(mounted){
-          hasLoadedPublicState.current=true;
-          unavailableConfirmations.current=0;
-          setAccepting(acceptingFrom(data));
-          setActivity(stateFrom(data));
-          setBootstrapError("");
-        }
-      }catch(error){
-        const code=String((error as ApiResponse)?.code||"");
-        if(mounted&&!hasLoadedPublicState.current&&code==="PUBLIC_LINK_NOT_FOUND"){
-          unavailableConfirmations.current+=1;
-          if(unavailableConfirmations.current>=3)setBootstrapError(hotelCode?"UNAVAILABLE":"");
-        }
-      }
+    let socket:WebSocket|null=null;
+    let reconnectTimer:number|undefined;
+    let fallbackTimer:number|undefined;
+    let scheduleTimer:number|undefined;
+    let invalidationTimer:number|undefined;
+    let reconnectAttempt=0;
+    let fallbackAttempt=0;
+    let refreshInFlight:Promise<void>|null=null;
+    let refreshQueued=false;
+    let realtimeChannel="";
+    let openedOnce=false;
+    let terminalUnavailable=false;
+    hasLoadedPublicState.current=Boolean(initialState);
+    unavailableConfirmations.current=0;
+
+    const clearRealtimeTimers=()=>{
+      if(reconnectTimer!==undefined)window.clearTimeout(reconnectTimer);
+      if(fallbackTimer!==undefined)window.clearTimeout(fallbackTimer);
+      if(scheduleTimer!==undefined)window.clearTimeout(scheduleTimer);
+      if(invalidationTimer!==undefined)window.clearTimeout(invalidationTimer);
+      reconnectTimer=undefined;
+      fallbackTimer=undefined;
+      scheduleTimer=undefined;
+      invalidationTimer=undefined;
     };
-    refreshStatus();
-    // Fifteen seconds is responsive for request-open/closed changes while
-    // keeping the public page comfortably below Workers Free request limits.
-    const id=window.setInterval(refreshStatus,15000);
-    return()=>{mounted=false;clearInterval(id);};
-  },[hotelCode]);
+
+    const realtimeUrl=(channel:string)=>{
+      const url=new URL("/api/realtime",window.location.href);
+      url.protocol=window.location.protocol==="https:"?"wss:":"ws:";
+      url.searchParams.set("channel",channel);
+      url.searchParams.set("role","public");
+      return url.toString();
+    };
+
+    const scheduleFallback=(force=false)=>{
+      if(
+        !mounted||terminalUnavailable||fallbackTimer!==undefined||
+        (!force&&socket?.readyState===WebSocket.OPEN)
+      )return;
+      const base=Math.min(30000,5000*(2**Math.min(fallbackAttempt,3)));
+      fallbackAttempt+=1;
+      fallbackTimer=window.setTimeout(()=>{
+        fallbackTimer=undefined;
+        void refreshStatus().finally(()=>scheduleFallback());
+      },base+Math.floor(Math.random()*Math.max(250,base*.2)));
+    };
+
+    const scheduleReconnect=()=>{
+      if(!mounted||!realtimeChannel||reconnectTimer!==undefined)return;
+      const base=Math.min(30000,1000*(2**Math.min(reconnectAttempt,5)));
+      reconnectAttempt+=1;
+      reconnectTimer=window.setTimeout(()=>{
+        reconnectTimer=undefined;
+        connectRealtime();
+      },base+Math.floor(Math.random()*Math.max(100,base*.25)));
+      scheduleFallback();
+    };
+
+    const connectRealtime=()=>{
+      if(
+        !mounted||!realtimeChannel||
+        socket?.readyState===WebSocket.OPEN||socket?.readyState===WebSocket.CONNECTING
+      )return;
+      const candidate=new WebSocket(realtimeUrl(realtimeChannel),"guest-star-v1");
+      socket=candidate;
+      candidate.addEventListener("open",()=>{
+        if(!mounted||socket!==candidate){candidate.close(1000,"Superseded");return;}
+        reconnectAttempt=0;
+        fallbackAttempt=0;
+        if(fallbackTimer!==undefined)window.clearTimeout(fallbackTimer);
+        fallbackTimer=undefined;
+        if(openedOnce)void refreshStatus();
+        openedOnce=true;
+      });
+      candidate.addEventListener("message",event=>{
+        if(!mounted||socket!==candidate)return;
+        try{
+          const message=JSON.parse(String(event.data||"{}")) as {
+            type?:string;
+            queuePeopleCount?:number;
+          };
+          if(["public.request.created","request.changed"].includes(String(message.type||""))){
+            if(Number.isFinite(message.queuePeopleCount)){
+              setActivity(previous=>({
+                ...previous,
+                queuePeopleCount:Math.max(0,Math.floor(Number(message.queuePeopleCount)))
+              }));
+            }
+            return;
+          }
+          if(
+            message.type&&message.type!=="realtime.ready"&&message.type!=="pong"&&
+            invalidationTimer===undefined
+          ){
+            // A tiny per-client jitter coalesces bursts and avoids a hotel-wide
+            // thundering herd against D1 without adding any idle traffic.
+            invalidationTimer=window.setTimeout(()=>{
+              invalidationTimer=undefined;
+              void refreshStatus();
+            },25+Math.floor(Math.random()*175));
+          }
+        }catch{/* Invalidations never require client-provided payloads. */}
+      });
+      candidate.addEventListener("close",()=>{
+        if(socket!==candidate)return;
+        socket=null;
+        scheduleReconnect();
+      });
+      candidate.addEventListener("error",()=>candidate.close());
+      scheduleFallback();
+    };
+
+    const scheduleAutomation=(data:ApiResponse)=>{
+      if(scheduleTimer!==undefined)window.clearTimeout(scheduleTimer);
+      scheduleTimer=undefined;
+      const now=Date.now();
+      const candidates=[
+        data.session?.autoStart?data.session.startsAt:undefined,
+        data.activity?.scheduledStartAt,
+        ...(data.upcomingActivities||[]).flatMap(item=>[item.requestOpeningAt,item.scheduledStartAt])
+      ].map(value=>Date.parse(String(value||"")))
+        .filter(value=>Number.isFinite(value)&&value>now+250)
+        .sort((left,right)=>left-right);
+      if(!candidates.length)return;
+      const target=candidates[0];
+      const delay=Math.min(2_000_000_000,Math.max(250,target-now+Math.floor(Math.random()*750)));
+      scheduleTimer=window.setTimeout(()=>{
+        scheduleTimer=undefined;
+        if(target-Date.now()>1000){scheduleAutomation(data);return;}
+        void refreshStatus();
+      },delay);
+    };
+
+    const refreshStatus=async()=>{
+      if(refreshInFlight){refreshQueued=true;return refreshInFlight;}
+      const operation=(async()=>{
+        do{
+          refreshQueued=false;
+          try{
+            const data=activitySessionToken
+              ?await api(ENDPOINT,{method:"POST",body:JSON.stringify({
+                action:"resumeSession",activitySessionToken,guestDeviceId:guestDeviceId()
+              })},{transientRetries:2})
+              :await (async()=>{
+                const query=new URLSearchParams({action:hotelCode?"publicBootstrap":"status",t:String(Date.now())});
+                if(hotelCode)query.set("hotel",hotelCode);
+                return api(`${ENDPOINT}?${query.toString()}`,undefined,{transientRetries:2});
+              })();
+            if(mounted){
+              if(hotelCode==="default"&&!data.activity){terminalUnavailable=true;onPublicUnavailable?.();continue;}
+              terminalUnavailable=false;
+              hasLoadedPublicState.current=true;
+              unavailableConfirmations.current=0;
+              setAccepting(acceptingFrom(data));
+              setActivity(stateFrom(data));
+              onStateChange?.(data);
+              setBootstrapError("");
+              scheduleAutomation(data);
+              const nextChannel=String(data.realtimeChannel||"");
+              if(/^[A-Za-z0-9_-]{8,128}$/.test(nextChannel)){
+                if(realtimeChannel&&realtimeChannel!==nextChannel&&socket){
+                  const previous=socket;
+                  socket=null;
+                  previous.close(1000,"Channel changed");
+                }
+                realtimeChannel=nextChannel;
+                connectRealtime();
+              }else scheduleFallback();
+            }
+          }catch(error){
+            const code=String((error as ApiResponse)?.code||"");
+            if(activitySessionToken&&["SESSION_REQUIRED","SESSION_EXPIRED","SESSION_DEVICE_MISMATCH","SESSION_PIN_CHANGED","ACTIVITY_ENDED","PIN_EXPIRED"].includes(code)){
+              terminalUnavailable=true;
+              onSessionInvalid?.(code);
+              continue;
+            }
+            if(mounted&&!hasLoadedPublicState.current&&code==="PUBLIC_LINK_NOT_FOUND"){
+              unavailableConfirmations.current+=1;
+              if(hotelCode&&unavailableConfirmations.current>=3){
+                terminalUnavailable=true;
+                setBootstrapError("UNAVAILABLE");
+                realtimeChannel="";
+                if(reconnectTimer!==undefined)window.clearTimeout(reconnectTimer);
+                reconnectTimer=undefined;
+                const invalidSocket=socket;
+                socket=null;
+                invalidSocket?.close(1000,"Public link unavailable");
+                continue;
+              }
+            }
+            scheduleFallback(true);
+          }
+        }while(mounted&&refreshQueued);
+      })();
+      refreshInFlight=operation;
+      try{await operation;}finally{if(refreshInFlight===operation)refreshInFlight=null;}
+    };
+    if(initialState){
+      const nextChannel=String(initialState.realtimeChannel||"");
+      if(/^[A-Za-z0-9_-]{8,128}$/.test(nextChannel)){realtimeChannel=nextChannel;connectRealtime();}
+      scheduleAutomation(initialState);
+    }else void refreshStatus();
+    return()=>{
+      mounted=false;
+      clearRealtimeTimers();
+      const activeSocket=socket;
+      socket=null;
+      activeSocket?.close(1000,"Page closed");
+    };
+  },[hotelCode,activitySessionToken]);
 
   useEffect(()=>{
     const id=window.setInterval(()=>setClockNow(Date.now()),1000);
@@ -456,8 +689,15 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
   },[]);
 
   useEffect(()=>{
-    if(lang&&!availableLanguages.some(language=>language[0]===lang))setLang(null);
-  },[lang,allowedLanguageCodes.join(",")]);
+    if(!hotelCode||!activity.hotel?.hotelId||!activity.activity?.activityId)return;
+    storePublicActivityContext({
+      publicCode:hotelCode,hotelId:activity.hotel.hotelId,hotelName:activity.hotel.name,
+      venueId:activity.venue?.venueId,venueName:activity.venue?.name,
+      activityId:activity.activity.activityId,activityName:activity.activity.name,
+      pin:activity.kioskAccess?.pin,updatedAt:Date.now()
+    });
+  },[hotelCode,activity.hotel?.hotelId,activity.venue?.venueId,activity.activity?.activityId,activity.kioskAccess?.pin]);
+
 
   useEffect(()=>{
     if(!hotelCode)return;
@@ -477,20 +717,17 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       const data=await post({
         ...values,
         ...(hotelCode?{publicCode:hotelCode}:{}),
+        ...(activitySessionToken?{activitySessionToken}:{}),
         guestDeviceId:guestDeviceId(),
         language:active[3],
-        languageCode:active[0] === "es" ? "spanish" :
-          active[0] === "en" ? "english" :
-          active[0] === "fr" ? "french" :
-          active[0] === "it" ? "italian" :
-          active[0] === "de" ? "german" :
-          active[0] === "ru" ? "russian" : "portuguese",
+        languageCode:LANGUAGE_BY_CODE[active[0]]?.songCode||"english",
         confirmDuplicate
       },{transientRetries:5});
       setAccepting(acceptingFrom(data));
       setActivity(previous=>({...previous,...stateFrom(data)}));
       setDuplicateWarning(null);
       setDone(true);
+      if (activitySessionToken) onRequestConfirmed?.();
     }catch(error){
       const detail=error as Error & {code?:string;duplicates?:DuplicateWarning};
       const code=detail.code;
@@ -498,7 +735,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       if(code==="DUPLICATE_CONFIRMATION_REQUIRED"&&detail.duplicates){
         setDuplicateWarning(detail.duplicates);
       }else{
-        setSubmitError(code==="CLOSED"?text.closedText:text.failed);
+        setSubmitError(code==="CLOSED"?text.closedText:code==="HINDI_LATIN_REQUIRED"?`${HINDI_LATIN_HELP} Tum Hi Ho`:text.failed);
       }
     }finally{setLoading(false);}
   };
@@ -510,7 +747,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     e.preventDefault();setModuleError("");
     if(!reminderEmail||!reminderConsent){setModuleError("REMINDER_REQUIRED");return;}
     try{
-      await post({action:"createGuestReminder",publicCode:hotelCode,guestEmail:reminderEmail,consent:true});
+      await post({action:"createGuestReminder",publicCode:hotelCode,activitySessionToken,guestDeviceId:guestDeviceId(),guestEmail:reminderEmail,consent:true});
       setReminderSent(true);
     }catch{setModuleError("REMINDER_FAILED");}
   };
@@ -519,17 +756,19 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     if(reviewRating<1){setModuleError("RATING_REQUIRED");return;}
     try{
       const result=await post({
-        action:"submitReview",publicCode:hotelCode,rating:reviewRating,comment:reviewComment,
+        action:"submitReview",publicCode:hotelCode,activitySessionToken,guestDeviceId:guestDeviceId(),rating:reviewRating,comment:reviewComment,
         guestEmail:reviewEmail,guestContactConsent:Boolean(reviewEmail&&reviewConsent)
       });
       setReviewSent(true);setExternalReview(result.externalReview||null);
     }catch{setModuleError("REVIEW_FAILED");}
   };
-  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setMenu(false);setLang(null);setDone(false);};
+  const reset=()=>{setValues({name:"",song:"",artist:"",comment:""});setTouched({});setSubmitError("");setDuplicateWarning(null);setDone(false);};
 
   return <main className="page" style={brandStyle}>
     <div className="ambient" aria-hidden="true"><i className="orb pink"/><i className="orb blue"/>{["♪","♫","✦","♬"].map((n,i)=><motion.span className={`note n${i}`} key={i} animate={{y:[0,-18,0],rotate:[-7,7,-7]}} transition={{duration:4+i,repeat:Infinity}}>{n}</motion.span>)}<Headphones className="ghost headphones"/><Mic2 className="ghost microphone"/></div>
-    <div className="brand notranslate" translate="no">✦ {branding.showTeamIdentity!==false&&branding.teamDisplayName?String(branding.teamDisplayName):"GUEST STAR EXPERIENCE"}</div>
+    <div className="brand notranslate" translate="no">{branding.showTeamIdentity!==false&&branding.teamDisplayName?<>✦ {String(branding.teamDisplayName)}</>:<img className="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" />}</div>
+    <WrongActivityExit token={activitySessionToken} activityKey={activity.hotel&&activity.venue&&activity.activity?`${activity.hotel.hotelId}|${activity.activity.activityId}|${activity.venue.venueId}`:""} language={uiLang} disabled={loading}/>
+    <label className="requestUiLanguage"><Globe2/><select aria-label="Interface language" value={uiLang} onChange={event=>chooseUiLanguage(event.target.value as Lang)}>{languages.map(language=><option key={language[0]} value={language[0]}>{language[1]} {language[3]}</option>)}</select></label>
     <AnimatePresence>{duplicateWarning&&<motion.div className="duplicateBackdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
       <motion.section className="duplicateDialog" role="alertdialog" aria-modal="true" aria-labelledby="duplicate-title" initial={{opacity:0,scale:.94,y:14}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.96,y:10}}>
         <span className="duplicateIcon">!</span><h2 id="duplicate-title">{warningText.title}</h2>
@@ -539,30 +778,18 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
         <div><button type="button" onClick={()=>setDuplicateWarning(null)}>{warningText.cancel}</button><button type="button" className="continue" disabled={loading} onClick={()=>void sendRequest(true)}>{loading?text.sending:warningText.continue}</button></div>
       </motion.section>
     </motion.div>}</AnimatePresence>
-    {!lang?<motion.section className="card languageGate" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-      <div className="badge"><Mic2 size={31}/></div>
-      <p className="eyebrow"><Sparkles size={14}/> SONG LANGUAGE</p>
-      <h1>What language will you sing in?</h1>
-      <p>Choose a language before completing your request. This helps us find the best karaoke version and lets the host know your selection.</p>
-      <div className="languageGrid">{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>setLang(x[0])}><span>{x[1]}</span><strong>{x[2]}</strong><Check size={18}/></button>)}</div>
-    </motion.section>:<>
-    <div className="selector"><button type="button" onClick={()=>setMenu(!menu)} aria-expanded={menu}>{active[1]} <span>{active[3]}</span><ChevronDown size={16}/></button>
-      <AnimatePresence>{menu&&<motion.div className="menu" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}>{availableLanguages.map(x=><button type="button" key={x[0]} onClick={()=>{setLang(x[0]);setMenu(false)}}>{x[1]} <span>{x[3]}</span>{x[0]===lang&&<Check size={15}/>}</button>)}</motion.div>}</AnimatePresence>
-    </div>
+    <>
     {bootstrapError&&<section className="tenantError" role="alert"><strong>{moduleText.unavailableTitle}</strong><span>{moduleText.unavailableText}</span></section>}
-    {activity.hotel&&<section className="tenantIdentity">
-      {branding.showHotelLogo!==false&&(branding.hotelLogoUrl||branding.teamLogoUrl)&&<span className="tenantLogo" aria-hidden="true"><img src={normalizeBrandImageUrl(String(branding.hotelLogoUrl||branding.teamLogoUrl))} alt="" referrerPolicy="no-referrer"/></span>}
-      <div>
-        {branding.showHotelName!==false&&<strong>{activity.hotel.name}</strong>}
-        {branding.showActivityDetails!==false&&<span>{[activity.venue?.name,activity.activity?.name].filter(Boolean).join(" · ")}</span>}
-      </div>
+    {activity.hotel&&<section className="tenantIdentity requestHotelIdentity notranslate" translate="no">
+      <BrandLogos hotelLogo={branding.showHotelLogo!==false?branding.hotelLogoUrl:""} teamLogo={branding.teamLogoUrl}/>
+      <small>GUEST STAR EXPERIENCE</small>
     </section>}
-    {brandingMessage("welcomeMessage")&&<section className="publicMessage welcomeMessage"><p>{replaceMessage(brandingMessage("welcomeMessage"))}</p></section>}
-    {(publicMessage[0]||publicMessage[1])&&<section className="publicMessage">
+    {activityStatus!=="finished"&&brandingMessage("welcomeMessage")&&<section className="publicMessage welcomeMessage"><p>{replaceMessage(brandingMessage("welcomeMessage"))}</p></section>}
+    {activityStatus!=="finished"&&(publicMessage[0]||publicMessage[1])&&<section className="publicMessage">
       {publicMessage[0]&&<strong>{replaceMessage(publicMessage[0])}</strong>}
       {publicMessage[1]&&<p>{replaceMessage(publicMessage[1])}</p>}
     </section>}
-    {!activityRunning&&activity.activity?.showCountdown&&countdownSeconds>0&&<motion.section className="publicCountdown" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}}>
+    {activityStatus!=="finished"&&!activityRunning&&activity.activity?.showCountdown&&countdownSeconds>0&&<motion.section className="publicCountdown" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}}>
       <Clock3 size={18}/><span><small>{moduleText.startsIn}</small><strong>{activityDuration(countdownSeconds)}</strong></span>
     </motion.section>}
     <AnimatePresence>{activity.showPublicStatus&&<motion.section className="publicActivityStatus" role="status" initial={{opacity:0,y:-10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-10}}>
@@ -570,10 +797,12 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
       <div className="publicActivityMetrics"><div><Clock3 size={17}/><span><small>{statusText.elapsed}</small><strong>{activityDuration(elapsedSeconds)}</strong></span></div><div><Hourglass size={17}/><span><small>{statusText.remaining}</small><strong>{activityDuration(remainingSeconds)}</strong></span></div><div><UsersRound size={18}/><span><small>{statusText.queue}</small><strong>{queuePeopleCount}</strong></span></div></div>
     </motion.section>}</AnimatePresence>
     <motion.div className="card" initial={{opacity:0,y:24}} animate={{opacity:1,y:0}}>
-      {!done?<><header><div className="badge"><Mic2 size={31}/></div><p className="eyebrow"><Sparkles size={14}/> {text.live}</p><h1>{text.title}</h1><h2>{text.sub}</h2><p className="desc">{text.desc}</p></header>
-      {accepting?<form onSubmit={submit}>{(["name","song","artist","comment"] as FieldKey[]).map(k=>{const Icon=icons[k],required=k!=="comment",bad=required&&touched[k]&&!values[k].trim();return <div className="field" key={k}><label htmlFor={k}>{text.fields[k][0]} {required&&<b>*</b>}</label><div className={`input ${bad?"bad":""}`}><Icon size={20}/>{k==="comment"?<textarea id={k} value={values[k]} placeholder={text.fields[k][1]} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>:<input id={k} required value={values[k]} placeholder={text.fields[k][1]} onBlur={()=>setTouched(t=>({...t,[k]:true}))} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>}</div>{bad&&<p>{text.error}</p>}</div>})}
+      {activityStatus==="finished"?<section className="closedState" aria-live="polite" style={{minHeight:240}}><h2 style={{fontSize:"clamp(20px,4vw,28px)",fontWeight:800}}> {replaceMessage(brandingMessage("activityFinishedTitle"))||finalCopy.title}</h2><p>{replaceMessage(activity.finalExperience?.message||brandingMessage("activityFinishedMessage")||brandingMessage("activityEndingMessage"))||finalCopy.message}</p>{finalNext?.scheduledStartAt&&<div className="publicModule nextActivity"><div style={{display:"grid",gap:8}}><small>{finalCopy.returns}</small><strong>{new Date(finalNext.scheduledStartAt).toLocaleString(languageLocales[uiLang],{timeZone:finalNext.timezone||activity.hotel?.timezone||"UTC",weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit"})}</strong><p className="notranslate" translate="no">{finalNext.hotelName}<br/>{finalNext.venueName}<br/>{finalNext.activityName}</p></div></div>}</section>:!done?<><header><div className="badge"><Mic2 size={31}/></div><p className="eyebrow"><Sparkles size={14}/> {text.live}</p><h1 className="notranslate" translate="no" style={{overflowWrap:"anywhere"}}>{activity.activity?.name||""}</h1><h2>{text.sub}</h2><p className="desc">{text.desc}</p><p className="requestFunny">{(FUNNY_MESSAGES[uiLang]||FUNNY_MESSAGES.en).requestIdle[0]}</p></header>
+      {accepting?<form onSubmit={submit}>
+        <PlanBSuggestions uiLanguage={uiLang} songLanguage={active[0]} allowedLanguages={allowedLanguageCodes} onChoose={song=>{setValues(value=>({...value,song:song.title,artist:song.artist}));}}/>
+        {(["name","song","artist","comment"] as FieldKey[]).map(k=>{const Icon=icons[k],required=k!=="comment",bad=required&&touched[k]&&!values[k].trim(),latinExample=k!=="comment"&&hindiLatinRequired?HINDI_LATIN_EXAMPLES[k]:"",hindiScriptError=Boolean(latinExample&&containsDevanagari(values[k])),helpId=`${k}-hindi-latin-help`;return <div className="field" key={k}><label htmlFor={k}>{text.fields[k][0]} {required&&<b>*</b>}</label><div className={`input ${bad||hindiScriptError?"bad":""}`}><Icon size={20}/>{k==="comment"?<textarea id={k} value={values[k]} placeholder={text.fields[k][1]} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>:<input id={k} required value={values[k]} placeholder={latinExample||text.fields[k][1]} aria-invalid={bad||hindiScriptError||undefined} aria-describedby={hindiScriptError?helpId:undefined} onBlur={()=>setTouched(t=>({...t,[k]:true}))} onChange={e=>setValues(v=>({...v,[k]:e.target.value}))}/>}</div>{bad?<p>{text.error}</p>:hindiScriptError&&<p id={helpId} role="status">{HINDI_LATIN_HELP} {latinExample}</p>}</div>})}
         <button className="submit" disabled={!complete||loading}>{loading?<><i className="loader"/>{text.sending}</>:<><Mic2 size={21}/>{text.submit}<Send className="send" size={17}/></>}</button>{submitError&&<p className="submitError" role="alert">{submitError}</p>}
-      </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
+      </form>:<section className="closedState"><span><XCircle size={45}/></span><h3>{text.closed}</h3><p>{activity.activityRunning ? closureMessage(activity,uiLang) : text.closedText}</p></section>}</>:<section className="success"><motion.div className="successMic" animate={{y:[0,-10,0],rotate:[-5,5,-5]}} transition={{duration:2,repeat:Infinity}}><Mic2 size={55}/></motion.div><span className="check"><Check size={31}/></span><h2>🎉 {text.success}</h2><p>{text.stage}</p><button className="submit secondary" onClick={reset}><RotateCcw size={19}/>{text.again}</button></section>}
     </motion.div>
     {(activityStatus==="finished"||activityFinished)&&postAnnouncement&&<section className="publicModule nextActivity" aria-live="polite">
       <div className="moduleIcon"><Music2/></div>
@@ -581,12 +810,12 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
         <small>{announcementText.following}</small>
         {postAnnouncement.title&&<strong>{postAnnouncement.title}</strong>}
         {postAnnouncement.message&&<p>{postAnnouncement.message}</p>}
-        {postAnnouncement.followingEventAt&&<p>{new Date(postAnnouncement.followingEventAt).toLocaleString(languageLocales[lang||"en"],{weekday:"long",hour:"numeric",minute:"2-digit"})}</p>}
-        {postAnnouncement.nextGuestStarAt&&<p><b>{announcementText.returns}:</b> {new Date(postAnnouncement.nextGuestStarAt).toLocaleString(languageLocales[lang||"en"],{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit"})}</p>}
+        {postAnnouncement.followingEventAt&&<p>{new Date(postAnnouncement.followingEventAt).toLocaleString(languageLocales[uiLang],{weekday:"long",hour:"numeric",minute:"2-digit"})}</p>}
+        {postAnnouncement.nextGuestStarAt&&<p><b>{announcementText.returns}:</b> {new Date(postAnnouncement.nextGuestStarAt).toLocaleString(languageLocales[uiLang],{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit"})}</p>}
       </div>
     </section>}
-    {nextActivity&&branding.showNextActivity!==false&&<section className="publicModule nextActivity">
-      <div className="moduleIcon"><CalendarPlus/></div><div><small>{moduleText.nextActivity}</small><strong>{nextActivity.activityName||moduleText.defaultActivity}</strong><p>{replaceMessage(brandingMessage("upcomingActivityMessage"))||[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString(languageLocales[lang||"en"])].filter(Boolean).join(" · ")}</p></div>
+    {activityStatus!=="finished"&&nextActivity&&branding.showNextActivity!==false&&<section className="publicModule nextActivity">
+      <div className="moduleIcon"><CalendarPlus/></div><div><small>{moduleText.nextActivity}</small><strong>{nextActivity.activityName||moduleText.defaultActivity}</strong><p>{replaceMessage(brandingMessage("upcomingActivityMessage"))||[nextActivity.venueName,new Date(String(nextActivity.scheduledStartAt)).toLocaleString(languageLocales[uiLang])].filter(Boolean).join(" · ")}</p></div>
       <div className="moduleActions">{branding.showAddToCalendar!==false&&calendarUrl&&<a href={calendarUrl} target="_blank" rel="noreferrer"><CalendarPlus/>{moduleText.addCalendar}</a>}</div>
       {branding.showRemindMe===true&&!reminderSent&&<form onSubmit={submitReminder}><label><Mail/><input type="email" value={reminderEmail} onChange={e=>setReminderEmail(e.target.value)} placeholder={moduleText.reminderEmail} required/></label><label className="consent"><input type="checkbox" checked={reminderConsent} onChange={e=>setReminderConsent(e.target.checked)}/> {moduleText.reminderConsent}</label><button><Bell/>{moduleText.remindMe}</button></form>}
       {reminderSent&&<p className="moduleSuccess">✓ {moduleText.reminderScheduled}</p>}
@@ -598,7 +827,7 @@ export default function KaraokeExperience({ hotelCode = "" }: { hotelCode?: stri
     </section>}
     {branding.showExternalReview===true&&branding.externalReviewUrl&&!(externalReview?.url)&&<a className="publicModule externalOnly" href={String(branding.externalReviewUrl)} target="_blank" rel="noreferrer">{moduleText.optionalExternalReview.replace("{provider}",String(branding.externalReviewProvider||moduleText.hotel))} <ArrowRight/></a>}
     {moduleErrorText&&<p className="moduleNotice" role="status">{moduleErrorText}</p>}
-    <footer>{text.steps.map((x,i)=><div className="stepWrap" key={x}><div className="step">{i===0?<MessageCircleMore/>:i===1?<Music2/>:<Mic2/>}<span>{x}</span></div>{i<2&&<ArrowRight className="arrow" size={16}/>}</div>)}</footer>
-    </>}
+    {activityStatus!=="finished"&&<footer>{text.steps.map((x,i)=><div className="stepWrap" key={x}><div className="step">{i===0?<MessageCircleMore/>:i===1?<Music2/>:<Mic2/>}<span>{x}</span></div>{i<2&&<ArrowRight className="arrow" size={16}/>}</div>)}</footer>}
+    </>
   </main>;
 }

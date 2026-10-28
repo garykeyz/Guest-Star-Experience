@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gueststarexperience",
-  "main": ".open-next/worker.js",
+  "main": "worker.mjs",
   "compatibility_date": "2026-07-28",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
@@ -11,7 +11,22 @@
     {
       "binding": "GUEST_STAR_DB",
       "database_name": "guest-star-experience",
+      "database_id": "3650ba84-0923-403a-a168-f29207aff05c",
       "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GUEST_STAR_REALTIME",
+        "class_name": "GuestStarRealtime"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "realtime-v1",
+      "new_sqlite_classes": ["GuestStarRealtime"]
     }
   ],
   "ai": {

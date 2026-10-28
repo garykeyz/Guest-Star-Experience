@@ -41,7 +41,11 @@ def run(command: list[str], cwd: Path | None = None) -> None:
 
 
 def write_info_plist(path: Path, version: str) -> None:
-    version_number = int(re.sub(r"\D", "", version) or "1")
+    version_parts = [int(part) for part in re.findall(r"\d+", version)[:3]]
+    version_parts.extend([0] * (3 - len(version_parts)))
+    version_number = (
+        version_parts[0] * 100 + version_parts[1] * 10 + version_parts[2]
+    )
     payload = {
         "CFBundleDevelopmentRegion": "es",
         "CFBundleDisplayName": "Guest Star",
@@ -65,77 +69,11 @@ def write_info_plist(path: Path, version: str) -> None:
 
 
 def render_icon(size: int) -> Image.Image:
-    scale = size / 1024
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    gradient = Image.new("RGBA", (size, size))
-    pixels = gradient.load()
-    for y in range(size):
-        position = y / max(1, size - 1)
-        red = int(26 + (218 - 26) * position)
-        green = int(13 + (44 - 13) * position)
-        blue = int(44 + (255 - 44) * position)
-        for x in range(size):
-            pixels[x, y] = (red, green, blue, 255)
-    mask = Image.new("L", (size, size), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle(
-        (48 * scale, 48 * scale, 976 * scale, 976 * scale),
-        radius=220 * scale,
-        fill=255,
-    )
-    image.paste(gradient, (0, 0), mask)
-
-    draw = ImageDraw.Draw(image)
-    draw.ellipse(
-        (182 * scale, 182 * scale, 842 * scale, 842 * scale),
-        fill=(9, 6, 15, 122),
-    )
-    draw.rounded_rectangle(
-        (335 * scale, 211 * scale, 689 * scale, 717 * scale),
-        radius=177 * scale,
-        fill=(241, 255, 250, 255),
-    )
-    line_width = max(2, int(90 * scale))
-    draw.arc(
-        (269 * scale, 363 * scale, 755 * scale, 791 * scale),
-        start=0,
-        end=180,
-        fill=(255, 255, 255, 255),
-        width=line_width,
-    )
-    draw.line(
-        (512 * scale, 760 * scale, 512 * scale, 884 * scale),
-        fill=(255, 255, 255, 255),
-        width=line_width,
-    )
-    draw.line(
-        (372 * scale, 899 * scale, 652 * scale, 899 * scale),
-        fill=(255, 255, 255, 255),
-        width=line_width,
-    )
-    star = [
-        (795, 184),
-        (818, 242),
-        (876, 265),
-        (818, 288),
-        (795, 346),
-        (772, 288),
-        (714, 265),
-        (772, 242),
-    ]
-    draw.polygon(
-        [(x * scale, y * scale) for x, y in star],
-        fill=(255, 220, 99, 255),
-    )
-    draw.ellipse(
-        (184 * scale, 266 * scale, 232 * scale, 314 * scale),
-        fill=(115, 249, 208, 255),
-    )
-    draw.ellipse(
-        (794 * scale, 699 * scale, 856 * scale, 761 * scale),
-        fill=(255, 220, 99, 255),
-    )
-    return image
+    master_path = Path(__file__).resolve().parent.parent / "public/branding/app-icon-master.png"
+    with Image.open(master_path) as master:
+        if master.width != master.height or master.mode != "RGBA":
+            raise ValueError("Official app icon must be square RGBA")
+        return master.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def write_icns(output_path: Path, work_dir: Path) -> None:
@@ -202,8 +140,13 @@ def extract_node(node_tarball: Path, runtime_dir: Path) -> Path:
 
 def copy_bridge_source(bridge_root: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    for folder in ("src", "public"):
-        shutil.copytree(bridge_root / folder, destination / folder)
+    shutil.copytree(bridge_root / "src", destination / "src")
+    shutil.copytree(bridge_root / "public", destination / "public")
+    (destination / "scripts").mkdir()
+    shutil.copy2(
+        bridge_root / "scripts" / "stems-engine-smoke.mjs",
+        destination / "scripts" / "stems-engine-smoke.mjs",
+    )
     for filename in ("package.json", "README.md", "config.example.json"):
         shutil.copy2(bridge_root / filename, destination / filename)
 
@@ -212,10 +155,15 @@ def copy_stem_engine(source: Path, destination: Path) -> None:
     source = source.resolve()
     required = (
         "package.json",
+        "bin/sherpa-onnx-offline-source-separation",
+        "lib/libonnxruntime.dylib",
+        "models/sherpa-onnx-spleeter-2stems-fp16/vocals.fp16.onnx",
+        "models/sherpa-onnx-spleeter-2stems-fp16/accompaniment.fp16.onnx",
         "node_modules/demucs/dist/cli.js",
         "node_modules/ffmpeg-static/ffmpeg",
-        "node_modules/ffprobe-static/bin/darwin/arm64/ffprobe",
-        "node_modules/ffprobe-static/bin/darwin/x64/ffprobe",
+        "node_modules/@ffprobe-installer/ffprobe/index.js",
+        "node_modules/@ffprobe-installer/darwin-arm64/ffprobe",
+        "node_modules/@ffprobe-installer/darwin-x64/ffprobe",
         "node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node",
         "node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node",
     )
@@ -233,11 +181,6 @@ def copy_stem_engine(source: Path, destination: Path) -> None:
         platform_root = runtime_root / platform
         if platform_root.exists():
             shutil.rmtree(platform_root)
-    ffprobe_root = destination / "node_modules" / "ffprobe-static" / "bin"
-    for platform_root in ffprobe_root.iterdir():
-        if platform_root.name != "darwin" and platform_root.is_dir():
-            shutil.rmtree(platform_root)
-
     run([
         "lipo",
         str(destination / "node_modules" / "ffmpeg-static" / "ffmpeg"),
@@ -245,6 +188,37 @@ def copy_stem_engine(source: Path, destination: Path) -> None:
         "arm64",
         "x86_64",
     ])
+    spleeter_cli = destination / "bin" / "sherpa-onnx-offline-source-separation"
+    spleeter_cli.chmod(0o755)
+    for ffprobe_path in (
+        destination / "node_modules" / "@ffprobe-installer" / "darwin-arm64" / "ffprobe",
+        destination / "node_modules" / "@ffprobe-installer" / "darwin-x64" / "ffprobe",
+    ):
+        ffprobe_path.chmod(0o755)
+    run([
+        "lipo",
+        str(spleeter_cli),
+        "-verify_arch",
+        "arm64",
+        "x86_64",
+    ])
+    run([
+        "lipo",
+        str(destination / "lib" / "libonnxruntime.dylib"),
+        "-verify_arch",
+        "arm64",
+        "x86_64",
+    ])
+
+
+def smoke_test_packaged_stem_engine(bridge_dir: Path, engine_dir: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("Node.js es necesario para comprobar el motor IA empaquetado.")
+    smoke_script = bridge_dir / "scripts" / "stems-engine-smoke.mjs"
+    if not smoke_script.is_file():
+        raise RuntimeError("La app no contiene la prueba real del motor IA.")
+    run([node, str(smoke_script), str(engine_dir)])
 
 
 def write_bundle_build_id(bridge_dir: Path) -> str:
@@ -261,7 +235,7 @@ def write_bundle_build_id(bridge_dir: Path) -> str:
     return build_id
 
 
-def compile_universal_launcher(source: Path, destination: Path) -> None:
+def compile_universal_native_host(source: Path, destination: Path) -> None:
     run(
         [
             "xcrun",
@@ -274,7 +248,18 @@ def compile_universal_launcher(source: Path, destination: Path) -> None:
             "-Os",
             "-Wall",
             "-Wextra",
+            "-fobjc-arc",
             str(source),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "CoreAudio",
+            "-framework",
+            "AVFoundation",
+            "-framework",
+            "AudioToolbox",
+            "-framework",
+            "WebKit",
             "-o",
             str(destination),
         ]
@@ -286,7 +271,19 @@ def compile_universal_launcher(source: Path, destination: Path) -> None:
 def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> None:
     run(["lipo", str(node_arm64), "-verify_arch", "arm64"])
     run(["lipo", str(node_x64), "-verify_arch", "x86_64"])
-    for executable in (node_arm64, node_x64):
+    engine = app_bundle / "Contents" / "Resources" / "bridge" / "stem-engine"
+    architecture_checks = (
+        (engine / "bin" / "sherpa-onnx-offline-source-separation", ("arm64", "x86_64")),
+        (engine / "lib" / "libonnxruntime.dylib", ("arm64", "x86_64")),
+        (engine / "node_modules" / "ffmpeg-static" / "ffmpeg", ("arm64", "x86_64")),
+        (engine / "node_modules" / "@ffprobe-installer" / "darwin-arm64" / "ffprobe", ("arm64",)),
+        (engine / "node_modules" / "@ffprobe-installer" / "darwin-x64" / "ffprobe", ("x86_64",)),
+        (engine / "node_modules" / "onnxruntime-node" / "bin" / "napi-v6" / "darwin" / "arm64" / "onnxruntime_binding.node", ("arm64",)),
+        (engine / "node_modules" / "onnxruntime-node" / "bin" / "napi-v6" / "darwin" / "x64" / "onnxruntime_binding.node", ("x86_64",)),
+    )
+    for executable, architectures in architecture_checks:
+        run(["lipo", str(executable), "-verify_arch", *architectures])
+    for executable in (node_arm64, node_x64, *(path for path, _ in architecture_checks)):
         run(
             [
                 "codesign",
@@ -297,6 +294,7 @@ def sign_and_verify_app(app_bundle: Path, node_arm64: Path, node_x64: Path) -> N
                 str(executable),
             ]
         )
+        run(["codesign", "--verify", "--strict", "--verbose=2", str(executable)])
     run(
         [
             "codesign",
@@ -422,6 +420,31 @@ def create_zip(distribution: Path, output_path: Path) -> None:
                 raise RuntimeError(f"El ZIP no conservó el ejecutable {relative}.")
 
 
+def create_pkg(app_bundle: Path, output_path: Path, version: str) -> None:
+    if output_path.exists():
+        output_path.unlink()
+    run([
+        "pkgbuild",
+        "--component",
+        str(app_bundle),
+        "--install-location",
+        "/Applications",
+        "--identifier",
+        f"{BUNDLE_ID}.installer",
+        "--version",
+        version,
+        str(output_path),
+    ])
+    payload = subprocess.run(
+        ["pkgutil", "--payload-files", str(output_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "Guest Star.app/Contents/Info.plist" not in payload:
+        raise RuntimeError("El PKG no contiene Guest Star.app en su payload.")
+
+
 def main() -> None:
     args = arguments()
     bridge_root = Path(__file__).resolve().parent.parent
@@ -442,16 +465,12 @@ def main() -> None:
     resources.mkdir(parents=True)
     macos_dir.mkdir(parents=True)
 
-    compile_universal_launcher(
-        bridge_root / "macos" / "GuestStarLauncher.c",
+    compile_universal_native_host(
+        bridge_root / "macos" / "GuestStarNativeHost.m",
         macos_dir / "GuestStarBridge",
     )
     shutil.copy2(launcher_source, macos_dir / "GuestStarBridge.sh")
     (macos_dir / "GuestStarBridge.sh").chmod(0o755)
-    shutil.copy2(
-        bridge_root / "macos" / "GuestStarWindow.js",
-        resources / "GuestStarWindow.js",
-    )
     write_info_plist(contents / "Info.plist", version)
     write_icns(resources / "AppIcon.icns", staging)
     node_arm64 = extract_node(
@@ -467,6 +486,10 @@ def main() -> None:
         args.stem_engine_root,
         resources / "bridge" / "stem-engine",
     )
+    smoke_test_packaged_stem_engine(
+        resources / "bridge",
+        resources / "bridge" / "stem-engine",
+    )
     bundle_build_id = write_bundle_build_id(resources / "bridge")
     sign_and_verify_app(app_bundle, node_arm64, node_x64)
 
@@ -479,8 +502,10 @@ def main() -> None:
     )
     dmg_path = output_dir / f"Guest-Star-Universal-v{version}.dmg"
     zip_path = output_dir / f"Guest-Star-Universal-v{version}-app.zip"
+    pkg_path = output_dir / f"GuestStar-{version}.pkg"
     create_disk_image(distribution, dmg_path, version)
     create_zip(distribution, zip_path)
+    create_pkg(distributed_app, pkg_path, version)
 
     print(
         json.dumps(
@@ -488,6 +513,7 @@ def main() -> None:
                 "app": str(distributed_app),
                 "dmg": str(dmg_path),
                 "zip": str(zip_path),
+                "pkg": str(pkg_path),
                 "version": version,
                 "bundleBuildId": bundle_build_id,
                 "architectures": ["arm64", "x86_64"],

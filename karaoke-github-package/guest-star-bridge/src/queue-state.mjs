@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ROOT } from "./config.mjs";
 
@@ -36,7 +36,21 @@ function cleanRecovery(value = {}) {
     originalPosition:
       Number.isInteger(position) && position >= 0 ? position : null,
     markedAt: String(value.markedAt || "").trim(),
+    returnedAt: String(value.returnedAt || "").trim(),
+    returnedRevision: Math.max(0, Number(value.returnedRevision) || 0),
     entry: cleanEntry(value.entry || {})
+  };
+}
+
+function cleanRequestFileLink(value = {}) {
+  const id = String(value.id || "").trim();
+  const filePath = String(value.filePath || "").trim();
+  if (!id || !filePath) return null;
+  return {
+    id,
+    filePath,
+    source: value.source === "automatic" ? "automatic" : "manual",
+    updatedAt: String(value.updatedAt || "").trim()
   };
 }
 
@@ -74,6 +88,16 @@ function cleanPlayerOrder(value = []) {
     : [];
 }
 
+function cleanPlayerQueueVisibility(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [rawId, visible] of Object.entries(value).slice(0, 1000)) {
+    const id = String(rawId || "").trim().slice(0, 160);
+    if (id) result[id] = visible !== false;
+  }
+  return result;
+}
+
 function cleanPlayerPlayback(value = {}) {
   const currentTimeSeconds = Number(value.currentTimeSeconds);
   return {
@@ -88,24 +112,78 @@ function cleanPlayerPlayback(value = {}) {
 }
 
 function cleanPlayerStemJob(value = {}) {
-  const id = String(value.id || "").trim();
+  const legacyId = String(value.id || "").trim();
+  const requestId = String(value.requestId || legacyId.split(":")[0] || "").trim();
   const filePath = String(value.filePath || "").trim();
-  if (!id || !filePath) return null;
-  const status = ["queued", "processing", "ready", "failed"].includes(String(value.status || ""))
+  const engine = ["spleeter", "demucs"].includes(String(value.engine || "").toLowerCase())
+    ? String(value.engine).toLowerCase()
+    : "demucs";
+  const id = legacyId.includes(":") ? legacyId : `${requestId}:${engine}`;
+  if (!requestId || !id || !filePath) return null;
+  const status = ["queued", "processing", "ready", "failed", "deferred"].includes(String(value.status || ""))
     ? String(value.status)
     : "queued";
+  const intent = ["auto", "spleeter", "demucs"].includes(String(value.intent || "").toLowerCase())
+    ? String(value.intent).toLowerCase()
+    : engine;
   return {
     id,
+    requestId,
+    jobId: String(value.jobId || id).trim().slice(0, 160),
     filePath,
+    engine,
+    intent,
+    intentUpdatedAt: String(value.intentUpdatedAt || value.requestedAt || "").trim(),
+    required: value.required !== false,
+    opportunistic: value.opportunistic === true,
     status: status === "processing" ? "queued" : status,
     progress: Math.max(0, Math.min(100, Number(value.progress) || 0)),
     phase: String(value.phase || "").trim(),
+    fingerprint: String(value.fingerprint || "").trim().slice(0, 128),
+    cacheKey: String(value.cacheKey || "").trim().slice(0, 128),
+    modelVersion: String(value.modelVersion || "").trim().slice(0, 160),
+    manifestPath: String(value.manifestPath || "").trim(),
     instrumentalPath: String(value.instrumentalPath || "").trim(),
     vocalsPath: String(value.vocalsPath || "").trim(),
+    gsxPath: String(value.gsxPath || "").trim(),
+    cacheFormat: value.cacheFormat === "gsx" ? "gsx" : value.cacheFormat === "legacy" ? "legacy" : "",
     error: String(value.error || "").trim(),
+    cacheHit: value.cacheHit === true,
+    estimatedTurnSeconds: Math.max(0, Number(value.estimatedTurnSeconds) || 0),
+    etaSeconds: Math.max(0, Number(value.etaSeconds) || 0),
+    resourceState: ["IDLE", "LIVE", "PRESSURE"].includes(String(value.resourceState || "").toUpperCase())
+      ? String(value.resourceState).toUpperCase()
+      : "IDLE",
+    actualThreads: Number.isInteger(Number(value.actualThreads))
+      ? Math.max(1, Number(value.actualThreads))
+      : null,
+    osPriorityApplied: Number.isInteger(Number(value.osPriorityApplied))
+      ? Number(value.osPriorityApplied)
+      : null,
     requestedAt: String(value.requestedAt || "").trim(),
+    startedAt: String(value.startedAt || "").trim(),
+    completedAt: String(value.completedAt || "").trim(),
+    lastOutputAt: String(value.lastOutputAt || "").trim(),
     updatedAt: String(value.updatedAt || "").trim()
   };
+}
+
+function cleanMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return ["player", "bridge"].includes(mode) ? mode : "";
+}
+
+function cleanActiveActivityState(value = {}, legacy = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const activityId = String(source.activityId || legacy.activityId || "").trim();
+  const activityStartedAt = String(source.activityStartedAt || legacy.activityStartedAt || "").trim();
+  const playbackMode = cleanMode(source.playbackMode || legacy.operatingMode);
+  if (!activityId || !Number.isFinite(Date.parse(activityStartedAt)) || !playbackMode) {
+    return { activityId: "", activityStartedAt: "", playbackMode: "" };
+  }
+  return { activityId, activityStartedAt, playbackMode };
 }
 
 export function normalizeQueueState(value = {}) {
@@ -124,22 +202,50 @@ export function normalizeQueueState(value = {}) {
   const playerRequests = Array.isArray(value.playerRequests)
     ? value.playerRequests.map(cleanPlayerRequest).filter(Boolean)
     : [];
+  const requestFileLinks = Array.isArray(value.requestFileLinks)
+    ? value.requestFileLinks.map(cleanRequestFileLink).filter(Boolean)
+    : [];
+  const legacyMode = cleanMode(value.operatingMode);
+  const hasExplicitActiveState = Object.prototype.hasOwnProperty.call(value, "activeActivityState");
   return {
     activityId: String(value.activityId || "").trim(),
     activityStartedAt: String(value.activityStartedAt || "").trim(),
-    operatingMode: ["player", "bridge"].includes(String(value.operatingMode || "").trim())
-      ? String(value.operatingMode).trim()
-      : "",
+    // lastSelectedMode is only a preference. activeActivityState is the
+    // persisted session candidate and must still be confirmed remotely.
+    lastSelectedMode: cleanMode(value.lastSelectedMode) || legacyMode,
+    activeActivityState: cleanActiveActivityState(
+      value.activeActivityState,
+      hasExplicitActiveState ? {} : value
+    ),
+    operatingMode: legacyMode,
     entries,
     suppressedIds,
     recoveries,
     removedIds,
     playerRequests,
     playerOrder: cleanPlayerOrder(value.playerOrder),
+    playerQueueVisibility: cleanPlayerQueueVisibility(value.playerQueueVisibility),
     playerPlayback: cleanPlayerPlayback(value.playerPlayback),
     playerStemJobs: Array.isArray(value.playerStemJobs)
       ? value.playerStemJobs.map(cleanPlayerStemJob).filter(Boolean)
-      : []
+      : [],
+    requestFileLinks,
+    operationsState: value.operationsState && typeof value.operationsState === 'object' ? {
+      context: String(value.operationsState.context || ''),
+      closedAt: String(value.operationsState.closedAt || ''),
+      pendingPromotions: Math.max(0,Math.min(3,Number(value.operationsState.pendingPromotions)||0)),
+      reserveIds: Array.isArray(value.operationsState.reserveIds) ? [...new Set(value.operationsState.reserveIds.map(String))].slice(0, 3) : [],
+      clearedIds: Array.isArray(value.operationsState.clearedIds) ? [...new Set(value.operationsState.clearedIds.map(String))] : [],
+      pendingClearIds: cleanPlayerOrder(value.operationsState.pendingClearIds),
+      clearedVdjEntries: Array.isArray(value.operationsState.clearedVdjEntries) ? value.operationsState.clearedVdjEntries.map(entry=>({id:String(entry.id || ''),filePath:String(entry.filePath || ''),singer:String(entry.singer || '')})).filter(entry=>entry.filePath) : [],
+      loadedVdjHead: value.operationsState.loadedVdjHead && typeof value.operationsState.loadedVdjHead==='object' ? {scope:String(value.operationsState.loadedVdjHead.scope||''),filePath:String(value.operationsState.loadedVdjHead.filePath||''),singer:String(value.operationsState.loadedVdjHead.singer||''),virtualDJItemId:String(value.operationsState.loadedVdjHead.virtualDJItemId||'')} : null,
+      finishCleanup: value.operationsState.finishCleanup && typeof value.operationsState.finishCleanup==='object' ? {scope:String(value.operationsState.finishCleanup.scope||''),consumed:cleanPlayerOrder(value.operationsState.finishCleanup.consumed),done:value.operationsState.finishCleanup.done===true,result:value.operationsState.finishCleanup.result||null} : null,
+    queueIdentities: Array.isArray(value.operationsState.queueIdentities) ? value.operationsState.queueIdentities.slice(0,2000).map(entry => ({
+        index: Math.max(0,Number(entry.index)||0), virtualDJItemId:String(entry.virtualDJItemId||''),
+        filePath:String(entry.filePath||''),singer:String(entry.singer||''),song:String(entry.song||''),artist:String(entry.artist||''),durationSeconds:Math.max(0,Number(entry.durationSeconds)||0)
+      })).filter(entry=>entry.virtualDJItemId&&(entry.filePath||entry.song)) : [],
+      externalHistory: Array.isArray(value.operationsState.externalHistory) ? value.operationsState.externalHistory : []
+    } : {context:'', closedAt:'', reserveIds:[], clearedIds:[], externalHistory:[]}
   };
 }
 
@@ -152,6 +258,8 @@ export async function loadQueueState() {
   }
 }
 
+let queueWrites = Promise.resolve();
+
 export async function saveQueueState(
   activityId,
   entries,
@@ -163,7 +271,12 @@ export async function saveQueueState(
   playerRequests = [],
   playerOrder = [],
   playerPlayback = {},
-  playerStemJobs = []
+  playerStemJobs = [],
+  playerQueueVisibility = {},
+  requestFileLinks = [],
+  lastSelectedMode = operatingMode,
+  activeActivityState = {},
+  operationsState = {}
 ) {
   const clean = normalizeQueueState({
     activityId,
@@ -173,18 +286,25 @@ export async function saveQueueState(
     recoveries: Array.from(recoveries || []),
     removedIds: Array.from(removedIds || []),
     operatingMode,
+    lastSelectedMode,
+    activeActivityState,
+    operationsState,
     playerRequests: Array.from(playerRequests || []),
     playerOrder: Array.from(playerOrder || []),
+    playerQueueVisibility,
     playerPlayback,
-    playerStemJobs: Array.from(playerStemJobs || [])
+    playerStemJobs: Array.from(playerStemJobs || []),
+    requestFileLinks: Array.from(requestFileLinks || [])
   });
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(QUEUE_STATE_PATH, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
-  try {
-    await chmod(QUEUE_STATE_PATH, 0o600);
-  } catch {
-    // Windows y algunos discos montados no implementan permisos POSIX.
-  }
+  const content = `${JSON.stringify(clean, null, 2)}\n`;
+  const write = async () => {
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(`${QUEUE_STATE_PATH}.tmp`, content, { encoding: 'utf8', mode: 0o600 });
+    await rename(`${QUEUE_STATE_PATH}.tmp`, QUEUE_STATE_PATH);
+    try { await chmod(QUEUE_STATE_PATH, 0o600); } catch { /* Some disks do not support POSIX modes. */ }
+  };
+  queueWrites = queueWrites.then(write, write);
+  await queueWrites;
   return clean;
 }
 

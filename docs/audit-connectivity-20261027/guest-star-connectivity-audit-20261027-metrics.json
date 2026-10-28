@@ -1,0 +1,59 @@
+{
+  "start": "2026-10-27T20:40:00+00:00",
+  "end": "2026-10-27T22:24:14.706608+00:00",
+  "response": {
+    "data": {
+      "viewer": {
+        "accounts": [
+          {
+            "workersInvocationsAdaptive": [
+              {
+                "dimensions": {
+                  "status": "success"
+                },
+                "quantiles": {
+                  "cpuTimeP50": 10797,
+                  "cpuTimeP99": 273649
+                },
+                "sum": {
+                  "errors": 0,
+                  "requests": 8645,
+                  "subrequests": 1751
+                }
+              },
+              {
+                "dimensions": {
+                  "status": "responseStreamDisconnected"
+                },
+                "quantiles": {
+                  "cpuTimeP50": 1362,
+                  "cpuTimeP99": 2261
+                },
+                "sum": {
+                  "errors": 0,
+                  "requests": 7,
+                  "subrequests": 7
+                }
+              },
+              {
+                "dimensions": {
+                  "status": "clientDisconnected"
+                },
+                "quantiles": {
+                  "cpuTimeP50": 1495,
+                  "cpuTimeP99": 3841
+                },
+                "sum": {
+                  "errors": 0,
+                  "requests": 665,
+                  "subrequests": 665
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "errors": null
+  }
+}

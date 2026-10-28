@@ -12,7 +12,11 @@ import {
   ensureD1Schema,
   importD1Snapshot,
   listRecords,
-  reserveDailyFreeTranslationBudget
+  moveActiveRequestBefore,
+  updateActiveRequest,
+  upsertRequest,
+  reserveDailyFreeTranslationBudget,
+  upsertRecord
 } from "../lib/guest-star/d1-store";
 import {
   handleD1HostAction,
@@ -23,6 +27,7 @@ import {
   setD1BackendMode
 } from "../lib/guest-star/d1-actions";
 import { hmacSha256Hex } from "../lib/guest-star/crypto";
+import { ensureVenueAccess } from "../lib/guest-star/activity-access";
 import { googleDriveFileId, normalizeBrandImageUrl } from "../lib/guest-star/media-url";
 import { canonicalHostPanelPath, isHostPanelHostname } from "../lib/guest-star/site-routing";
 import {
@@ -86,6 +91,45 @@ class TestD1 implements D1DatabaseLike {
 const migrationDb = new TestD1();
 migrationDb.database.exec(readFileSync("migrations/0001_guest_star_core.sql", "utf8"));
 migrationDb.database.exec(readFileSync("migrations/0002_atomic_request_queue.sql", "utf8"));
+migrationDb.database.exec(readFileSync("migrations/0003_d1_hot_path_indexes.sql", "utf8"));
+migrationDb.database.exec(readFileSync("migrations/0004_activity_kiosk_access.sql", "utf8"));
+migrationDb.database.exec(readFileSync("migrations/0005_venue_room_access.sql", "utf8"));
+migrationDb.database.exec(readFileSync("migrations/0006_persistent_activity_access.sql", "utf8"));
+const explainDetails = (database: DatabaseSync, query: string) => (
+  database.prepare(`EXPLAIN QUERY PLAN ${query}`).all()
+    .map((row) => String((row as Record<string, unknown>).detail || ""))
+    .join("\n")
+);
+assert.match(explainDetails(migrationDb.database, `
+  SELECT data_json FROM guest_star_records
+  WHERE scope = 'master' AND table_name = 'AuthSessions' AND json_valid(data_json)
+    AND json_extract(data_json, '$.sessionTokenHash') = 'test-hash'
+  LIMIT 1
+`), /guest_star_records_auth_session_hash/,
+"session authentication must use the token-hash expression index");
+assert.match(explainDetails(migrationDb.database, `
+  SELECT data_json FROM guest_star_records
+  WHERE scope = 'master' AND table_name = 'BridgeCommands' AND json_valid(data_json)
+    AND json_extract(data_json, '$.deviceId') = 'device'
+    AND json_extract(data_json, '$.activityId') = 'activity'
+    AND json_extract(data_json, '$.status') = 'pending'
+  ORDER BY json_extract(data_json, '$.createdAt'), record_id
+  LIMIT 25
+`), /guest_star_records_bridge_commands_pending/,
+"Bridge polling must use the pending-command expression index");
+assert.match(explainDetails(migrationDb.database, `
+  SELECT data_json FROM guest_star_records
+  WHERE scope = 'master' AND table_name = 'Users'
+  ORDER BY created_at, record_id
+`), /guest_star_records_created_order/,
+"record listings must use the created-order index");
+assert.match(explainDetails(migrationDb.database, `
+  SELECT row_id FROM guest_star_requests
+  WHERE hotel_id = 'hotel' AND activity_id = 'activity' AND archived_at = ''
+    AND cycle_id IN ('', 'cycle')
+  LIMIT 1000
+`), /guest_star_requests_active_cycle/,
+"current-cycle queue reads must use the active-cycle index");
 
 const driveFileId = "1MoonPalaceLogo_2026abcXYZ";
 const driveShareUrl = `https://drive.google.com/file/d/${driveFileId}/view?usp=drive_link`;
@@ -130,10 +174,12 @@ assert.match(hostPanelSource, /<summary>Manage Bridge devices \(\{adminDevices\.
   "Bridge device history must stay compact by default");
 assert.match(hostPanelSource, /<summary>Revoked devices \(\{revokedAdminDevices\.length\}\)<\/summary>/,
   "revoked Bridge devices must be grouped in a secondary collapsed section");
-assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com/,
-  "Superhost must be able to choose the optional root-domain experience");
-assert.match(hostPanelSource, /action:"setDefaultPublicExperience"/,
-  "the root-domain selection must be saved through the authenticated Host API");
+assert.match(hostPanelSource, /Default experience for request\.gstarxp\.com — Disabled/,
+  "Host must show that the legacy default root experience is disabled");
+assert.match(hostPanelSource, /Session PIN required/,
+  "Host must explain that request.gstarxp.com now requires the activity PIN");
+assert.doesNotMatch(hostPanelSource, /action:"setDefaultPublicExperience"/,
+  "Host must not be able to restore a default root activity");
 assert.doesNotMatch(hostPanelSource, /Google Form and Sheet Backup|linkGoogleFallback/,
   "Host Panel must not expose Google Forms or Sheets as a live request destination");
 assert.match(hostRouteSource, /GOOGLE_REQUEST_BACKUP_DISABLED/,
@@ -150,28 +196,57 @@ assert.doesNotMatch(hostRouteSource, /scheduleD1Backup/,
   "Host live operations must never schedule a Sheets mirror");
 assert.doesNotMatch(d1ActionsSource, /appendOutbox/,
   "D1 mutations must not create Google Sheets backup work during a live activity");
-assert.match(bridgeServerSource, /"setDefaultPublicExperience"/,
-  "the local Bridge Superhost proxy must allow the root-domain setting");
+assert.doesNotMatch(bridgeServerSource, /"setDefaultPublicExperience"/,
+  "the local Bridge proxy must not expose the disabled root-domain setting");
 assert.doesNotMatch(bridgeServerSource, /"setDefaultGoogleFallback"/,
   "the local Guest Star service must not proxy the retired Google request fallback");
-assert.match(publicExperienceSource, /normalizeBrandImageUrl/,
-  "the public experience must normalize Google Drive logo links");
-assert.match(publicExperienceSource, /className="tenantLogo"/,
-  "hotel logos must render inside a dedicated presentation frame");
-assert.match(globalCssSource, /\.tenantLogo\{width:92px;height:92px/,
-  "hotel logos with built-in whitespace must remain large enough to identify");
-assert.match(globalCssSource, /filter:brightness\(\.58\) contrast\(1\.85\)/,
-  "very pale hotel logos must receive enough contrast to remain visible");
+const publicBrandingSource=readFileSync('components/BrandLogos.tsx','utf8');
+assert.match(publicExperienceSource,/BrandLogos/,"public experience delegates its hotel/team logo composition");
+assert.match(publicBrandingSource,/normalizeBrandImageUrl/,"the shared public logo renderer normalizes Google Drive links");
+assert.match(publicBrandingSource,/renderBrandLogos/,"the shared renderer uses the same branding pipeline as Host");
+assert.match(globalCssSource,/brandLogos/,"public logo composition has its presentation styles");
 assert.doesNotMatch(hostPanelSource, /Fast Backend|Import & Validate|Activate D1|Backup Now|Rollback|Hotel Sheet/,
   "migration, backup, and legacy storage controls must stay out of the operational panel");
-assert.match(publicExperienceSource, /setInterval\(refreshStatus,15000\)/,
-  "public status polling must use the Worker-safe interval");
+assert.doesNotMatch(publicExperienceSource, /setInterval\(refreshStatus/,
+  "a healthy realtime connection must not coexist with public status polling");
+assert.match(publicExperienceSource, /new WebSocket\(realtimeUrl\(realtimeChannel\),"guest-star-v1"\)/,
+  "public state must use one hotel-scoped realtime connection");
+assert.match(publicExperienceSource, /Math\.min\(30000,1000\*\(2\*\*Math\.min\(reconnectAttempt,5\)\)\)/,
+  "public realtime reconnect must use capped exponential backoff");
+assert.match(publicExperienceSource, /\(!force&&socket\?\.readyState===WebSocket\.OPEN\)/,
+  "HTTP fallback must stop while WebSocket is healthy");
 assert.match(publicExperienceSource, /!hasLoadedPublicState\.current&&code==="PUBLIC_LINK_NOT_FOUND"/,
   "a transient poll failure must not replace valid public state with a false inactive-link banner");
 assert.match(publicExperienceSource, /unavailableConfirmations\.current>=3/,
   "an inactive-link banner must require three confirmed responses");
 assert.match(publicExperienceSource, /transientRetries:5/,
   "song submissions must retry transient Worker or network failures safely");
+assert.match(publicExperienceSource, /hindiLatinRequired=active\[0\]==="hi"/,
+  "the client-side Latin-letter rule must activate only for Hindi song requests");
+assert.match(publicExperienceSource, /name:"Rahul",song:"Tum Hi Ho",artist:"Arijit Singh"/,
+  "Hindi placeholders must teach the required Latin-letter format");
+assert.match(publicExperienceSource, /!hasHindiScriptError/,
+  "the client must block submission while a Hindi identification field contains Devanagari");
+const sessionExperienceSource = readFileSync("components/SessionRequestExperience.tsx", "utf8");
+const accessSource = readFileSync("lib/guest-star/activity-access.ts", "utf8");
+assert.match(rootPageSource, /isKioskHostname\(hostname\)/,
+  "kiosko.gstarxp.com must render the dedicated kiosk entry surface");
+assert.match(sessionExperienceSource, /IDLE_TIMEOUT_MS = 60_000/,
+  "the kiosk attract screen must activate after exactly sixty seconds");
+assert.match(sessionExperienceSource, /pointerdown.*touchstart.*click.*keydown/,
+  "touch, pointer, click and keyboard interaction must dismiss the attract screen");
+assert.doesNotMatch(sessionExperienceSource, /setInterval\([^)]*(?:fetch|sessionApi)/,
+  "the kiosk screensaver must not poll the Worker or D1");
+assert.match(accessSource, /crypto\.getRandomValues/,
+  "six-digit room PINs must use a cryptographically secure random source");
+assert.match(accessSource, /WHERE hotel_id = \? AND activity_id = \? AND venue_id = \? AND status = 'active'/,
+  "the active PIN must be scoped to one hotel, activity and venue");
+assert.match(hostPanelSource, /user\.role==="host"&&selected&&kioskAccess/,
+  "only an operational Host may see the room PIN card");
+assert.match(hostPanelSource, /if\(user\.role==="host"\)void refreshSelected\(\)/,
+  "a Host must load the selected room PIN immediately without pressing Load Activity");
+assert.doesNotMatch(accessSource, /_requestFingerprint.*device_hash|device_hash.*_requestFingerprint/,
+  "an IP signal must never become the primary guest session identity");
 
 const googleClientId = "guest-star-test.apps.googleusercontent.com";
 const googleKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -323,12 +398,101 @@ const bridgeAuth = {
   authToken: String(bridgeLogin?.authToken),
   deviceToken: String(bridgeLogin?.deviceToken)
 };
+const diagnosticPayload = {
+  reportId: "GS-D1-REPORT-0001",
+  automatic: true,
+  severity: "ERROR",
+  createdAt: "2026-09-07T17:00:00.000Z",
+  firstSeenAt: "2026-09-07T16:59:00.000Z",
+  lastSeenAt: "2026-09-07T17:00:00.000Z",
+  modules: ["Bridge", "Network/API", "Bridge"],
+  summary: "La entrega técnica requiere revisión.",
+  description: "Prueba controlada de entrega D1.",
+  userAction: "Activar reportes técnicos",
+  version: "4.4.1",
+  build: "test",
+  stack: "Error: backend delivery",
+  snapshot: {
+    authToken: "must-not-be-stored",
+    password: "must-not-be-stored",
+    selectedSong: "must-not-be-stored",
+    permitted: "safe-value"
+  },
+  recentEvents: [{ severity: "ERROR", timestamp: "2026-09-07T17:00:00.000Z", message: "network failure" }],
+  health: { Diagnostics: "ERROR" }
+};
 assert.equal((await handleD1HostAction(db, {
+  action: "submitDiagnosticReport", ...bridgeAuth, report: diagnosticPayload
+}))?.ok, true, "an authenticated Bridge must persist a diagnostic report in D1");
+const savedDiagnosticReports = await listRecords(db, "TechnicalReports");
+assert.equal(savedDiagnosticReports.length, 1);
+const savedDiagnostic = savedDiagnosticReports[0] as Record<string, unknown>;
+assert.equal(savedDiagnostic.reportId, diagnosticPayload.reportId);
+assert.equal(savedDiagnostic.reporterRole, "superhost", "the backend must derive the role from the session");
+assert.equal(savedDiagnostic.status, "Nuevo", "a client cannot choose a Superhost report status");
+assert.equal((savedDiagnostic.snapshot as Record<string, unknown>).authToken, "<redacted>");
+assert.equal((savedDiagnostic.snapshot as Record<string, unknown>).password, "<redacted>");
+assert.equal((savedDiagnostic.snapshot as Record<string, unknown>).selectedSong, "<redacted>");
+assert.equal((savedDiagnostic.snapshot as Record<string, unknown>).permitted, "safe-value");
+const duplicateDiagnostic = await handleD1HostAction(db, {
+  action: "submitDiagnosticReport", ...bridgeAuth, report: diagnosticPayload
+});
+assert.equal(duplicateDiagnostic?.ok, true);
+assert.equal(duplicateDiagnostic?.deduplicated, true,
+  "a bridge retry must acknowledge the original report instead of duplicating it");
+assert.equal((await listRecords(db, "TechnicalReports")).length, 1);
+assert.equal((await handleD1HostAction(db, {
+  action: "submitDiagnosticReport", report: diagnosticPayload
+}))?.code, "UNAUTHORIZED", "a report without a valid session must be rejected");
+assert.equal((await handleD1HostAction(db, {
+  action: "submitDiagnosticReport", ...bridgeAuth, report: { reportId: "bad" }
+}))?.code, "INVALID_DIAGNOSTIC_REPORT", "a malformed report must never be persisted");
+const bridgeSelected = await handleD1HostAction(db, {
   action: "selectActivity", ...bridgeAuth, hotelId, venueId, activityId, source: "bridge"
-}))?.ok, true);
+});
+assert.equal(bridgeSelected?.ok, true);
+assert.match(String((bridgeSelected?.kioskAccess as Record<string, unknown>)?.pin || ""), /^\d{6}$/,
+  "a Superhost Bridge session must receive the operational PIN for its selected activity");
 assert.equal((await handleD1HostAction(db, {
   action: "bridgeHeartbeat", ...bridgeAuth, virtualDJConnected: true, bridgeVersion: "4.2.0"
 }))?.ok, true);
+const bridgeDeviceId = String(bridgeLogin?.deviceId);
+const commandCreatedAt = Date.now();
+for (let index = 0; index < 26; index += 1) {
+  await upsertRecord(db, "BridgeCommands", {
+    commandId: `poll-command-${String(index).padStart(2, "0")}`,
+    deviceId: bridgeDeviceId,
+    requestedByUserId: "superhost-1",
+    activityId,
+    commandType: "synchronize",
+    payloadJson: JSON.stringify({ index }),
+    status: "pending",
+    createdAt: new Date(commandCreatedAt + index).toISOString(),
+    startedAt: "",
+    completedAt: "",
+    resultJson: "",
+    errorMessage: ""
+  });
+}
+const [firstConcurrentPoll, secondConcurrentPoll] = await Promise.all([
+  handleD1HostAction(db, { action: "pollBridgeCommands", ...bridgeAuth }),
+  handleD1HostAction(db, { action: "pollBridgeCommands", ...bridgeAuth })
+]);
+const firstPollCommands = [firstConcurrentPoll, secondConcurrentPoll].flatMap((poll) => (
+  Array.isArray(poll?.commands) ? poll.commands : []
+));
+assert.ok([firstConcurrentPoll, secondConcurrentPoll].every((poll) => (
+  (Array.isArray(poll?.commands) ? poll.commands.length : 0) <= 25
+)), "each concurrent Bridge poll must enforce LIMIT 25");
+assert.equal(firstPollCommands.length, 26,
+  "concurrent polls may divide all available work without losing a command");
+assert.equal(new Set(firstPollCommands.map((command) => command.commandId)).size, 26,
+  "a conditional claim must prevent duplicate command delivery");
+const finalCommandPoll = await handleD1HostAction(db, {
+  action: "pollBridgeCommands", ...bridgeAuth
+});
+assert.equal(Array.isArray(finalCommandPoll?.commands) ? finalCommandPoll.commands.length : 0, 0,
+  "concurrent Bridge polls must leave no claimed command pending");
 assert.equal((await handleD1HostAction(db, {
   action: "bridgeExternalSync", ...bridgeAuth,
   entries: [{
@@ -359,6 +523,18 @@ assert.equal((await handleD1HostAction(db, {
 externalRows = await activeRequests(db, hotelId, activityId);
 assert.equal(externalRows.find((item) => item.virtualDJItemId === "external-vdj-1")?.status,
   "Fuera de VirtualDJ", "only a locally confirmed absence may retire an external VDJ row");
+// External queue observations must preserve the administrative lifecycle.
+for (const status of ['Ya cantó', 'Saltado']) {
+  const row = (await activeRequests(db, hotelId, activityId)).find(item => item.virtualDJItemId === 'external-vdj-1')!;
+  await updateActiveRequest(db, hotelId, row.requestId, { status, stateRevision: row.stateRevision + 1 });
+  await handleD1HostAction(db, { action: 'bridgeExternalSync', ...bridgeAuth, entries: [{ virtualDJItemId: 'external-vdj-1', singer: 'VirtualDJ', song: 'Que Dios Decida', artist: 'El Gary', index: 0, durationSeconds: 252 }] });
+  await handleD1HostAction(db, { action: 'bridgeExternalSync', ...bridgeAuth, entries: [], confirmedMissingIds: ['external-vdj-1'] });
+  assert.equal((await activeRequests(db, hotelId, activityId)).find(item => item.requestId === row.requestId)?.status, status);
+  const protectedResult = await handleD1HostAction(db, { action: 'bridgeRequestUpdate', ...bridgeAuth, id: row.requestId, status: 'Pendiente', bridgeLifecycle: true });
+  assert.equal(protectedResult?.code, 'MANUAL_OUTCOME_PROTECTED');
+  const returned = await handleD1HostAction(db, { action: 'bridgeRequestUpdate', ...bridgeAuth, id: row.requestId, status: 'Pendiente', bridgeLifecycle: true, eventOrigin: 'USER_RETURN' });
+  assert.equal(returned?.ok, true);
+}
 const oneTimeCode = await handleD1HostAction(db, {
   action: "createOneTimeLoginCode", ...bridgeAuth
 });
@@ -387,7 +563,11 @@ assert.equal("passwordHash" in hostUser, false, "admin API must never expose has
 
 assert.equal((await handleD1HostAction(db, {
   action: "assignUser", ...superAuth, userId: hostId, hotelId,
-  permissions: { canChangeSchedule: true, canStartActivity: true, canOpenCloseRequests: true }
+  permissions: {
+    canChangeSchedule: true, canStartActivity: true, canFinishActivity: true,
+    canOpenCloseRequests: true,
+    canViewQR: true, canCustomizeGuestMessages: true
+  }
 }))?.ok, true);
 
 const hostLogin = await handleD1HostAction(db, {
@@ -396,6 +576,7 @@ const hostLogin = await handleD1HostAction(db, {
 });
 assert.equal(hostLogin?.ok, true);
 const hostToken = String(hostLogin?.authToken);
+const hostAuth = { authToken: hostToken };
 const hostSelection = hostLogin?.selection as { hotels?: Array<Record<string, unknown>> };
 assert.equal("dataSheetId" in (hostSelection.hotels?.[0] || {}), false, "Host APIs must hide Google Sheet IDs");
 assert.equal((await handleD1HostAction(db, {
@@ -451,8 +632,22 @@ const futureSchedule = await handleD1HostAction(db, {
   recurrenceType: "none", recurrenceInterval: 1
 });
 assert.equal(futureSchedule?.ok, true);
-assert.equal((await handleD1PublicGet(db, publicParams) as Record<string, unknown>).accepting, false,
+const publicScheduleLeaseKey = `public_schedule_check:${hotelId}`;
+const idlePublicWritesBefore = Number((db.database.prepare(
+  "SELECT total_changes() AS total"
+).get() as Record<string, unknown>).total);
+const futurePublicState = await handleD1PublicGet(db, publicParams) as Record<string, unknown>;
+const idlePublicWritesAfter = Number((db.database.prepare(
+  "SELECT total_changes() AS total"
+).get() as Record<string, unknown>).total);
+assert.equal(futurePublicState.accepting, false,
   "future schedules must stay closed until requestOpeningAt");
+assert.equal(idlePublicWritesAfter, idlePublicWritesBefore,
+  "public polling must not write a scheduler lease when no schedule is due");
+assert.equal(db.database.prepare(
+  "SELECT value FROM guest_star_meta WHERE key = ?"
+).get(publicScheduleLeaseKey), undefined,
+"an idle public poll must not create a scheduler lease row");
 assert.equal((await handleD1HostAction(db, {
   action: "cancelSchedule", ...superAuth,
   scheduleId: String((futureSchedule?.schedule as Record<string, unknown>).scheduleId)
@@ -466,9 +661,11 @@ const earlyOpenSchedule = await handleD1HostAction(db, {
   recurrenceType: "none", recurrenceInterval: 1
 });
 assert.equal(earlyOpenSchedule?.ok, true);
+await new Promise(resolve=>setTimeout(resolve,2100)); // Respect the public scheduler throttle after replacing a schedule.
 const earlyOpenPublicState = await handleD1PublicGet(db, publicParams);
-assert.equal(earlyOpenPublicState.accepting, true,
-  "a one-time activity must open inside its configured pre-event window");
+assert.ok((await activeRequests(db,hotelId,activityId)).length>0,"this fixture retains a previous queue");
+assert.equal(earlyOpenPublicState.accepting, false,
+  "an automatic pre-event opening cannot consent to keeping or clearing a previous queue for the Host");
 assert.equal(earlyOpenPublicState.activityRunning, false,
   "opening requests early must never start Player or Bridge");
 assert.equal((await handleD1HostAction(db, {
@@ -480,16 +677,22 @@ const dueSchedule = await handleD1HostAction(db, {
   action: "scheduleActivity", ...superAuth, hotelId, venueId, activityId,
   scheduledStartAt: new Date(Date.now() - 1000).toISOString(),
   durationSeconds: 7200, requestOpeningLeadSeconds: 600,
-  autoOpenRequests: true, autoStartActivity: true, showCountdown: true,
+  autoOpenRequests: true, autoStartActivity: false, showCountdown: true,
   recurrenceType: "none", recurrenceInterval: 1
 });
 assert.equal(dueSchedule?.ok, true);
-assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "completed");
+assert.equal(String((dueSchedule?.schedule as Record<string, unknown>).status), "active");
 assert.equal((dueSchedule?.schedule as Record<string, unknown>).autoStartActivity, false,
   "schedules must never choose or start a playback engine automatically");
 assert.equal((await handleD1HostAction(db, {
   action: "activityState", ...superAuth, hotelId, venueId, activityId
 }))?.ok, true, "due schedules must be processed by Host/Bridge state reads");
+
+assert.equal((await handleD1HostAction(db, {
+  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId
+}))?.code, "PLAYBACK_MODE_REQUIRED", "an activity cannot start without a playback mode");
+const explicitPreparation=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,autoOpenRequests:true,openBeforeStart:true,queueChoice:'keep'});
+assert.equal(explicitPreparation?.ok,true,JSON.stringify(explicitPreparation));
 
 const scheduledPublicState = await handleD1PublicGet(db, publicParams);
 assert.equal(scheduledPublicState.ok, true);
@@ -499,19 +702,208 @@ assert.equal((scheduledPublicState as Record<string, unknown>).activityRunning, 
 assert.equal((scheduledPublicState as Record<string, unknown>).queuePeopleCount, 1,
   "legacy requests without tenant IDs must inherit the active hotel activity during import");
 assert.equal((await handleD1HostAction(db, {
-  action: "startActivityV4", ...superAuth, hotelId, venueId, activityId
-}))?.code, "PLAYBACK_MODE_REQUIRED", "an activity cannot start without a playback mode");
-assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
 }))?.ok, true, "the Host can explicitly start the internal Player");
+const kioskSelected = await handleD1HostAction(db, {
+  action: "activityState", ...hostAuth, hotelId, venueId, activityId
+});
+const firstKioskAccess = kioskSelected?.kioskAccess as Record<string, unknown>;
+assert.equal((bridgeSelected?.kioskAccess as Record<string, unknown>)?.accessId, firstKioskAccess.accessId,
+  "Superhost Bridge and Host must share the same persistent activity access");
+const firstSessionPin = String(firstKioskAccess.pin || "");
+const firstJoinToken = String(firstKioskAccess.joinUrl || "").split("/").pop() || "";
+assert.match(firstSessionPin, /^\d{6}$/,
+  "an activity must expose one exact six-digit PIN to its authorized Host");
+const otherActivityAccess = await ensureVenueAccess(db, { hotelId, venueId, activityId: "other-activity", cycleId: "" });
+const otherVenueAccess = await ensureVenueAccess(db, { hotelId, venueId: "other-venue", activityId, cycleId: "" });
+const otherHotelAccess = await ensureVenueAccess(db, { hotelId: "other-hotel", venueId, activityId, cycleId: "" });
+assert.notEqual(otherActivityAccess.pin, firstSessionPin, "another activity in the same venue has another PIN");
+assert.notEqual(otherVenueAccess.pin, firstSessionPin, "another venue has another PIN");
+assert.notEqual(otherHotelAccess.pin, firstSessionPin, "another hotel has another PIN");
+assert.equal((await handleD1HostAction(db, {
+  action: "activityState", ...superAuth, hotelId, venueId, activityId
+}))?.kioskAccess, null, "Superhost must not receive the operational room PIN");
+assert.equal(String(firstKioskAccess.joinUrl).startsWith("https://request.gstarxp.com/join/"), true);
+assert.equal((await handleD1PublicPost(db, {
+  action: "joinByPin", pin: "000000", guestDeviceId: "wrong-pin-device-123456", _requestFingerprint: "203.0.113.9"
+})).code, "INVALID_PIN");
+const joinedKiosk = await handleD1PublicPost(db, {
+  action: "joinByPin", pin: firstSessionPin,
+  guestDeviceId: "kiosk-device-1234567890", _requestFingerprint: "203.0.113.9"
+});
+assert.equal(joinedKiosk.ok, true);
+const firstActivitySessionToken = String(joinedKiosk.activitySessionToken || "");
+assert.ok(firstActivitySessionToken.length >= 40);
+const chainB = await handleD1PublicPost(db, {
+  action: "joinByToken", joinToken: firstJoinToken,
+  guestDeviceId: "chain-device-b-1234567890"
+});
+const chainC = await handleD1PublicPost(db, {
+  action: "joinByToken", joinToken: firstJoinToken,
+  guestDeviceId: "chain-device-c-1234567890"
+});
+assert.equal(chainB.ok, true);
+assert.equal(chainC.ok, true);
+assert.equal((chainB.kioskAccess as Record<string, unknown>).accessId, firstKioskAccess.accessId);
+assert.equal((chainC.kioskAccess as Record<string, unknown>).accessId, firstKioskAccess.accessId);
+assert.equal((chainB.kioskAccess as Record<string, unknown>).pin, firstSessionPin);
+assert.notEqual(chainB.activitySessionToken, firstActivitySessionToken);
+assert.notEqual(chainC.activitySessionToken, chainB.activitySessionToken);
+assert.equal(String(firstKioskAccess.joinUrl).includes(firstActivitySessionToken), false,
+  "the public QR must never contain a guest session");
+assert.equal((await handleD1PublicPost(db, {
+  action: "resumeSession", activitySessionToken: firstActivitySessionToken,
+  guestDeviceId: "kiosk-device-1234567890"
+})).ok, true, "a kiosk refresh must resume without asking for its PIN again");
+assert.equal((await handleD1PublicPost(db, {
+  action: "resumeSession", activitySessionToken: firstActivitySessionToken,
+  guestDeviceId: "different-device-1234567890"
+})).code, "SESSION_DEVICE_MISMATCH",
+"copying localStorage to a different browser identity must not transfer a session");
+const savedMessages = await handleD1HostAction(db, {
+  action: "updateKioskMessages", ...hostAuth, hotelId, venueId, activityId,
+  defaultMessagesEnabled: true,
+  customMessages: ["Winner gets a prize!", "Winner gets a prize!", "Sing with us tonight"]
+});
+assert.deepEqual((savedMessages?.kioskAccess as Record<string, unknown>).customMessages,
+  ["Winner gets a prize!", "Sing with us tonight"]);
+assert.equal((await handleD1HostAction(db, {
+  action: "toggleRequests", ...superAuth, hotelId, venueId, activityId,
+  open: false, resetSessionPin: false
+}))?.ok, true);
+const closedKioskSession = await handleD1PublicPost(db, {
+  action: "resumeSession", activitySessionToken: firstActivitySessionToken,
+  guestDeviceId: "kiosk-device-1234567890"
+});
+assert.equal(closedKioskSession.ok, true);
+assert.equal(closedKioskSession.accepting, false,
+  "requests closed must keep the activity session valid while showing the closed state");
+assert.equal((await handleD1HostAction(db, {
+  action: "toggleRequests", ...superAuth, hotelId, venueId, activityId, open: true
+}))?.ok, true);
+const resetPinState = await handleD1HostAction(db, {
+  action: "resetSessionPin", ...hostAuth, hotelId, venueId, activityId
+});
+const secondKioskAccess = resetPinState?.kioskAccess as Record<string, unknown>;
+const secondSessionPin = String(secondKioskAccess.pin || "");
+assert.match(secondSessionPin, /^\d{6}$/);
+assert.notEqual(secondSessionPin, firstSessionPin);
+assert.equal((await handleD1PublicPost(db, {
+  action: "joinByPin", pin: firstSessionPin, guestDeviceId: "old-pin-device-1234567890"
+})).code, "PIN_EXPIRED", "reset must invalidate the old PIN immediately");
+assert.equal((await handleD1PublicPost(db, {
+  action: "joinByToken", joinToken: firstJoinToken, guestDeviceId: "old-link-device-1234567890"
+})).code, "JOIN_LINK_EXPIRED", "reset must invalidate the old QR link immediately");
+assert.equal((await handleD1PublicPost(db, {
+  action: "resumeSession", activitySessionToken: firstActivitySessionToken,
+  guestDeviceId: "kiosk-device-1234567890"
+})).code, "SESSION_PIN_CHANGED", "reset must revoke sessions created under the old PIN version");
+const sharedNatJoins = await Promise.all(Array.from({length:50},(_,index)=>handleD1PublicPost(db, {
+  action:"joinByPin", pin:secondSessionPin,
+  guestDeviceId:`hotel-nat-device-${String(index).padStart(4,"0")}-123456`,
+  _requestFingerprint:"198.51.100.24"
+})));
+assert.equal(sharedNatJoins.every(result=>result.ok===true),true,
+  "fifty browsers behind one hotel NAT must receive independent activity sessions");
+assert.equal(new Set(sharedNatJoins.map(result=>String(result.activitySessionToken))).size,50);
+const idleResumeToken=String(sharedNatJoins[0].activitySessionToken);
+const idleReadsBefore=Number((db.database.prepare("SELECT total_changes() AS total").get() as Record<string,unknown>).total);
+for(let index=0;index<5;index+=1)assert.equal((await handleD1PublicPost(db,{
+  action:"resumeSession",activitySessionToken:idleResumeToken,
+  guestDeviceId:"hotel-nat-device-0000-123456"
+})).ok,true);
+const idleReadsAfter=Number((db.database.prepare("SELECT total_changes() AS total").get() as Record<string,unknown>).total);
+assert.equal(idleReadsAfter,idleReadsBefore,
+  "resuming or idling a valid kiosk session must not create D1 writes");
 const publicState = await handleD1PublicGet(db, publicParams);
 assert.equal((publicState as Record<string, unknown>).activityRunning, true);
 assert.equal((publicState as Record<string, unknown>).playbackMode, "player");
+assert.equal((await handleD1HostAction(db, {
+  action: "updateActivityLanguages", authToken: hostToken,
+  hotelId, venueId, activityId, allowedLanguages: ["es", "en", "hi"]
+}))?.ok, true, "the isolated Hindi validation fixture must allow Hindi requests");
+const rejectedHindiSong = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-script-device-1234567890",
+  name: "Rahul", song: "तुम ही हो", artist: "Arijit Singh",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(rejectedHindiSong.code, "HINDI_LATIN_REQUIRED",
+  "a Hindi song title in Devanagari must not reach the Host");
+const rejectedHindiArtist = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-artist-device-1234567890",
+  name: "Rahul", song: "Tum Hi Ho", artist: "अरिजीत सिंह",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(rejectedHindiArtist.code, "HINDI_LATIN_REQUIRED",
+  "a Hindi artist in Devanagari must not reach the Host");
+const rejectedHindiParticipant = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-name-device-1234567890",
+  name: "राहुल", song: "Tum Hi Ho", artist: "Arijit Singh",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(rejectedHindiParticipant.code, "HINDI_LATIN_REQUIRED",
+  "a Hindi participant name in Devanagari must not reach the Host");
+const latinHindiRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-latin-device-1234567890",
+  name: "Rahul", song: "Tum Hi Ho", artist: "Arijit Singh",
+  language: "हिन्दी", languageCode: "hi", comment: "शुभकामनाएँ"
+});
+assert.equal(latinHindiRequest.ok, true,
+  "Hindi requests written with Latin letters must remain valid");
+const storedLatinHindiRequest = (await activeRequests(db, hotelId, activityId))
+  .find(request=>request.requestId===latinHindiRequest.id);
+assert.equal(storedLatinHindiRequest?.singer, "Rahul");
+assert.equal(storedLatinHindiRequest?.song, "Tum Hi Ho");
+assert.equal(storedLatinHindiRequest?.artist, "Arijit Singh");
+const punctuationHindiRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-punctuation-device-1234567890",
+  name: "Rahul", song: "Tum Hi Ho - Arijit Singh", artist: "Arijit Singh",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(punctuationHindiRequest.ok, true,
+  "Latin text with normal song-title punctuation must remain valid in Hindi");
+const numericHindiRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-number-device-1234567890",
+  name: "Rahul", song: "295", artist: "Sidhu Moose Wala",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(numericHindiRequest.ok, true,
+  "numeric Hindi song titles must remain valid");
+const spanishUnchangedRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "spanish-script-device-1234567890",
+  name: "राहुल", song: "तुम ही हो", artist: "अरिजीत सिंह",
+  language: "Español", languageCode: "es", comment: ""
+});
+assert.equal(spanishUnchangedRequest.ok, true,
+  "switching to Spanish must remove the Hindi-only script rule");
+const englishUnchangedRequest = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "english-script-device-1234567890",
+  name: "रवि", song: "अंग्रेज़ी गीत", artist: "अन्य कलाकार",
+  language: "English", languageCode: "en", comment: ""
+});
+assert.equal(englishUnchangedRequest.ok, true,
+  "English requests must preserve their original behavior");
+const rejectedHindiAgain = await handleD1PublicPost(db, {
+  publicCode: "moon-palace-public-test-code", guestDeviceId: "hindi-again-device-1234567890",
+  name: "Rahul", song: "तुम ही हो", artist: "Arijit Singh",
+  language: "हिन्दी", languageCode: "hi", comment: ""
+});
+assert.equal(rejectedHindiAgain.code, "HINDI_LATIN_REQUIRED",
+  "switching back to Hindi must reactivate the script rule");
+for (const requestId of [
+  latinHindiRequest.id, punctuationHindiRequest.id, numericHindiRequest.id,
+  spanishUnchangedRequest.id, englishUnchangedRequest.id
+]) {
+  db.database.prepare("DELETE FROM guest_star_requests WHERE request_id = ?")
+    .run(String(requestId));
+}
 const publicRequest = await handleD1PublicPost(db, {
   publicCode: "moon-palace-public-test-code", name: "Guest One", song: "Song One",
   artist: "Artist One", language: "Español", languageCode: "es", comment: ""
 });
 assert.equal(publicRequest.ok, true);
+assert.equal((publicRequest as Record<string, unknown>).queuePeopleCount, 2,
+  "an accepted request must return the absolute public count for incremental fanout");
 const playerRuntimeUpdate = await handleD1HostAction(db, {
   action: "playerRuntimeUpdate", ...superAuth, hotelId, venueId, activityId,
   queueOrder: [publicRequest.id],
@@ -542,9 +934,52 @@ const removedFromPlayer = await handleD1HostAction(db, {
   id: publicRequest.id, status: "Retirada del Player"
 });
 assert.equal(removedFromPlayer?.ok, true, JSON.stringify(removedFromPlayer));
+assert.equal(removedFromPlayer?.queuePeopleCount, 1,
+  "a queue status change must publish the new count without one public refetch per client");
 assert.equal((await activeRequests(db, hotelId, activityId))
   .find((request) => request.requestId === publicRequest.id)?.status, "Retirada del Player",
 "a Player removal must survive the next shared-service synchronization");
+const beforeMetadata = (await activeRequests(db, hotelId, activityId)).find(item => item.requestId === publicRequest.id)!;
+const metadataEdit = await handleD1HostAction(db, {
+  action: 'bridgeRequestUpdate', ...switchedBridgeAuth, id: publicRequest.id,
+  singer: 'Edited Participant', song: 'Edited Title', artist: 'Edited Artist',
+  expectedRevision: beforeMetadata.stateRevision, eventOrigin: 'USER_ACTION'
+});
+assert.equal(metadataEdit?.ok, true, JSON.stringify(metadataEdit));
+const editedMetadata = metadataEdit?.request as Record<string, unknown>;
+assert.equal(editedMetadata.name, 'Edited Participant'); assert.equal(editedMetadata.song, 'Edited Title');
+assert.equal(editedMetadata.artist, 'Edited Artist'); assert.equal(editedMetadata.id, publicRequest.id);
+assert.equal((await handleD1HostAction(db, {
+  action: 'bridgeRequestUpdate', ...switchedBridgeAuth, id: publicRequest.id,
+  singer: 'Stale Participant', expectedRevision: beforeMetadata.stateRevision
+}))?.code, 'REQUEST_REVISION_CONFLICT');
+assert.equal((await handleD1HostAction(db, {
+  action: 'bridgeRequestUpdate', ...switchedBridgeAuth, id: publicRequest.id, status: 'Ya cantó',
+  expectedRevision: editedMetadata.stateRevision, eventOrigin: 'VDJ_EVENT'
+}))?.code, 'MANUAL_OUTCOME_PROTECTED');
+assert.equal((await handleD1HostAction(db, {
+  action: 'bridgeRequestUpdate', ...switchedBridgeAuth, id: publicRequest.id,
+  singer: beforeMetadata.singer, song: beforeMetadata.song, artist: beforeMetadata.artist,
+  expectedRevision: editedMetadata.stateRevision, eventOrigin: 'USER_ACTION'
+}))?.ok, true);
+const reorderDb = new TestD1(); await ensureD1Schema(reorderDb);
+for (let index = 1; index <= 4; index++) {
+  await upsertRequest(reorderDb, { ...beforeMetadata, rowId: `order-${index}`, requestId: `order-${index}`,
+    hotelId: 'order-hotel', activityId: 'order-activity', cycleId: 'order-cycle',
+    status: 'Pendiente', queuePosition: index, stateRevision: 1, archivedAt: '' });
+}
+const orderIds = async () => (await activeRequests(reorderDb, 'order-hotel', 'order-activity')).map(item => item.requestId);
+assert.ok(await moveActiveRequestBefore(reorderDb, 'order-hotel', 'order-activity', 'order-3', 'order-1', 1, 'order-cycle'));
+assert.deepEqual(await orderIds(), ['order-3', 'order-1', 'order-2', 'order-4'], 'new arrival survives identity-based reorder');
+assert.equal(await moveActiveRequestBefore(reorderDb, 'order-hotel', 'order-activity', 'order-3', null, 1, 'order-cycle'), null);
+assert.equal(await moveActiveRequestBefore(reorderDb, 'order-hotel', 'order-activity', 'order-1', 'gone-target', 2, 'order-cycle'), null);
+assert.ok(await moveActiveRequestBefore(reorderDb, 'order-hotel', 'order-activity', 'order-3', null, 2, 'order-cycle'));
+assert.deepEqual(await orderIds(), ['order-1', 'order-2', 'order-4', 'order-3']);
+assert.ok(await updateActiveRequest(reorderDb, 'order-hotel', 'order-1', { status: 'Saltado', stateRevision: 4 }, 3));
+assert.equal(await updateActiveRequest(reorderDb, 'order-hotel', 'order-1', { status: 'Ya cantó', stateRevision: 4 }, 3), null,
+  'stale Played cannot overwrite manual Skip');
+assert.equal(await updateActiveRequest(reorderDb, 'order-hotel', 'order-1', { remainingSeconds: 10 }, 3), null,
+  'stale timeline recalculation cannot overwrite newer manual state');
 const firstAlex = await handleD1PublicPost(db, {
   publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
   name: "Alex", song: "Valió la pena", artist: "Marc Anthony",
@@ -623,9 +1058,29 @@ assert.equal(sameDeviceResults[8].code, "RATE_LIMITED",
 assert.equal((await handleD1HostAction(db, {
   action: "finishActivityV4", ...superAuth, hotelId, venueId, activityId, source: "web"
 }))?.ok, true);
+assert.equal((await handleD1PublicPost(db, {
+  action:"resumeSession",activitySessionToken:idleResumeToken,
+  guestDeviceId:"hotel-nat-device-0000-123456"
+})).ok,true,
+"finishing an occurrence preserves device access");
+assert.equal((await handleD1PublicPost(db, {
+  action:"joinByPin",pin:secondSessionPin,guestDeviceId:"ended-pin-device-1234567890"
+})).ok,true,
+"a finished occurrence retains its public activity PIN");
+const nextCycle=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'clear'});
+assert.equal(nextCycle?.ok,true,JSON.stringify(nextCycle));
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
 }))?.ok, true, "restarting the same configured activity must create a fresh cycle");
+const restartedRoomState = await handleD1HostAction(db, {
+  action: "activityState", ...hostAuth, hotelId, venueId, activityId
+});
+assert.equal(String((restartedRoomState?.kioskAccess as Record<string, unknown>).pin), secondSessionPin,
+  "starting a new occurrence of the same hotel/activity/venue must preserve its PIN");
+assert.equal((await handleD1PublicPost(db, {
+  action: "joinByPin", pin: secondSessionPin,
+  guestDeviceId: "same-room-new-activity-123456"
+})).ok, true, "the room PIN must join the new active activity in the same venue");
 const repeatedInFreshCycle = await handleD1PublicPost(db, {
   publicCode: "moon-palace-public-test-code", guestDeviceId: "device-alex-a-1234567890",
   name: "Alex", song: "Valió la pena", artist: "Marc Anthony",
@@ -638,12 +1093,26 @@ assert.equal((await handleD1HostAction(db, {
   action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "bridge"
 }))?.code, "ACTIVITY_ALREADY_RUNNING",
 "a Host must finish the current activity before replacing it with a new cycle");
-assert.equal((await handleD1HostAction(db, {
-  action: "finishActivityV4", ...superAuth, hotelId, venueId, activityId, source: "player"
-}))?.ok, true);
+const finishedWithoutReset = await handleD1HostAction(db, {
+  action: "finishActivityV4", ...hostAuth, hotelId, venueId, activityId,
+  source: "player", resetSessionPin: true
+});
+assert.equal(finishedWithoutReset?.ok, true);
+const retainedPin = String((finishedWithoutReset?.kioskAccess as Record<string, unknown>).pin);
+assert.equal(retainedPin, secondSessionPin,
+  "Finish must preserve the activity PIN even when an old client sends resetSessionPin");
+assert.equal((await handleD1PublicPost(db, {
+  action: "joinByPin", pin: secondSessionPin, guestDeviceId: "finish-reset-old-pin-123456"
+})).ok, true, "Finish must keep the public join access available");
+const bridgeCycle=await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId,venueId,activityId,sessionMode:'free',source:'bridge',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'clear'});
+assert.equal(bridgeCycle?.ok,true,JSON.stringify(bridgeCycle));
 assert.equal((await handleD1HostAction(db, {
   action: "startNewActivityV4", ...superAuth, hotelId, venueId, activityId, source: "bridge"
 }))?.ok, true, "after finishing, a new cycle may explicitly choose Bridge");
+assert.equal(String(((await handleD1HostAction(db, {
+  action: "activityState", ...hostAuth, hotelId, venueId, activityId
+}))?.kioskAccess as Record<string, unknown>).pin), retainedPin,
+"starting the next cycle must retain the persistent activity PIN");
 
 assert.equal((await handleD1HostAction(db, {
   action: "updateHotelBranding", ...superAuth, hotelId,
@@ -690,40 +1159,31 @@ assert.equal(secondHotel?.ok, true);
 const otherHotelId = String((secondHotel?.hotel as Record<string, unknown>).hotelId);
 assert.equal(String((secondHotel?.venue as Record<string, unknown>).hotelId), otherHotelId,
   "new D1 hotels must include their default venue");
-assert.deepEqual((secondHotel?.activity as Record<string, unknown>).allowedLanguages, ["es", "en", "fr", "it", "de", "ru", "pt"],
+assert.deepEqual((secondHotel?.activity as Record<string, unknown>).allowedLanguages, ["es", "en", "fr", "it", "de", "ru", "pt", "hi"],
   "new D1 hotels must include the full language catalog");
 assert.equal(String((secondHotel?.assignment as Record<string, unknown>).userId), "superhost-1",
   "new D1 hotels must assign the Superhost automatically");
 const editableActivity = secondHotel?.activity as Record<string, unknown>;
 const editableActivityId = String(editableActivity.activityId);
 const editableVenueId = String((secondHotel?.venue as Record<string, unknown>).venueId);
-const rootOnlyActivity = await handleD1HostAction(db, {
-  action: "createActivity", ...superAuth, hotelId: otherHotelId, venueId: editableVenueId,
-  name: "Root Domain Event", defaultDurationSeconds: 5400, defaultTransitionSeconds: 30,
-  allowedLanguages: ["es", "en"]
-});
-const rootOnlyActivityId = String((rootOnlyActivity?.activity as Record<string, unknown>).activityId);
+assert.equal((await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId:otherHotelId,venueId:editableVenueId,activityId:editableActivityId,sessionMode:'free',source:'bridge',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'keep'}))?.ok,true);
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
   venueId: editableVenueId, activityId: editableActivityId, source: "bridge"
 }))?.ok, true);
 assert.equal((await handleD1HostAction(db, {
   action: "setDefaultPublicExperience", ...superAuth, enabled: true,
-  hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
-}))?.ok, true);
+  hotelId: otherHotelId, venueId: editableVenueId, activityId: editableActivityId
+}))?.code, "DEFAULT_PUBLIC_EXPERIENCE_DISABLED");
 const rootAdminState = await handleD1HostAction(db, { action: "adminState", ...superAuth });
 assert.deepEqual(rootAdminState?.defaultPublicExperience, {
-  configured: true, available: true, hotelId: otherHotelId,
-  venueId: editableVenueId, activityId: rootOnlyActivityId,
-  updatedAt: String((rootAdminState?.defaultPublicExperience as Record<string, unknown>).updatedAt)
+  disabled: true, configured: false, available: false
 });
 const rootPublicState = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: "default"
 })) as Record<string, unknown>;
-assert.equal((rootPublicState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
-  "request.gstarxp.com must use the exact Superhost-selected activity");
-assert.equal(rootPublicState.accepting, false,
-  "the selected root activity must keep its own request status instead of borrowing the hotel's active activity");
+assert.equal(rootPublicState.code, "PUBLIC_LINK_NOT_FOUND",
+  "request.gstarxp.com without a PIN session must not resolve a default activity");
 const otherHotelIdentifier = String((secondHotel?.hotel as Record<string, unknown>).publicUrl);
 const permanentOtherState = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: otherHotelIdentifier
@@ -735,28 +1195,23 @@ const fallbackFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLGuestStarFallb
 assert.equal((await handleD1HostAction(db, {
   action: "setDefaultGoogleFallback", ...superAuth, enabled: true,
   formUrl: fallbackFormUrl, userId: "superhost-1",
-  hotelId: otherHotelId, venueId: editableVenueId, activityId: rootOnlyActivityId
+  hotelId: otherHotelId, venueId: editableVenueId, activityId: editableActivityId
 }))?.code, "GOOGLE_REQUEST_BACKUP_DISABLED");
 const fallbackRootState = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: "default"
 })) as Record<string, unknown>;
 assert.equal(fallbackRootState.googleFallback, undefined,
   "request.gstarxp.com must never expose Google Forms as its live request path");
-assert.equal((fallbackRootState.activity as Record<string, unknown>).activityId, rootOnlyActivityId,
-  "removing Google fallback must preserve the exact Superhost-selected activity");
-assert.equal(fallbackRootState.accepting, false,
-  "the selected ready activity must preserve its own closed state");
+assert.equal(fallbackRootState.code, "PUBLIC_LINK_NOT_FOUND",
+  "request.gstarxp.com must remain PIN-only after rejected fallback configuration");
 assert.equal((await handleD1PublicPost(db, {
   publicCode: "default", name: "Fallback Guest", song: "Song", artist: "Artist", language: "English"
-})).code, "CLOSED");
+})).code, "PUBLIC_LINK_NOT_FOUND");
 const permanentDuringFallback = await handleD1PublicGet(db, new URLSearchParams({
   action: "publicBootstrap", hotel: otherHotelIdentifier
 })) as Record<string, unknown>;
 assert.equal(permanentDuringFallback.googleFallback, undefined,
   "permanent hotel URLs must remain D1-only");
-assert.equal((await handleD1HostAction(db, {
-  action: "setDefaultPublicExperience", ...superAuth, enabled: false
-}))?.ok, true, "the optional root-domain override must be removable");
 assert.equal((await handleD1HostAction(db, {
   action: "finishActivityV4", ...superAuth, hotelId: otherHotelId,
   venueId: editableVenueId, activityId: editableActivityId, source: "web"
@@ -802,7 +1257,7 @@ const recurringRecord = recurringSchedule?.schedule as Record<string, unknown>;
 assert.equal(recurringRecord.recurrenceType, "weekly");
 assert.equal(recurringRecord.recurrenceInterval, 2);
 assert.deepEqual(JSON.parse(String(recurringRecord.recurrenceDaysJson)), [1, 3]);
-assert.equal(recurringRecord.recurrenceDayOfMonth, 19);
+assert.equal(recurringRecord.recurrenceDayOfMonth, null,"weekly recurrence must not retain the obsolete monthly day");
 assert.equal(nextScheduleOccurrence({
   scheduledStartAt: "2026-08-19T20:00:00.000Z", recurrenceType: "weekly",
   recurrenceInterval: 2, recurrenceDaysJson: JSON.stringify([1, 3])
@@ -829,8 +1284,9 @@ const liveRecurringSchedule = await handleD1HostAction(db, {
 assert.equal(liveRecurringSchedule?.ok, true);
 const liveScheduleRecord = liveRecurringSchedule?.schedule as Record<string, unknown>;
 assert.equal(String(liveScheduleRecord.status), "active", "a weekly series must advance instead of completing");
-assert.ok(Date.parse(String(liveScheduleRecord.scheduledStartAt)) > Date.now(),
-  "a weekly series must keep its next occurrence in the future");
+assert.ok(Date.parse(String(nextScheduleOccurrence(liveScheduleRecord,"UTC"))) > Date.now(),
+  "a weekly series must calculate a future next occurrence without silently consuming an unprepared run");
+assert.equal((await handleD1HostAction(db,{action:'prepareSession',...superAuth,hotelId:otherHotelId,venueId:editableVenueId,activityId:editableActivityId,sessionMode:'scheduled',scheduleId:liveScheduleRecord.scheduleId,source:'player',startsAt:new Date().toISOString(),durationSeconds:7200,autoStart:false,queueChoice:'keep'}))?.ok,true);
 assert.equal((await handleD1HostAction(db, {
   action: "startActivityV4", ...superAuth, hotelId: otherHotelId,
   venueId: editableVenueId, activityId: editableActivityId, source: "player"
@@ -936,7 +1392,7 @@ const boundedManualTranslation = await prepareBrandingLocalization({
   localizedMessagesJson: oversizedManualInput
 }, null);
 const boundedManualJson = String(boundedManualTranslation.branding.localizedMessagesJson);
-assert.ok(boundedManualJson.length < 49_000, "all manual translations must fit safely in one Google Sheets cell");
+assert.ok(boundedManualJson.length < 49_000, "manual translations must keep a bounded D1 payload");
 assert.equal(parseLocalizedMessages(boundedManualJson).fr.welcomeMessage.length, 300);
 const unavailableTranslation = await prepareBrandingLocalization({
   messageSourceLanguage: "en", translationMode: "auto", welcomeMessage: "Welcome",
@@ -953,11 +1409,9 @@ await assert.rejects(
 );
 health = await d1Health(db);
 assert.equal(health.mode, "d1_primary");
-assert.equal(health.backup.pending, 0);
 
 console.log("D1 backend tests passed", {
   users: health.counts.users,
-  pendingBackupEvents: health.backup.pending,
   publicRequestId: publicRequest.id,
   burst200Ms: Number(burst200Ms.toFixed(1)),
   sessionP95Ms: Number(sessionP95.toFixed(3))

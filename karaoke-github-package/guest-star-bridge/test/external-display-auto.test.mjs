@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+const open=source.slice(source.indexOf('function openStarScreenOnExternalDisplay()'),source.indexOf('function showHostForSelectedMode('));
+const event=source.slice(source.indexOf('window.addEventListener("gueststar:native-displays"'),source.indexOf('window.addEventListener("gueststar:native-star-screen-result"'));
+test('external output automatically opens in Host, preserves the configured destination, and does not open in Superhost',()=>{
+ const messages=[];const listeners={};let admin=false;
+ const context={window:{webkit:{messageHandlers:{guestStarNative:{postMessage:message=>messages.push(message)}}},addEventListener:(name,listener)=>listeners[name]=listener},nativeDisplays:[],superhostPanel:{isOpen:()=>admin},state:{tenant:{activity:{activityId:'current'}},operatingMode:{selected:'player'},config:{starScreenDisplayId:'preferred-output'}},renderNativeDisplays:()=>{}};
+ vm.createContext(context);vm.runInContext(open+event,context);
+ const notify=displays=>listeners['gueststar:native-displays']({detail:{displays}});
+ notify([{displayId:'built-in',builtIn:true}]);assert.equal(messages.length,0);
+ notify([{displayId:'built-in',builtIn:true},{displayId:'external',builtIn:false}]);assert.equal(messages.length,1);
+ assert.equal(messages[0].displayId,'preferred-output');assert.equal(messages[0].preview,false);assert.equal(messages[0].action,'openStarScreen');
+ notify(context.nativeDisplays);assert.equal(messages.length,1,'refreshing inventory must not repeatedly open a closed output');
+ notify([{displayId:'built-in',builtIn:true}]);notify([{displayId:'built-in',builtIn:true},{displayId:'external',builtIn:false}]);assert.equal(messages.length,2,'reconnection opens the presentation again');
+ admin=true;notify([{displayId:'built-in',builtIn:true},{displayId:'another-external',builtIn:false}]);assert.equal(messages.length,2);
+ admin=false;context.state.operatingMode.selected='';vm.runInContext('openStarScreenOnExternalDisplay()',context);assert.equal(messages.length,2);
+ context.state.operatingMode.selected='bridge';vm.runInContext('openStarScreenOnExternalDisplay()',context);assert.equal(messages.length,3,'Bridge Host uses the same presentation path');
+ context.nativeDisplays=[{displayId:'external-only',builtIn:false}];vm.runInContext('openStarScreenOnExternalDisplay()',context);assert.equal(messages.length,4,'external-only clamshell operation opens the presentation');
+});

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<skin name="Guest Star Karaoke" version="8" width="1920" height="1080" karaoke="true" image="clear.png" author="Guest Star Experience" comment="Original native overlay companion and VDJ metadata fallback">
+<font name="Helvetica" />
+<panel visibility="karaoke ? is_karaoke_idle ? deck master effect_active 'Guest Star Karaoke' ? false : true : false : false" x="0" y="0">
+<square color="#181b22"><pos x="0" y="0"/><size width="1920" height="1080"/></square>
+<square color="#24232e" radius="30"><pos x="80" y="80"/><size width="630" height="920"/></square>
+<textzone><pos x="124" y="140"/><size width="550" height="56"/><text text="GUEST STAR" size="42" weight="bold" color="#00c8ff"/></textzone>
+<textzone><pos x="124" y="242"/><size width="550" height="130"/><text text="Your moment. Your song. Your stage." size="36" color="#ffffff"/></textzone>
+<textzone><pos x="124" y="490"/><size width="550" height="125"/><text text="Esperando conexión con Guest Star" size="28" color="#bfc4d0"/></textzone>
+<textzone><pos x="790" y="114"/><size width="1030" height="64"/><text text="NEXT SINGER" size="40" weight="bold" color="#ffffff"/></textzone>
+<panel x="790" y="242" visibility="has_karaoke_next 0">
+<square color="#252834" radius="24"><pos x="0" y="0"/><size width="1040" height="180"/></square>
+<textzone><pos x="28" y="27"/><size width="964" height="56"/><text action="get_next_karaoke_song 'singer' 0" size="38" weight="bold" color="#ffffff"/></textzone>
+<textzone><pos x="28" y="98"/><size width="964" height="48"/><text action="get_next_karaoke_song 'title' 0" size="28" color="#c0c6d0"/></textzone>
+</panel><panel x="790" y="458" visibility="has_karaoke_next 1">
+<square color="#252834" radius="24"><pos x="0" y="0"/><size width="1040" height="180"/></square>
+<textzone><pos x="28" y="27"/><size width="964" height="56"/><text action="get_next_karaoke_song 'singer' 1" size="38" weight="bold" color="#ffffff"/></textzone>
+<textzone><pos x="28" y="98"/><size width="964" height="48"/><text action="get_next_karaoke_song 'title' 1" size="28" color="#c0c6d0"/></textzone>
+</panel><panel x="790" y="674" visibility="has_karaoke_next 2">
+<square color="#252834" radius="24"><pos x="0" y="0"/><size width="1040" height="180"/></square>
+<textzone><pos x="28" y="27"/><size width="964" height="56"/><text action="get_next_karaoke_song 'singer' 2" size="38" weight="bold" color="#ffffff"/></textzone>
+<textzone><pos x="28" y="98"/><size width="964" height="48"/><text action="get_next_karaoke_song 'title' 2" size="28" color="#c0c6d0"/></textzone>
+</panel></panel></skin>

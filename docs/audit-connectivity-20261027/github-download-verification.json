@@ -1,0 +1,13 @@
+{
+  "asset": "Guest-Star-Experience-4.6.1-rc.1-arm64.dmg",
+  "serverDigest": "sha256:88b6c7ac699472248d0d5736334f4e23a6a598bdc5aa8b3430528df16dc31283",
+  "fullLocalSha256": "88b6c7ac699472248d0d5736334f4e23a6a598bdc5aa8b3430528df16dc31283",
+  "serverDigestMatchesLocal": true,
+  "authorizedHttpStatus": 206,
+  "contentType": "application/octet-stream",
+  "contentLength": "65536",
+  "contentRange": "bytes 0-65535/365566284",
+  "bytesRead": 65536,
+  "prefixMatchesLocal": true,
+  "fullRemoteDownload": false
+}

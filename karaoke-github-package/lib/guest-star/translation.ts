@@ -1,7 +1,7 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import type { JsonObject } from "./d1-store";
 
-export const GUEST_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
+export const GUEST_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt", "hi"] as const;
 export type GuestLanguageCode = typeof GUEST_LANGUAGE_CODES[number];
 
 export const BRANDING_MESSAGE_FIELDS = [
@@ -81,9 +81,9 @@ export function estimateBrandingTranslationNeurons(rawBranding: unknown) {
     0
   );
   // Conservative allowance: one token per two characters, equal-size output,
-  // six target languages, and one complete retry if a combined response cannot
+  // seven target languages, and one complete retry if a combined response cannot
   // be split. m2m100 is billed at 0.03105 neurons per token on each side.
-  return Math.max(1, Math.ceil(characters * 0.3726 + 25));
+  return Math.max(1, Math.ceil(characters * 0.4347 + 25));
 }
 
 function isLanguageCode(value: unknown): value is GuestLanguageCode {

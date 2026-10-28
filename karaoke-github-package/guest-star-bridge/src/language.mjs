@@ -74,6 +74,16 @@ const PROFILES = Object.freeze({
     lyricsTerms: "текст песни",
     aliases: ["russian", "ruso", "русский", "русскии", "russia", "rus"],
     pathMarkers: ["russian", "ruso", "русский", "русскии", "russia", "rus"]
+  }),
+  hindi: Object.freeze({
+    code: "hindi",
+    displayName: "Hindi",
+    youtubeLanguage: "hi",
+    regionCode: "IN",
+    searchTerms: "कराओके बोल स्क्रीन पर इंस्ट्रुमेंटल",
+    lyricsTerms: "बोल स्क्रीन पर",
+    aliases: ["hindi", "हिन्दी", "हिंदी", "hindustani", "hi-in", "hin"],
+    pathMarkers: ["hindi", "हिन्दी", "हिंदी", "hindustani", "hi-in", "hin"]
   })
 });
 

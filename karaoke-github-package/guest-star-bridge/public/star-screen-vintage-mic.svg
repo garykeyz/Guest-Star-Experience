@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 680" role="img" aria-label="Vintage karaoke microphone">
+  <defs>
+    <linearGradient id="chrome" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff4ff"/><stop offset=".21" stop-color="#8e5dba"/><stop offset=".45" stop-color="#30124c"/><stop offset=".65" stop-color="#e77dff"/><stop offset=".84" stop-color="#2a1740"/><stop offset="1" stop-color="#fff2ff"/></linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="1" y2=".7"><stop stop-color="#160719"/><stop offset=".42" stop-color="#482049"/><stop offset="1" stop-color="#080710"/></linearGradient>
+    <linearGradient id="stem" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#120a1c"/><stop offset=".28" stop-color="#8932ae"/><stop offset=".6" stop-color="#ed9bff"/><stop offset="1" stop-color="#16091d"/></linearGradient>
+    <filter id="neon" x="-80%" y="-40%" width="260%" height="190%"><feGaussianBlur stdDeviation="8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <clipPath id="grill"><rect x="72" y="27" width="156" height="251" rx="76"/></clipPath>
+  </defs>
+  <ellipse cx="153" cy="320" rx="116" ry="286" fill="#d81bff" opacity=".13" filter="url(#neon)"/>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <path d="M137 370h28l13 228-24 47-26-47z" fill="url(#stem)" stroke="#fa97ff" stroke-width="4"/>
+    <path d="M141 426h23M143 448h23M146 573h19" stroke="#fff0ff" stroke-width="3" opacity=".72"/>
+    <path d="M119 358h65l-6 45h-53z" fill="url(#chrome)" stroke="#ffb4ff" stroke-width="5"/>
+    <path d="M136 371v22h33v-22" fill="#260b35" stroke="#e98dff" stroke-width="3"/>
+    <path d="M59 277c-1 64 19 91 75 98M241 277c1 64-19 91-75 98" fill="none" stroke="#f5b3ff" stroke-width="10" filter="url(#neon)"/>
+    <path d="M59 277c-1 64 19 91 75 98M241 277c1 64-19 91-75 98" fill="none" stroke="url(#chrome)" stroke-width="7"/>
+    <circle cx="60" cy="271" r="12" fill="url(#chrome)" stroke="#ffd7ff" stroke-width="3"/>
+    <circle cx="240" cy="271" r="12" fill="url(#chrome)" stroke="#ffd7ff" stroke-width="3"/>
+    <rect x="65" y="20" width="170" height="270" rx="82" fill="url(#chrome)" stroke="#ffbaff" stroke-width="6" filter="url(#neon)"/>
+    <rect x="73" y="28" width="154" height="252" rx="74" fill="url(#face)" stroke="#2b1233" stroke-width="6"/>
+    <g clip-path="url(#grill)" fill="none" stroke-linecap="round">
+      <path d="M60 63c49-26 132-25 182 0M54 84c60-26 146-25 192 0M52 105c57-25 149-25 196 0M50 127c60-26 153-26 200 0M50 149c58-25 153-25 200 0M50 171c61-26 153-26 200 0M50 193c59-25 153-25 200 0M52 215c60-26 150-25 196 0M55 237c56-25 142-25 189 0M63 259c50-21 130-21 175 0" stroke="#ef85fa" stroke-width="8"/>
+      <path d="M60 68c49-26 132-25 182 0M54 89c60-26 146-25 192 0M52 110c57-25 149-25 196 0M50 132c60-26 153-26 200 0M50 154c58-25 153-25 200 0M50 176c61-26 153-26 200 0M50 198c59-25 153-25 200 0M52 220c60-26 150-25 196 0M55 242c56-25 142-25 189 0M63 264c50-21 130-21 175 0" stroke="#130818" stroke-width="6"/>
+      <path d="M101 24c-10 77-10 173 0 252M129 21c-8 77-8 177 0 261M157 20c-5 78-5 179 0 263M186 23c8 77 8 175 0 256M209 38c13 78 13 157 0 222" stroke="#ffbbff" stroke-width="3" opacity=".83"/>
+    </g>
+    <rect x="65" y="20" width="170" height="270" rx="82" fill="none" stroke="#ffd7ff" stroke-width="4"/>
+    <path d="M95 54c30-24 83-24 113-5" fill="none" stroke="#fff9ff" stroke-width="5" opacity=".7"/>
+    <path d="M86 291c14 31 36 48 64 49 30 0 51-16 64-49" fill="none" stroke="#fa8fff" stroke-width="5" filter="url(#neon)"/>
+  </g>
+</svg>

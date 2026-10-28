@@ -1,19 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import KaraokeExperienceClient from "@/components/KaraokeExperienceClient";
 import HostPanel from "@/components/HostPanel";
-import { isHostPanelHostname } from "@/lib/guest-star/site-routing";
+import SessionRequestExperience from "@/components/SessionRequestExperience";
+import { isHostPanelHostname, isKioskHostname } from "@/lib/guest-star/site-routing";
 
 export default function Page() {
-  const [surface, setSurface] = useState<"host" | "request" | null>(null);
+  const [surface, setSurface] = useState<"host" | "request" | "kiosk" | null>(null);
 
   useEffect(() => {
     const hostname = window.location.hostname;
-    setSurface(isHostPanelHostname(hostname) ? "host" : "request");
+    setSurface(isHostPanelHostname(hostname) ? "host" : isKioskHostname(hostname) ? "kiosk" : "request");
   }, []);
 
   if (surface === "host") return <HostPanel />;
-  if (surface === "request") return <KaraokeExperienceClient hotelCode="default" />;
-  return <main className="page"><div className="brand notranslate" translate="no">✦ GUEST STAR EXPERIENCE</div></main>;
+  if (surface === "kiosk") return <SessionRequestExperience kioskMode />;
+  if (surface === "request") return <SessionRequestExperience />;
+  return <main className="page"><div className="brand notranslate" translate="no"><img className="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></div></main>;
 }

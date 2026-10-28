@@ -1,4 +1,5 @@
 export const HOST_PANEL_HOSTNAME = "host.gstarxp.com";
+export const KIOSK_HOSTNAME = "kiosko.gstarxp.com";
 
 export function normalizedHostname(value: string | null | undefined) {
   const candidate = String(value || "").split(",", 1)[0].trim().toLowerCase();
@@ -12,6 +13,11 @@ export function normalizedHostname(value: string | null | undefined) {
 
 export function isHostPanelHostname(value: string | null | undefined) {
   return normalizedHostname(value) === HOST_PANEL_HOSTNAME;
+}
+
+export function isKioskHostname(value: string | null | undefined) {
+  const hostname = normalizedHostname(value);
+  return hostname === KIOSK_HOSTNAME || hostname === "kiosko.localhost";
 }
 
 export function canonicalHostPanelPath(value: string | null | undefined) {

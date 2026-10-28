@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {ensureD1Schema,type D1DatabaseLike,type D1StatementLike} from '../lib/guest-star/d1-store';
+import {reserveActivityRun,startActivityRun,activityRun,beginRunEndCountdown,cancelRunEndCountdown,finishActivityRun,processRunEndings,processDueActivityRuns} from '../lib/guest-star/activity-run';
+import {nextHotelAutomationWake} from '../lib/guest-star/run-automation';
+class Statement {values:any[]=[];constructor(readonly db:DatabaseSync,readonly sql:string){}bind(...v:any[]){this.values=v;return this;}async all(){return{results:this.db.prepare(this.sql).all(...this.values)};}async first(){return this.db.prepare(this.sql).get(...this.values)||null;}async run(){return{meta:{changes:Number(this.db.prepare(this.sql).run(...this.values).changes)}};}}
+class DB {database=new DatabaseSync(':memory:');prepare(sql:string){return new Statement(this.database,sql);}async batch(stmts:Statement[]){this.database.exec('BEGIN');try{const result=[];for(const s of stmts)result.push(await s.run());this.database.exec('COMMIT');return result;}catch(e){this.database.exec('ROLLBACK');throw e;}}async exec(sql:string){this.database.exec(sql);return{};}}
+const raw=new DB(),db=raw as unknown as D1DatabaseLike;await ensureD1Schema(db);
+const base=Date.now();
+const activity=(hotel:string)=>({hotelId:hotel,activityId:'activity-'+hotel,venueId:'venue-'+hotel,currentCycleId:'run-'+hotel,status:'scheduled'});
+for(const hotel of ['hotel-aaaa','hotel-bbbb','hotel-cccc','hotel-dddd']){const a=activity(hotel);raw.database.prepare("INSERT INTO guest_star_records VALUES ('master','Activities',?,?,?,?)").run(a.activityId,JSON.stringify(a),new Date(base).toISOString(),new Date(base).toISOString());const run={...a,runId:a.currentCycleId,mode:'free',startsAt:new Date(base+120000).toISOString(),createdAt:new Date(base).toISOString(),autoStart:true,autoOpenRequests:true,openBeforeStart:false,autoFinish:true,durationSeconds:900,timezone:'America/Santo_Domingo',playbackSource:'bridge'};assert.equal(await reserveActivityRun(db,run,0,false),true);assert.equal(await reserveActivityRun(db,{...run,runId:'duplicate-'+hotel},0,false),false);}
+const a=activity('hotel-aaaa');let run=(await activityRun(db,a))!;
+assert.equal(await nextHotelAutomationWake(db,a.hotelId,base),base+120000,'persistent alarm 2 min future');
+assert.equal(await processDueActivityRuns(db,a.hotelId),false,'reload before time');
+raw.database.prepare('UPDATE guest_star_activity_runs SET starts_at=?,data_json=json_set(data_json,\'$.startsAt\',?) WHERE run_id=?').run(new Date(base-120000).toISOString(),new Date(base-120000).toISOString(),String(run.runId));run=(await activityRun(db,a))!;
+assert.equal(await processDueActivityRuns(db,a.hotelId),true,'late wake starts');assert.equal(await processDueActivityRuns(db,a.hotelId),false,'one start');assert.equal(await startActivityRun(db,run),false,'Host and alarm deduplicate');
+assert.equal(raw.database.prepare('SELECT accepting FROM guest_star_activity_runtime WHERE activity_id=?').get(a.activityId)?.accepting,1,'auto open');
+assert.equal((await activityRun(db,activity('hotel-bbbb')))?.status,'scheduled','hotel isolation');run=(await activityRun(db,a))!;
+const end=Date.parse(String(run.startedAt))+Number(run.durationSeconds)*1000;
+assert.equal(await beginRunEndCountdown(db,run,end-1),false);assert.equal(await beginRunEndCountdown(db,run,end),true);assert.equal(await beginRunEndCountdown(db,run,end+1),false);
+run=(await activityRun(db,a))!;assert.equal(Date.parse(String((run.endCountdown as any).deadlineAt))-end,60000);assert.equal(raw.database.prepare('SELECT accepting FROM guest_star_activity_runtime WHERE activity_id=?').get(a.activityId)?.accepting,0);
+assert.equal(await cancelRunEndCountdown(db,run,end+30000),true);assert.equal(await cancelRunEndCountdown(db,run,end+31000),false);assert.equal(raw.database.prepare('SELECT accepting FROM guest_star_activity_runtime WHERE activity_id=?').get(a.activityId)?.accepting,1);
+assert.equal((await processRunEndings(db,a.hotelId,r=>finishActivityRun(db,r,null,true),end+60001)).length,0,'cancel never repeats');
+assert.equal(await finishActivityRun(db,(await activityRun(db,a))!,null,true),false,'stale automatic finish respects cancellation');assert.equal(await finishActivityRun(db,(await activityRun(db,a))!,null),true,'finish now');assert.equal(await finishActivityRun(db,(await activityRun(db,a))!,null),false,'double finish');
+const b=activity('hotel-bbbb');raw.database.prepare('UPDATE guest_star_activity_runs SET starts_at=?,data_json=json_set(data_json,\'$.startsAt\',?,\'$.durationSeconds\',1) WHERE run_id=?').run(new Date(base-65000).toISOString(),new Date(base-65000).toISOString(),b.currentCycleId);assert.equal(await processDueActivityRuns(db,b.hotelId),true);const transitions=await processRunEndings(db,b.hotelId,r=>finishActivityRun(db,r,null,true));assert.deepEqual(transitions.map(t=>t.action),['countdown','finished']);assert.equal((await activityRun(db,b))?.status,'finished');assert.equal((await processRunEndings(db,b.hotelId,r=>finishActivityRun(db,r,null,true))).length,0);
+console.log('PASS: persistent 2-minute alarm, reload, late start, atomic start/open, 60-second countdown, cancellation, finish now, duplicate finish, overdue finish and hotel isolation.');

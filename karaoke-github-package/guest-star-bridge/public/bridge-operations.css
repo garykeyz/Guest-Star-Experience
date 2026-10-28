@@ -1,0 +1,138 @@
+/* Bridge presentation only: never applies to the internal Player/Star Screen. */
+.bridge-operations { display: grid; grid-template-columns: minmax(160px, 1fr) auto minmax(180px, .6fr); gap: 12px;
+  align-items: center; margin: 10px 0; padding: 10px; border: 1px solid var(--gs-primary); border-radius: 12px;
+  background: linear-gradient(110deg, color-mix(in srgb, var(--gs-background) 90.98%, transparent), color-mix(in srgb, var(--gs-background) 92.94%, transparent)); container-type: inline-size; }
+body.player-mode #bridgeOperations, body.player-selected-mode #bridgeOperations { display: none; }
+.operations-summary-strip { min-width: 0; }
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip {
+  display: flex; align-items: center; width: 100%; min-width: 0; min-height: 34px;
+  margin: 7px 0; padding: 3px 5px; overflow-x: auto; overflow-y: hidden;
+  border: 1px solid rgb(255 255 255 / .18); border-radius: 8px; background: color-mix(in srgb, var(--gs-background) 92.94%, transparent);
+  scroll-padding-inline: 5px; scrollbar-width: thin; contain: layout paint;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .status-grid,
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .time-dashboard { display: contents; }
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .status-card,
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .time-card,
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .event-reminder {
+  flex: 0 0 auto; display: inline-flex; align-items: center; min-width: max-content; min-height: 28px;
+  gap: 5px; margin: 0; padding: 2px 8px; border: 0; border-right: 1px solid rgb(255 255 255 / 0.0902);
+  border-radius: 0; background: transparent; box-shadow: none; white-space: nowrap;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .event-reminder { border-right: 0; }
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .status-card > div,
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .event-reminder > div {
+  display: inline-flex; align-items: baseline; gap: 4px;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip small {
+  display: inline; margin: 0; color: var(--gs-text); font-size: 8px; font-weight: 900; line-height: 1;
+  letter-spacing: .06em;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip strong {
+  display: inline; margin: 0; color: var(--gs-text); font-size: 10px; line-height: 1.1;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip p {
+  position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .status-icon {
+  display: inline-block; width: 13px; height: 13px; flex: 0 0 13px; padding: 0;
+  border-radius: 0; background: currentColor; font-size: 0;
+  -webkit-mask: var(--summary-icon) center / contain no-repeat;
+          mask: var(--summary-icon) center / contain no-repeat;
+}
+#libraryStatus .status-icon { --summary-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 18V5l10-2v13M9 9l10-2M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6m10-2a3 3 0 1 0 0 6 3 3 0 0 0 0-6' fill='none' stroke='black' stroke-width='2'/%3E%3C/svg%3E"); }
+#sheetStatus .status-icon { --summary-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='3' width='16' height='18' rx='2' fill='none' stroke='black' stroke-width='2'/%3E%3Cpath d='M8 8h8M8 12h8M8 16h5' stroke='black' stroke-width='2'/%3E%3C/svg%3E"); }
+#vdjStatus .status-icon { --summary-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='black' stroke-width='2'/%3E%3Ccircle cx='12' cy='12' r='3' fill='none' stroke='black' stroke-width='2'/%3E%3C/svg%3E"); }
+#activityStatus .status-icon { --summary-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='black' stroke-width='2'/%3E%3Cpath d='M12 7v6l4 2' stroke='black' stroke-width='2' fill='none'/%3E%3C/svg%3E"); }
+.bridge-operation-status { min-width: 0; font-size: 11px; line-height: 1.5; color: var(--gs-text); overflow-wrap: anywhere; }
+.bridge-operations.is-connected .bridge-operation-status { color: var(--gs-accent-ink); }
+.bridge-transport-actions, .bridge-row-actions, .bridge-request-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.bridge-icon-action.button { display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-width: 32px; min-height: 32px; max-width: 100%; padding: 5px 7px; font-size: 11px; line-height: 1.3; }
+.bridge-icon-action > svg { width: 17px; height: 17px; flex: 0 0 17px; }
+.bridge-icon-action > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.bridge-master { display: grid; grid-template-columns: auto minmax(40px, 1fr) 36px; gap: 8px; align-items: center; min-width: 0; margin: 0; font-size: 11px; }
+.bridge-master input { min-width: 0; width: 100%; margin: 0; accent-color: var(--gs-primary); }
+.bridge-master output { font-variant-numeric: tabular-nums; text-align: right; }
+.bridge-master-output { display:flex; align-items:center; gap:8px; min-width:230px; padding:4px 7px; border:1px solid rgb(255 255 255 / .18); border-radius:7px; background:color-mix(in srgb, var(--gs-background) 90.98%, transparent); }
+.bridge-master-output > label { display:grid; grid-template-columns:auto auto; align-items:center; gap:2px 6px; min-width:138px; color:var(--gs-text); font-size:8px; font-weight:900; letter-spacing:.08em; }
+.bridge-master-output > label input { grid-column:1 / -1; width:138px; margin:0; accent-color:var(--gs-accent-ink); }
+.bridge-master-output output { color:var(--gs-accent-ink); font-size:9px; text-align:right; }
+.bridge-transport-actions select { width: 82px; min-width: 0; height: 32px; padding: 3px 5px; }
+.bridge-row-actions { grid-column: 1 / -1; justify-content: flex-end; }
+.bridge-row-actions .bridge-icon-action { padding: 4px; }
+.bridge-row-actions .bridge-icon-action > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.bridge-drag-handle { touch-action: none; cursor: grab; }
+.bridge-drag-source { opacity: .5; }
+.bridge-drop-before { border-top: 3px solid var(--gs-primary) !important; }
+.bridge-drop-end { border-bottom: 3px solid var(--gs-primary); }
+.bridge-metadata-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto auto; gap: 6px; width: 100%; min-width: 0; align-items: end; }
+.bridge-metadata-form label { min-width: 0; margin: 0; font-size: 10px; }
+.bridge-metadata-form input { width: 100%; min-width: 0; height: 32px; padding: 5px 7px; font-size: 12px; }
+body:not(.player-mode):not(.player-selected-mode) .live-queue-workspace { align-items: start; }
+body:not(.player-mode):not(.player-selected-mode) .vdj-queue-panel,
+body:not(.player-mode):not(.player-selected-mode) .request-groups { height: auto; min-height: 0; max-height: none; overflow: visible; }
+body:not(.player-mode):not(.player-selected-mode) .request-list,
+body:not(.player-mode):not(.player-selected-mode) .vdj-live-list { max-height: min(56dvh, 640px); min-height: 80px; overflow: auto; overscroll-behavior: contain; }
+body:not(.player-mode):not(.player-selected-mode) .request-head,
+body:not(.player-mode):not(.player-selected-mode) .queue-panel-head { min-width: 0; flex-wrap: wrap; }
+body:not(.player-mode):not(.player-selected-mode) .request-head > div,
+body:not(.player-mode):not(.player-selected-mode) .queue-panel-head > div { min-width: 0; max-width: 100%; }
+body:not(.player-mode):not(.player-selected-mode) .request-head h3,
+body:not(.player-mode):not(.player-selected-mode) .request-head p { overflow-wrap: anywhere; }
+body:not(.player-mode):not(.player-selected-mode) .outcome-panel { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgb(255 255 255 / 0.06275); gap: 5px; }
+@media (max-width: 1440px) {
+  .bridge-operations { gap: 8px; padding: 8px; grid-template-columns: minmax(130px, 1fr) auto minmax(160px, .7fr); }
+  .bridge-transport-actions .bridge-icon-action > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+}
+@media (max-width: 1024px) {
+  .bridge-operations { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .bridge-master { grid-column: 1 / -1; }
+  body:not(.player-mode):not(.player-selected-mode) .status-card { padding: 8px; gap: 7px; }
+  body:not(.player-mode):not(.player-selected-mode) .time-card { padding: 8px; }
+  .bridge-metadata-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bridge-metadata-form label:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 1100px) {
+  .bridge-master-output { min-width:190px; }
+  .bridge-master-output > label { min-width:104px; }
+  .bridge-master-output > label input { width:104px; }
+}
+@media (max-width: 700px) {
+  .bridge-operations { padding: 6px; grid-template-columns: minmax(0, 1fr); }
+  .bridge-transport-actions { gap: 4px; }
+  .bridge-master { grid-column: 1; }
+  body:not(.player-mode):not(.player-selected-mode) .topbar .subtitle { display: none; }
+  body:not(.player-mode):not(.player-selected-mode) .status-card p,
+  body:not(.player-mode):not(.player-selected-mode) .time-card p { font-size: 10px; }
+  body:not(.player-mode):not(.player-selected-mode) .live-queue-workspace { grid-template-columns: minmax(0, 1fr); }
+  body:not(.player-mode):not(.player-selected-mode) .toolbar { gap: 8px; padding: 8px; }
+  body:not(.player-mode):not(.player-selected-mode) .compact-controls { width: 100%; min-width: 0; }
+  body:not(.player-mode):not(.player-selected-mode) .compact-controls > * { max-width: 100%; }
+}
+@media (max-width: 450px) {
+  .bridge-icon-action > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  body:not(.player-mode):not(.player-selected-mode) .vdj-live-row { grid-template-columns: 24px minmax(0, 1fr); padding: 6px; gap: 5px; }
+  body:not(.player-mode):not(.player-selected-mode) .vdj-live-row > span:nth-child(3) { grid-column: 2; text-align: left; }
+  .bridge-metadata-form { grid-template-columns: minmax(0, 1fr); }
+  .bridge-metadata-form label:first-child { grid-column: 1; }
+}
+@media (max-width: 520px) {
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip { padding-inline: 3px; }
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .status-card,
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .time-card,
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip .event-reminder { padding-inline: 6px; }
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip small { font-size: 0; }
+  body:not(.player-mode):not(.player-selected-mode) #libraryStatus small::after { content: "LIB"; }
+  body:not(.player-mode):not(.player-selected-mode) #sheetStatus small::after { content: "REQ"; }
+  body:not(.player-mode):not(.player-selected-mode) #vdjStatus small::after { content: "VDJ"; }
+  body:not(.player-mode):not(.player-selected-mode) #activityStatus small::after { content: "ACT"; }
+  body:not(.player-mode):not(.player-selected-mode) .time-card:nth-child(1) small::after { content: "ELAPSED"; }
+  body:not(.player-mode):not(.player-selected-mode) .time-card:nth-child(2) small::after { content: "SUNG+QUEUE"; }
+  body:not(.player-mode):not(.player-selected-mode) .time-card:nth-child(3) small::after { content: "TOTAL"; }
+  body:not(.player-mode):not(.player-selected-mode) .time-card:nth-child(4) small::after { content: "COVER"; }
+  body:not(.player-mode):not(.player-selected-mode) #eventReminder small::after { content: "END"; }
+  body:not(.player-mode):not(.player-selected-mode) .operations-summary-strip small::after { font-size: 8px; }
+}
+@media (pointer: coarse) { .bridge-icon-action.button { min-height: 40px; min-width: 40px; } }

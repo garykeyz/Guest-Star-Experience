@@ -92,7 +92,7 @@ async function measureRoute(label, samples, operation) {
 try {
   await waitUntilReady();
 
-  for (const path of ["/", "/h/moon-palace-test", "/host", "/bridge-login?code=one-time", "/icon.svg"]) {
+  for (const path of ["/", "/h/moon-palace-test", "/host", "/bridge-login?code=one-time", "/icon.png"]) {
     const response = await request(path);
     assert.equal(response.status, 200, `${path} should render in production`);
   }

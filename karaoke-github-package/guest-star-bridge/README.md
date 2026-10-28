@@ -1,4 +1,4 @@
-# Guest Star 4.4.1
+# Guest Star 4.5
 
 Aplicación local Universal para Mac con Player interno, Star Screen y Bridge
 opcional para VirtualDJ. Solicitudes, hotel, actividad, cola e historial son
@@ -18,15 +18,15 @@ el Superhost; no necesita Node, npm ni Terminal.
 
 ## Instalación
 
-1. Descomprime `Guest-Star-Universal-v4.4.1-app.zip` o abre el DMG.
+1. Abre `GuestStar-4.5.pkg` y sigue el instalador, o usa el DMG/ZIP alternativo.
 2. Mueve **Guest Star.app** a Aplicaciones.
 3. La primera vez usa clic derecho → **Abrir**.
 4. Inicia sesión con el usuario y contraseña, o pulsa **Continuar con Google**.
    Google se abre en Safari/Chrome para evitar un acceso inseguro dentro del
    WebView y regresa automáticamente a Guest Star al terminar.
 5. Selecciona hotel, sede y actividad entre tus asignaciones.
-6. En Settings, elige las carpetas locales y, si usarás Bridge, configura
-   Network Control.
+6. En **Guest Star → Preferencias…** (`⌘,`), elige las carpetas locales y, si
+   usarás Bridge, configura Network Control.
 7. Antes de iniciar selecciona Player o Bridge. La actividad bloquea ese modo
    hasta que Host o Superhost la finalice.
 
@@ -46,6 +46,36 @@ los secretos se guardan en macOS Keychain.
   reproducción interna.
 - **Aleatorio · Random** genera rondas en español, inglés, ambas listas o los
   favoritos del hotel sin repetir antes de completar cada vuelta.
+
+La ventana principal y Star Screen pertenecen al mismo host nativo Cocoa de
+**Guest Star**. Abrir Star Screen de nuevo enfoca y reubica la misma ventana en
+la pantalla elegida; si esa pantalla se desconecta, la app informa el fallback
+y la mueve a una pantalla disponible. El proceso visible ya no depende de una
+ventana `osascript`.
+
+## Player, audio y Stems IA
+
+- Preferencias separa la configuración general de la actividad y permite elegir
+  salida de audio, pantalla de Star Screen, idioma, interfaz, EQ y ayudas.
+- Karaoke, stems y música ambiental pasan por el mismo grafo de audio y la misma
+  salida. Si el dispositivo desaparece, Guest Star continúa por la salida
+  predeterminada y permite recuperarlo al reconectarlo.
+- El modo **AUTO** consulta primero el caché, usa Spleeter para dejar la canción
+  lista rápidamente y ejecuta Demucs como mejora oportunista. Nunca espera a
+  Demucs para iniciar ni cambia la fuente durante una canción en curso.
+- Los trabajos pesados se limitan a uno y reaccionan a estados reales
+  `IDLE`, `LIVE` y `PRESSURE` para proteger la reproducción.
+- Star Screen recibe únicamente los turnos que el Host dejó visibles y mantiene
+  heartbeat/acuse con Player para mostrar un estado de conexión real.
+
+## Diagnóstico
+
+**Preferencias → Diagnóstico** permite crear, copiar, guardar y exportar un
+reporte técnico, activar modo Tester y elegir el envío automático al Superhost.
+Los reportes funcionan offline, se reintentan después y agrupan errores
+repetidos por huella. Antes de guardar o enviar se eliminan secretos, datos de
+huéspedes, títulos privados y cargas de audio/video; las referencias operativas
+se anonimizan y las rutas de usuario se sanitizan.
 
 Las solicitudes activas y la cola real de VirtualDJ aparecen lado a lado; las
 completadas y omitidas se agrupan debajo, sin perder su número de llegada. Cada
@@ -76,8 +106,8 @@ Bridge solo lo reemplaza mediante **Cambiar archivo** o lo retira mediante
 
 Desde 4.3.7, una canción marcada como cantada, omitida o retirada conserva esa
 decisión aunque el servidor entregue una lectura atrasada o el Bridge reinicie.
-Solo **Deshacer** permite restaurarla. La réplica hacia Google Sheets se agrupa
-globalmente para que una ráfaga de solicitudes no multiplique el trabajo.
+Solo **Deshacer** permite restaurarla. D1 conserva la decisión autoritativa sin
+crear réplicas ni trabajo secundario en Google Sheets.
 
 Desde 4.3.6, la sincronización operativa queda separada del respaldo histórico:
 las lecturas normales no crean eventos históricos ni bloquean la cola
@@ -123,6 +153,8 @@ completo.
 - selección y permisos verificados de nuevo por el servicio Guest Star.
 - el token de identidad Google se valida en el servidor contra el cliente OAuth;
   una cuenta desconocida nunca crea automáticamente un usuario Guest Star.
+- diagnósticos locales acotados, sanitizados y sin servicio externo de
+  telemetría nuevo.
 
 ## Pruebas
 

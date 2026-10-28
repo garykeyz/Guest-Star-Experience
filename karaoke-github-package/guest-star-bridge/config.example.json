@@ -8,16 +8,25 @@
     "/Users/tu-usuario/Music/Ambiente"
   ],
   "backgroundMusicVolume": 0.55,
-  "appsScriptUrl": "https://request.gstarxp.com/api/bridge",
-  "hostPin": "",
-  "rememberHostPin": true,
+  "audioOutputDeviceId": "",
+  "starScreenDisplayId": "",
+  "defaultStemEngine": "auto",
+  "interfacePreferences": {
+    "showStarScreenPreview": true,
+    "showWaveform": true,
+    "showEq": true,
+    "showAdvancedControls": true
+  },
+  "diagnostics": {
+    "autoSendTechnicalErrors": false,
+    "testerMode": false
+  },
   "virtualDJ": {
     "host": "127.0.0.1",
     "port": 80,
     "password": "",
     "timeoutMs": 3500
   },
-  "requestIntervalSeconds": 2,
   "scanIntervalSeconds": 10,
   "autoQueueExact": false
 }

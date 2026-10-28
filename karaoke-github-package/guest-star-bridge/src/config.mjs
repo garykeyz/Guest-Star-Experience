@@ -7,12 +7,10 @@ import { normalizeFavoriteSongs } from "./random-rotation.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = resolve(ROOT, "data");
 const CONFIG_PATH = resolve(DATA_DIR, "config.json");
-const LEGACY_DIRECT_APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxtWSOtS9IuiHJk6eRGAwy-6GsbypLUU4-3hzrNHp4NYXPcsZexgHVkF0y4KlU3zMfA/exec";
 const BRIDGE_PROXY_URL = "https://request.gstarxp.com/api/bridge";
 
 export const DEFAULT_CONFIG = Object.freeze({
-  configVersion: 12,
+  configVersion: 15,
   bridgePort: 8787,
   authToken: "",
   deviceToken: "",
@@ -23,24 +21,45 @@ export const DEFAULT_CONFIG = Object.freeze({
   lastUsername: "",
   rememberLogin: true,
   rememberSelection: true,
+  rememberedActivity: null,
   superhostLanguage: "es",
   uiLanguage: "es",
   favoriteSongsByHotel: {},
   secretsInKeychain: false,
   libraryFolders: [],
+  playerAudioFolders: [],
+  playerVideoFolders: [],
+  playerMediaPriority: "auto",
   rememberLibraryFolders: true,
   backgroundMusicSources: [],
   backgroundMusicVolume: 0.55,
+  audioOutputDeviceId: "",
+  starScreenDisplayId: "",
+  selectedStemEngine: "gsvocalrt",
+  defaultStemEngine: "gsvocalrt", // Compatibility alias; never enables Auto.
+  defaultVocalGuideLevel: 0,
+  interfacePreferences: {
+    showStarScreenPreview: true,
+    showWaveform: true,
+    showStarScreenNowPlaying: true,
+    showActivityAccess: false,
+    showCurrentSongBackground: false,
+    starScreenSongSource: "request",
+    starScreenLineupCount: 5,
+    showEq: true,
+    showAdvancedControls: true
+  },
+  diagnostics: {
+    autoSendTechnicalErrors: false,
+    testerMode: false
+  },
   appsScriptUrl: BRIDGE_PROXY_URL,
-  hostPin: "",
-  rememberHostPin: true,
   virtualDJ: {
     host: "127.0.0.1",
     port: 80,
     password: "",
     timeoutMs: 3500
   },
-  requestIntervalSeconds: 2,
   scanIntervalSeconds: 10,
   autoQueueExact: true
 });
@@ -66,20 +85,77 @@ function normalizeFavoritesByHotel(value) {
   return result;
 }
 
+function normalizeInterfacePreferences(value, current = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const previous = current && typeof current === "object" && !Array.isArray(current)
+    ? current
+    : DEFAULT_CONFIG.interfacePreferences;
+  return {
+    showStarScreenPreview: source.showStarScreenPreview === undefined
+      ? previous.showStarScreenPreview !== false
+      : source.showStarScreenPreview !== false,
+    showWaveform: source.showWaveform === undefined
+      ? previous.showWaveform !== false
+      : source.showWaveform !== false,
+    showStarScreenNowPlaying: source.showStarScreenNowPlaying === undefined
+      ? previous.showStarScreenNowPlaying !== false
+      : source.showStarScreenNowPlaying !== false,
+    showActivityAccess: source.showActivityAccess === undefined
+      ? previous.showActivityAccess === true
+      : source.showActivityAccess === true,
+    showCurrentSongBackground: source.showCurrentSongBackground === undefined
+      ? previous.showCurrentSongBackground === true
+      : source.showCurrentSongBackground === true,
+    starScreenSongSource: source.starScreenSongSource === undefined
+      ? previous.starScreenSongSource === "local" ? "local" : "request"
+      : source.starScreenSongSource === "local" ? "local" : "request",
+    starScreenLineupCount: source.starScreenLineupCount === undefined
+      ? Number.isInteger(previous.starScreenLineupCount) && previous.starScreenLineupCount >= 1 && previous.starScreenLineupCount <= 5 ? previous.starScreenLineupCount : 5
+      : Number.isInteger(Number(source.starScreenLineupCount)) && Number(source.starScreenLineupCount) >= 1 && Number(source.starScreenLineupCount) <= 5 ? Number(source.starScreenLineupCount) : Number.isInteger(previous.starScreenLineupCount) && previous.starScreenLineupCount >= 1 && previous.starScreenLineupCount <= 5 ? previous.starScreenLineupCount : 5,
+    showEq: source.showEq === undefined
+      ? previous.showEq !== false
+      : source.showEq !== false,
+    showAdvancedControls: source.showAdvancedControls === undefined
+      ? previous.showAdvancedControls !== false
+      : source.showAdvancedControls !== false
+  };
+}
+
+function normalizeDiagnosticPreferences(value, current = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+  const previous = current && typeof current === "object" && !Array.isArray(current)
+    ? current
+    : DEFAULT_CONFIG.diagnostics;
+  return {
+    autoSendTechnicalErrors: source.autoSendTechnicalErrors === undefined
+      ? previous.autoSendTechnicalErrors === true
+      : source.autoSendTechnicalErrors === true,
+    testerMode: source.testerMode === undefined
+      ? previous.testerMode === true
+      : source.testerMode === true
+  };
+}
+
 export function migrateAppsScriptUrl(value, configVersion) {
+  void configVersion;
   const candidate = String(value || "").trim();
-  if (!candidate) return candidate;
+  if (!candidate) return BRIDGE_PROXY_URL;
   try {
     const url = new URL(candidate);
-    const directAppsScriptWebApp =
+    if (["localhost", "127.0.0.1"].includes(url.hostname)) return candidate;
+    if (
       url.protocol === "https:" &&
-      url.hostname === "script.google.com" &&
-      /^\/macros\/s\/[^/]+\/exec\/?$/.test(url.pathname);
-    if (directAppsScriptWebApp) return BRIDGE_PROXY_URL;
+      url.hostname === "request.gstarxp.com" &&
+      url.pathname.replace(/\/$/, "") === "/api/bridge"
+    ) return BRIDGE_PROXY_URL;
   } catch {
-    // sanitizeConfig will preserve the invalid value so the UI can report it.
+    // Invalid and retired endpoints are replaced with the fixed D1 proxy.
   }
-  return candidate;
+  return BRIDGE_PROXY_URL;
 }
 
 export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
@@ -100,6 +176,12 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       input.lastVenueId === undefined ? String(current.lastVenueId || "") : String(input.lastVenueId || ""),
     lastActivityId:
       input.lastActivityId === undefined ? String(current.lastActivityId || "") : String(input.lastActivityId || ""),
+    rememberedActivity: (()=>{
+      const value=input.rememberedActivity===undefined
+        ? current.rememberedActivity || ((input.rememberSelection ?? current.rememberSelection) && (input.lastActivityId ?? current.lastActivityId) ? {hotelId:input.lastHotelId ?? current.lastHotelId,venueId:input.lastVenueId ?? current.lastVenueId,activityId:input.lastActivityId ?? current.lastActivityId} : null)
+        : input.rememberedActivity;
+      return value?.hotelId && value?.venueId && value?.activityId ? {hotelId:String(value.hotelId),venueId:String(value.venueId),activityId:String(value.activityId)} : null;
+    })(),
     lastUsername:
       input.lastUsername === undefined ? String(current.lastUsername || "") : String(input.lastUsername || "").trim(),
     rememberLogin:
@@ -136,6 +218,9 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
     libraryFolders: normalizeFolders(
       input.libraryFolders === undefined ? current.libraryFolders : input.libraryFolders
     ),
+    playerAudioFolders: normalizeFolders(input.playerAudioFolders === undefined ? current.playerAudioFolders : input.playerAudioFolders),
+    playerVideoFolders: normalizeFolders(input.playerVideoFolders === undefined ? current.playerVideoFolders : input.playerVideoFolders),
+    playerMediaPriority: ['audio','video','auto'].includes(input.playerMediaPriority ?? current.playerMediaPriority) ? (input.playerMediaPriority ?? current.playerMediaPriority) : 'auto',
     rememberLibraryFolders:
       input.rememberLibraryFolders === undefined
         ? Boolean(current.rememberLibraryFolders)
@@ -151,20 +236,33 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
       0,
       1
     ),
+    audioOutputDeviceId:
+      input.audioOutputDeviceId === undefined
+        ? String(current.audioOutputDeviceId || "").trim().slice(0, 500)
+        : String(input.audioOutputDeviceId || "").trim().slice(0, 500),
+    starScreenDisplayId:
+      input.starScreenDisplayId === undefined
+        ? String(current.starScreenDisplayId || "").trim().slice(0, 500)
+        : String(input.starScreenDisplayId || "").trim().slice(0, 500),
+    defaultVocalGuideLevel: Math.max(0, Math.min(0.2, Number(input.defaultVocalGuideLevel ?? current.defaultVocalGuideLevel ?? 0) || 0)),
+    selectedStemEngine: ["spleeter", "demucs", "gsvocalrt"].includes(String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase())
+      ? String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase() : "spleeter",
+    defaultStemEngine: ["spleeter", "demucs", "gsvocalrt"].includes(String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase())
+      ? String(input.selectedStemEngine ?? input.defaultStemEngine ?? current.selectedStemEngine ?? current.defaultStemEngine).toLowerCase() : "spleeter",
+    interfacePreferences: normalizeInterfacePreferences(
+      input.interfacePreferences,
+      current.interfacePreferences
+    ),
+    diagnostics: normalizeDiagnosticPreferences(
+      input.diagnostics,
+      current.diagnostics
+    ),
     appsScriptUrl: migrateAppsScriptUrl(
       input.appsScriptUrl === undefined
         ? current.appsScriptUrl
         : input.appsScriptUrl,
       input.configVersion === undefined ? current.configVersion : input.configVersion
     ),
-    hostPin:
-      input.hostPin === undefined || input.hostPin === ""
-        ? current.hostPin
-        : String(input.hostPin).replace(/\D/g, "").slice(0, 12),
-    rememberHostPin:
-      input.rememberHostPin === undefined
-        ? Boolean(current.rememberHostPin)
-        : Boolean(input.rememberHostPin),
     virtualDJ: {
       host:
         vdj.host === undefined ? currentVdj.host : String(vdj.host || "127.0.0.1").trim(),
@@ -175,12 +273,6 @@ export function sanitizeConfig(input = {}, current = DEFAULT_CONFIG) {
           : String(vdj.password),
       timeoutMs: numberInRange(vdj.timeoutMs, currentVdj.timeoutMs, 500, 15000)
     },
-    requestIntervalSeconds: numberInRange(
-      input.requestIntervalSeconds,
-      current.requestIntervalSeconds,
-      2,
-      120
-    ),
     scanIntervalSeconds: numberInRange(
       input.scanIntervalSeconds,
       current.scanIntervalSeconds,
@@ -200,11 +292,10 @@ export function configForStorage(config) {
     ...clean,
     authToken: clean.rememberLogin ? clean.authToken : "",
     deviceToken: clean.rememberLogin ? clean.deviceToken : "",
-    lastHotelId: clean.rememberSelection ? clean.lastHotelId : "",
-    lastVenueId: clean.rememberSelection ? clean.lastVenueId : "",
-    lastActivityId: clean.rememberSelection ? clean.lastActivityId : "",
-    libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : [],
-    hostPin: clean.rememberHostPin ? clean.hostPin : ""
+    lastHotelId: clean.rememberedActivity?.hotelId || "",
+    lastVenueId: clean.rememberedActivity?.venueId || "",
+    lastActivityId: clean.rememberedActivity?.activityId || "",
+    libraryFolders: clean.rememberLibraryFolders ? clean.libraryFolders : []
   };
 }
 
@@ -228,7 +319,6 @@ export async function loadConfig() {
         parsed.configVersion
       );
       parsed.configVersion = DEFAULT_CONFIG.configVersion;
-      parsed.requestIntervalSeconds = 2;
       if (parsed.autoQueueExact === undefined) parsed.autoQueueExact = true;
       if (parsed.rememberLibraryFolders === undefined) {
         parsed.rememberLibraryFolders = true;
@@ -239,7 +329,15 @@ export async function loadConfig() {
       if (parsed.backgroundMusicVolume === undefined) {
         parsed.backgroundMusicVolume = 0.55;
       }
-      if (parsed.rememberHostPin === undefined) parsed.rememberHostPin = true;
+      if (parsed.audioOutputDeviceId === undefined) parsed.audioOutputDeviceId = "";
+      if (parsed.starScreenDisplayId === undefined) parsed.starScreenDisplayId = "";
+      if (parsed.defaultStemEngine === undefined) parsed.defaultStemEngine = "spleeter";
+      if (parsed.interfacePreferences === undefined) {
+        parsed.interfacePreferences = { ...DEFAULT_CONFIG.interfacePreferences };
+      }
+      if (parsed.diagnostics === undefined) {
+        parsed.diagnostics = { ...DEFAULT_CONFIG.diagnostics };
+      }
       if (parsed.rememberLogin === undefined) parsed.rememberLogin = true;
       if (parsed.rememberSelection === undefined) parsed.rememberSelection = true;
       if (parsed.superhostLanguage === undefined) parsed.superhostLanguage = "es";
@@ -290,8 +388,6 @@ export function publicConfig(config) {
     authToken: "",
     deviceToken: "",
     signedIn: Boolean(config.authToken && config.deviceToken && config.deviceId),
-    hostPin: "",
-    hostPinConfigured: Boolean(config.hostPin),
     favoriteSongsByHotel: {},
     virtualDJ: {
       ...config.virtualDJ,
@@ -304,6 +400,5 @@ export function publicConfig(config) {
 export {
   BRIDGE_PROXY_URL,
   CONFIG_PATH,
-  LEGACY_DIRECT_APPS_SCRIPT_URL,
   ROOT
 };

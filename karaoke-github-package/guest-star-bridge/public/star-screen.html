@@ -4,40 +4,99 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="google" content="notranslate" />
+    <link rel="icon" href="/branding/favicon-32.png?v=20261013" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/favicon.ico?v=20261013" sizes="any" />
+    <link rel="apple-touch-icon" href="/branding/apple-touch-icon.png?v=20261013" sizes="180x180" />
     <title>Guest Star · Star Screen</title>
     <link rel="stylesheet" href="/player-beta.css" />
+    <link rel="stylesheet" href="/star-screen-visual.css" />
   </head>
   <body class="star-screen-body">
-    <video id="starScreenMedia" class="star-screen-media" muted playsinline preload="auto"></video>
-    <div class="star-screen-ambient"></div>
-    <main class="star-screen-stage">
+    <div class="star-screen-viewport" id="starScreenViewport">
+      <div class="star-screen-canvas" id="starScreenCanvas">
+        <video id="starScreenMedia" class="star-screen-media" muted playsinline preload="auto"></video>
+        <section class="star-screen-lyrics" id="starScreenLyrics" hidden aria-label="Letras sincronizadas">
+          <small id="starScreenLyricsPrevious"></small><strong id="starScreenLyricsCurrent"></strong>
+          <span id="starScreenLyricsNext"></span>
+          <small id="starScreenLyricsEstimated" hidden>Letras estimadas</small>
+        </section>
+        <div class="star-screen-ambient"></div>
+        <div class="star-screen-particles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><svg viewBox="0 0 24 24" focusable="false"><path d="M10 16V5l10-2v11M10 5l10-2M10 16c0 1.7-1.8 3-4 3s-4-1.3-4-3 1.8-3 4-3 4 1.3 4 3Zm10-2c0 1.7-1.8 3-4 3s-4-1.3-4-3 1.8-3 4-3 4 1.3 4 3Z"/></svg><svg class="star-screen-particle-mic" viewBox="0 0 24 24" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M8 22h8"/></svg></div>
+        <svg class="star-screen-lighting-defs" width="0" height="0" aria-hidden="true" focusable="false">
+          <defs>
+            <filter id="starScreenMicLighting" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">
+              <feColorMatrix in="SourceGraphic" type="saturate" values="0" result="metal" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 -1 0 0 0" result="leftLight" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -1 0 1 0 0" result="rightLight" />
+              <feFlood class="star-screen-mic-primary-light" result="primaryLight" />
+              <feComposite in="primaryLight" in2="leftLight" operator="in" result="primaryReflection" />
+              <feFlood class="star-screen-mic-accent-light" result="accentLight" />
+              <feComposite in="accentLight" in2="rightLight" operator="in" result="accentReflection" />
+              <feBlend in="metal" in2="primaryReflection" mode="screen" result="litMetal" />
+              <feBlend in="litMetal" in2="accentReflection" mode="screen" result="ambientMetal" />
+              <feComposite in="ambientMetal" in2="SourceAlpha" operator="in" />
+            </filter>
+          </defs>
+        </svg>
+        <img class="star-screen-vintage-mic" src="/star-screen-vintage-mic-realistic.png" alt="" aria-hidden="true" />
+        <main class="star-screen-stage">
       <header class="star-screen-topbar">
         <div class="star-screen-hotel-mark">
-          <img id="starScreenLogo" class="star-screen-logo hidden" alt="Logo del hotel" referrerpolicy="no-referrer" />
+          <div id="starScreenBrandLogos" class="brand-logos" hidden></div>
           <div id="starScreenFallback" class="star-screen-fallback">GS</div>
-          <div><span id="starScreenHotel">Guest Star</span><small id="starScreenActivity">Karaoke Night</small></div>
+          <div><span id="starScreenHotel">Guest Star</span><small id="starScreenActivity"></small></div>
         </div>
-        <div class="star-screen-live"><i></i><span id="starScreenStatus">STAR SCREEN</span></div>
-        <button class="star-screen-fullscreen" id="starScreenFullscreen">⛶ Pantalla completa</button>
       </header>
 
       <section class="star-screen-welcome" id="starScreenWelcome">
-        <div class="star-screen-invite">
-          <p>GUEST STAR EXPERIENCE</p>
-          <h1>YOUR STAGE<br /><em>IS READY</em></h1>
-          <span>Escanea, elige tu canción y prepárate para brillar.</span>
+        <div class="star-screen-left-stack">
+          <div class="star-screen-invite">
+            <p>GUEST STAR EXPERIENCE <span class="star-screen-eyebrow-line"></span> <span id="starScreenLiveLabel">EN VIVO EN EL HOTEL</span></p>
+            <h1><span id="starScreenTitleMain"></span><em id="starScreenTitleEnding"></em></h1>
+            <span class="star-screen-phrase" id="starScreenFunnyMessage">El micrófono está listo. ¿Quién se atreve? 🎤</span>
+            <span class="star-screen-invite-note" id="starScreenInviteNote">TU MOMENTO · TU CANCIÓN · TU ESCENARIO</span>
+          </div>
+          <aside class="star-screen-activity-access" id="starScreenActivityAccess" hidden>
+            <img id="starScreenActivityQr" alt="QR para entrar a la actividad" />
+            <div class="star-screen-access-details">
+              <small id="starScreenActivityPinLabel">ACTIVITY PIN</small>
+              <strong id="starScreenActivityPin">—</strong>
+              <div class="star-screen-access-timer" id="starScreenAccessTimer">
+                <small id="starScreenStartsInLabel">STARTS IN</small>
+                <span id="starScreenAccessCountdown"></span>
+              </div>
+            </div>
+          </aside>
         </div>
         <div class="star-screen-lineup">
-          <div class="star-screen-lineup-head"><div><p>PRÓXIMOS EN EL ESCENARIO</p><h2>Star Lineup</h2></div><div class="star-screen-lineup-tools"><div class="star-screen-qr-card"><img id="starScreenQr" alt="QR de solicitudes" /><div><strong>¿QUIERES CANTAR?</strong><small>ESCANEA EL QR</small></div></div><span id="starScreenQueueCount">0</span></div></div>
+          <div class="star-screen-lineup-head"><div><p id="starScreenLineupLabel">PRÓXIMOS EN EL ESCENARIO</p><h2>Star Lineup</h2></div><div class="star-screen-lineup-tools"><div class="star-screen-qr-card"><img id="starScreenQr" alt="QR de solicitudes" /><div><strong id="starScreenWantLabel">¿QUIERES CANTAR?</strong><small id="starScreenScanQrLabel">ESCANEA EL QR</small></div></div><span id="starScreenQueueCount">0</span></div></div>
           <ol id="starScreenQueue"></ol>
         </div>
+        <div class="star-screen-lobby-waveform" id="starScreenWaveformRegion" aria-hidden="true">
+          <svg id="starScreenLobbyWaveform" viewBox="0 0 740 260" preserveAspectRatio="none" focusable="false"></svg>
+        </div>
+        <aside class="star-screen-dedication" id="starScreenDedication" hidden><small><span id="starScreenDedicationLabel">DEDICATORIA</span> · <span id="starScreenDedicationSinger"></span></small><p id="starScreenDedicationText"></p></aside>
       </section>
 
       <section class="star-screen-now" id="starScreenNow">
-        <div><span>SONANDO AHORA</span><h2 id="starScreenNowSong">Música de fondo</h2><p id="starScreenNowSinger">Ambientación del hotel</p></div>
-        <div class="star-screen-next"><small>SIGUIENTE</small><strong id="starScreenNextSinger">Esperando solicitudes</strong></div>
+        <div><span id="starScreenNowLabel">SONANDO AHORA</span><h2 id="starScreenNowSong">Música de fondo</h2><p id="starScreenNowArtist" hidden></p><p id="starScreenNowSinger">Ambientación del hotel</p></div>
+        <div class="star-screen-next"><small id="starScreenNextLabel">SIGUIENTE</small><strong id="starScreenNextSinger">Esperando solicitudes</strong></div>
       </section>
-    </main>
+      <section class="star-screen-finale" id="starScreenFinale" hidden aria-live="polite">
+        <p id="starScreenFinaleEyebrow">GUEST STAR EXPERIENCE</p>
+        <h1 id="starScreenFinaleTitle">GRACIAS POR PARTICIPAR</h1>
+        <p id="starScreenFinaleMessage">Nos vemos en la próxima.</p>
+        <article id="starScreenNextActivity" hidden>
+          <small id="starScreenNextActivityLabel">VOLVEMOS</small>
+          <strong id="starScreenNextActivityWhen"></strong>
+          <span id="starScreenNextActivityHotel"></span>
+          <span id="starScreenNextActivityVenue"></span>
+          <span id="starScreenNextActivityName"></span>
+        </article>
+      </section>
+        </main>
+      </div>
+    </div>
     <script src="/vendor/qrcode.js"></script>
     <script type="module" src="/star-screen.js"></script>
   </body>

@@ -36,8 +36,9 @@ test("Request, Host and Bridge operate only on D1 and never on Apps Script", asy
   const bridgeServer = await readFile(
     resolve(PACKAGE_ROOT, "guest-star-bridge/src/server.mjs"), "utf8"
   );
-  assert.match(bridgeCloudClient, /legacy Google Sheets\/PIN backend is disabled/);
+  assert.doesNotMatch(bridgeCloudClient, /script\.google\.com|function appsScriptAction/);
   assert.doesNotMatch(bridgeCloudClient, /pin:\s*config\.hostPin/);
+  assert.match(bridgeCloudClient, /export function v4AppsScriptAction/);
   assert.match(bridgeServer, /config\.appsScriptUrl && hasV4Session\(config\)/,
     "the beta must require a revocable D1 session instead of accepting a legacy PIN");
 });

@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "version": "4.6.1",
+  "build": "462",
+  "sourceCommit": "c8351e7f5c3bee713379f0b182720d519c26025e",
+  "sourceFilesVerifiedAgainstGit": 112,
+  "allRuntimeSourceFilesMatch": true,
+  "nativeSourceTree": "0fde81f8c2cd6abb36a467aca3ccfdd3f1fc2ba5",
+  "bundleBuild": "3e3d9436410fd860b037b3d599ce28013edcfc35304eb1a58714b6c85c083c3d",
+  "bundleFiles": 1308,
+  "signature": "AD-HOC verified deep strict",
+  "notarized": false,
+  "minimumMacOS": "15.5",
+  "architectures": [
+    "arm64"
+  ],
+  "productionDataIncluded": false,
+  "dmgSHA256": "f8c57d554d04e0e3d811658656fa58d7ef9a901ecf70ff2494e0817880471b2b"
+}

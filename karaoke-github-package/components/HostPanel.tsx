@@ -1,10 +1,13 @@
 "use client";
+import SessionPreparation from "./SessionPreparation";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import BrandLogos from "./BrandLogos";
+import { brandingTheme } from "@/guest-star-bridge/public/shared/branding-theme";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Building2, CalendarClock, ExternalLink, Hotel, KeyRound, Link2,
-  LogOut, MapPin, Play, Plus, Radio, RefreshCw, ShieldCheck, Square,
-  UserPlus, Users
+  Building2, CalendarClock, Copy, ExternalLink, Hotel, KeyRound, Link2,
+  LogOut, MapPin, MessageSquareText, MonitorSmartphone, Play, Plus, QrCode,
+  Radio, RefreshCw, ShieldCheck, Square, UserPlus, Users
 } from "lucide-react";
 import { canonicalHostPanelPath } from "@/lib/guest-star/site-routing";
 
@@ -28,7 +31,7 @@ type HostResponse = Record<string, unknown> & {
 const EMPTY_SELECTION: Selection = { hotels: [], venues: [], activities: [] };
 const GUEST_LANGUAGES = [
   ["es","Español"], ["en","English"], ["fr","Français"],
-  ["it","Italiano"], ["de","Deutsch"], ["ru","Русский"], ["pt","Português"]
+  ["it","Italiano"], ["de","Deutsch"], ["ru","Русский"], ["pt","Português"], ["hi","हिन्दी"]
 ] as const;
 const WEEKDAYS = [
   [0,"Sunday"], [1,"Monday"], [2,"Tuesday"], [3,"Wednesday"],
@@ -81,7 +84,10 @@ async function hostApi(payload: Record<string, unknown>): Promise<HostResponse> 
   const response = await fetch("/api/host", {
     method: "POST",
     cache: "no-store",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Guest-Star-Action": String(payload.action || "")
+    },
     body: JSON.stringify(payload)
   });
   const data = await response.json().catch(() => ({})) as HostResponse;
@@ -155,75 +161,18 @@ function hotelQrPngUrl(entity: Entity) {
     : "";
 }
 
-function DefaultPublicExperienceForm({
-  hotels, venues, activities, current, busy, onSave
-}: {
-  hotels: Entity[];
-  venues: Entity[];
-  activities: Entity[];
-  current: Entity;
-  busy: boolean;
-  onSave: (selection: { enabled: boolean; hotelId?: string; venueId?: string; activityId?: string }) => Promise<void>;
-}) {
-  const activeHotels=hotels.filter(item=>value(item,"status")==="active");
-  const activeVenues=venues.filter(item=>value(item,"status")==="active");
-  const activeActivities=activities.filter(item=>value(item,"status")!=="inactive");
-  const configured=current.configured===true||String(current.configured)==="true";
-  const available=current.available===true||String(current.available)==="true";
-  const currentKey=`${value(current,"hotelId")}:${value(current,"venueId")}:${value(current,"activityId")}:${value(current,"updatedAt")}`;
-  const [defaultHotelId,setDefaultHotelId]=useState("");
-  const [defaultVenueId,setDefaultVenueId]=useState("");
-  const [defaultActivityId,setDefaultActivityId]=useState("");
-
-  useEffect(()=>{
-    const requested=value(current,"hotelId");
-    setDefaultHotelId(activeHotels.some(item=>value(item,"hotelId")===requested)
-      ?requested:value(activeHotels[0],"hotelId"));
-    setDefaultVenueId(value(current,"venueId"));
-    setDefaultActivityId(value(current,"activityId"));
-  },[currentKey,hotels]);
-
-  useEffect(()=>{
-    const options=activeVenues.filter(item=>value(item,"hotelId")===defaultHotelId);
-    if(!options.some(item=>value(item,"venueId")===defaultVenueId)){
-      setDefaultVenueId(value(options[0],"venueId"));
-    }
-  },[defaultHotelId,defaultVenueId,venues]);
-
-  useEffect(()=>{
-    const options=activeActivities.filter(item=>
-      value(item,"hotelId")===defaultHotelId&&value(item,"venueId")===defaultVenueId
-    );
-    if(!options.some(item=>value(item,"activityId")===defaultActivityId)){
-      setDefaultActivityId(value(options[0],"activityId"));
-    }
-  },[activities,defaultActivityId,defaultHotelId,defaultVenueId]);
-
-  const venueOptions=activeVenues.filter(item=>value(item,"hotelId")===defaultHotelId);
-  const activityOptions=activeActivities.filter(item=>
-    value(item,"hotelId")===defaultHotelId&&value(item,"venueId")===defaultVenueId
-  );
-  const currentHotel=hotels.find(item=>value(item,"hotelId")===value(current,"hotelId"));
-  const currentVenue=venues.find(item=>value(item,"venueId")===value(current,"venueId"));
-  const currentActivity=activities.find(item=>value(item,"activityId")===value(current,"activityId"));
-
-  return <details><summary>Default experience for request.gstarxp.com</summary>
-    <p>{configured
-      ?`${value(currentHotel,"name")||"Hotel"} · ${value(currentVenue,"name")||"Venue"} · ${value(currentActivity,"name")||"Activity"}`
-      :"Automatic mode: the service uses the hotel’s current public activity."}</p>
-    {configured&&!available&&<p className="hostError">This saved selection is unavailable. Choose an active hotel, venue and activity again.</p>}
-    <div className="hostGrid three">
-      <label>Hotel<select value={defaultHotelId} onChange={event=>setDefaultHotelId(event.target.value)}>{activeHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label>
-      <label>Event venue<select value={defaultVenueId} onChange={event=>setDefaultVenueId(event.target.value)} disabled={!venueOptions.length}>{venueOptions.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label>
-      <label>Activity<select value={defaultActivityId} onChange={event=>setDefaultActivityId(event.target.value)} disabled={!activityOptions.length}>{activityOptions.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label>
-    </div>
-    <div className="entityLinks"><button type="button" disabled={busy||!defaultHotelId||!defaultVenueId||!defaultActivityId} onClick={()=>void onSave({enabled:true,hotelId:defaultHotelId,venueId:defaultVenueId,activityId:defaultActivityId})}>Save Default</button>{configured&&<button type="button" disabled={busy} onClick={()=>void onSave({enabled:false})}>Use Automatic Mode</button>}<a href="https://request.gstarxp.com" target="_blank" rel="noreferrer"><ExternalLink/>Open Root Page</a></div>
+function DefaultPublicExperienceDisabled() {
+  return <details><summary>Default experience for request.gstarxp.com — Disabled</summary>
+    <p>Session PIN required. A guest without a saved active session must enter the six-digit PIN shown by the Host.</p>
+    <div className="entityLinks"><button type="button" disabled>PIN access only</button><a href="https://request.gstarxp.com" target="_blank" rel="noreferrer"><ExternalLink/>Open PIN Page</a></div>
   </details>;
 }
 
 export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }) {
   const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
+  const creatingActivity=useRef(false);
+  const [activitySaving,setActivitySaving]=useState(false);
   const [user,setUser]=useState<User|null>(null);
   const [selection,setSelection]=useState<Selection>(EMPTY_SELECTION);
   const [selected,setSelected]=useState<HostResponse|null>(null);
@@ -238,6 +187,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const [reviews,setReviews]=useState<Entity[]>([]);
   const [codeVersion,setCodeVersion]=useState("");
   const [playbackMode,setPlaybackMode]=useState<"player"|"bridge"|"">("");
+  const [preparingSession,setPreparingSession]=useState(false);
   const [scheduleRecurrenceType,setScheduleRecurrenceType]=useState("none");
   const [scheduleSelectedDays,setScheduleSelectedDays]=useState<number[]>([]);
   const [editingSchedule,setEditingSchedule]=useState<Entity|null>(null);
@@ -285,7 +235,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     const available=selection.activities.filter(item=>
       value(item,"hotelId")===hotelId&&value(item,"venueId")===venueId
     );
-    if(!available.some(item=>value(item,"activityId")===activityId))setActivityId(value(available[0],"activityId"));
+    if(!available.some(item=>value(item,"activityId")===activityId))setActivityId("");
   },[activityId,hotelId,venueId,selection]);
 
   useEffect(()=>{
@@ -297,6 +247,132 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
       setPlaybackMode("");
     }
   },[selected]);
+
+  useEffect(()=>{
+    if(!user||!hotelId||!activityId)return;
+    let active=true;
+    let socket:WebSocket|null=null;
+    let reconnectTimer:number|undefined;
+    let fallbackTimer:number|undefined;
+    let attempt=0;
+    let fallbackAttempt=0;
+    let refreshing=false;
+    let refreshQueued=false;
+    let openedOnce=false;
+
+    const refreshSelected=async()=>{
+      if(!active)return;
+      if(refreshing){refreshQueued=true;return;}
+      refreshing=true;
+      try{
+        do{
+          refreshQueued=false;
+          try{
+            const data=await hostApi({action:"activityState",hotelId,venueId,activityId});
+            if(active)setSelected(data);
+          }catch{
+            // A failed refresh must be retried even if the socket itself stayed open.
+            scheduleFallback(true);
+          }
+        }while(active&&refreshQueued);
+      }finally{refreshing=false;}
+    };
+
+    const scheduleFallback=(force=false)=>{
+      if(
+        !active||fallbackTimer!==undefined||
+        (!force&&socket?.readyState===WebSocket.OPEN)
+      )return;
+      const base=Math.min(30000,5000*(2**Math.min(fallbackAttempt,3)));
+      fallbackAttempt+=1;
+      fallbackTimer=window.setTimeout(()=>{
+        fallbackTimer=undefined;
+        void refreshSelected().finally(scheduleFallback);
+      },base+Math.floor(Math.random()*Math.max(250,base*.2)));
+    };
+
+    const scheduleReconnect=()=>{
+      if(!active||reconnectTimer!==undefined)return;
+      const base=Math.min(30000,1000*(2**Math.min(attempt,5)));
+      attempt+=1;
+      reconnectTimer=window.setTimeout(()=>{
+        reconnectTimer=undefined;
+        connect();
+      },base+Math.floor(Math.random()*Math.max(100,base*.25)));
+      scheduleFallback();
+    };
+
+    const connect=()=>{
+      if(!active||socket?.readyState===WebSocket.OPEN||socket?.readyState===WebSocket.CONNECTING)return;
+      const url=new URL("/api/realtime",window.location.href);
+      url.protocol=window.location.protocol==="https:"?"wss:":"ws:";
+      url.searchParams.set("channel",hotelId);
+      url.searchParams.set("role","host");
+      const candidate=new WebSocket(url.toString(),"guest-star-v1");
+      socket=candidate;
+      candidate.addEventListener("open",()=>{
+        if(!active||socket!==candidate){candidate.close(1000,"Superseded");return;}
+        attempt=0;
+        fallbackAttempt=0;
+        if(fallbackTimer!==undefined)window.clearTimeout(fallbackTimer);
+        fallbackTimer=undefined;
+        if(openedOnce)void refreshSelected();
+        openedOnce=true;
+      });
+      candidate.addEventListener("message",event=>{
+        if(!active||socket!==candidate)return;
+        try{
+          const message=JSON.parse(String(event.data||"{}")) as {type?:string};
+          if(message.type&&message.type!=="realtime.ready"&&message.type!=="pong")void refreshSelected();
+        }catch{/* Ignore malformed invalidations. */}
+      });
+      candidate.addEventListener("close",()=>{
+        if(socket!==candidate)return;
+        socket=null;
+        scheduleReconnect();
+      });
+      candidate.addEventListener("error",()=>candidate.close());
+      scheduleFallback();
+    };
+
+    connect();
+    if(user.role==="host")void refreshSelected();
+    return()=>{
+      active=false;
+      if(reconnectTimer!==undefined)window.clearTimeout(reconnectTimer);
+      if(fallbackTimer!==undefined)window.clearTimeout(fallbackTimer);
+      const activeSocket=socket;
+      socket=null;
+      activeSocket?.close(1000,"Host closed");
+    };
+  },[user,hotelId,venueId,activityId]);
+
+  useEffect(()=>{
+    if(!user||!hotelId||!activityId)return;
+    const schedules=Array.isArray(selected?.schedules)?selected.schedules as Entity[]:[];
+    const now=Date.now();
+    const candidates=schedules
+      .filter(schedule=>value(schedule,"status")==="active")
+      .flatMap(schedule=>[value(schedule,"requestOpeningAt"),value(schedule,"scheduledStartAt")])
+      .map(item=>Date.parse(item))
+      .filter(item=>Number.isFinite(item)&&item>now+250)
+      .sort((left,right)=>left-right);
+    if(!candidates.length)return;
+    const target=candidates[0];
+    let timer:number;
+    const wake=()=>{
+      const remaining=target-Date.now();
+      if(remaining>1000){
+        timer=window.setTimeout(wake,Math.min(2_000_000_000,remaining));
+        return;
+      }
+      void hostApi({action:"activityState",hotelId,venueId,activityId})
+        .then(data=>setSelected(data))
+        .catch(()=>{/* Realtime/fallback recovery remains active. */});
+    };
+    timer=window.setTimeout(wake,Math.min(2_000_000_000,Math.max(250,target-now+Math.floor(Math.random()*750))));
+    return()=>window.clearTimeout(timer);
+  },[user,hotelId,venueId,activityId,selected]);
 
   const venues=useMemo(()=>selection.venues.filter(item=>value(item,"hotelId")===hotelId),[selection,hotelId]);
   const activities=useMemo(()=>selection.activities.filter(item=>value(item,"hotelId")===hotelId&&value(item,"venueId")===venueId),[selection,hotelId,venueId]);
@@ -348,10 +424,32 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     if(["startActivityV4","startNewActivityV4"].includes(action)&&!playbackMode){
       setError("Choose Player interno or Bridge con VirtualDJ before starting.");return;
     }
+    if (["startActivityV4","startNewActivityV4"].includes(action) && !["scheduled","in_progress"].includes(String((selected.session as Entity|undefined)?.status||""))) { setPreparingSession(true); return; }
     await run(label,()=>hostApi({
       action,...context,...extra,
+      ...(action==="finishActivityV4"?{runId:(selected.session as Entity|undefined)?.runId}:{}),
       ...(["startActivityV4","startNewActivityV4"].includes(action)?{source:playbackMode}:{})
     }));
+  }
+
+  async function copyText(content:string,label:string){
+    try{await navigator.clipboard.writeText(content);setNotice(label);setError("");}
+    catch{setError("Could not copy automatically. Select and copy the value manually.");}
+  }
+
+  async function resetKioskPin(){
+    if(!window.confirm("Reset this activity PIN? Its current PIN, QR link and joined device sessions will stop working immediately."))return;
+    await activityAction("resetSessionPin","Activity PIN reset.");
+  }
+
+  async function saveKioskMessages(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();
+    const form=new FormData(event.currentTarget);
+    const customMessages=String(form.get("customMessages")||"").split(/\r?\n/).map(item=>item.trim()).filter(Boolean).slice(0,8);
+    await activityAction("updateKioskMessages","Kiosk messages updated.",{
+      defaultMessagesEnabled:form.get("defaultMessagesEnabled")==="on",
+      customMessages
+    });
   }
 
   async function scheduleActivity(event:FormEvent<HTMLFormElement>){
@@ -456,13 +554,6 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     if(data){if(data.warning)setNotice(String(data.warning));formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
   }
 
-  async function saveDefaultPublicExperience(selection:{enabled:boolean;hotelId?:string;venueId?:string;activityId?:string}){
-    const data=await run(selection.enabled?"Default public experience saved.":"Automatic public experience restored.",()=>hostApi({
-      action:"setDefaultPublicExperience",...selection
-    }));
-    if(data)await refreshAdmin();
-  }
-
   async function createVenue(event:FormEvent<HTMLFormElement>){
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
     const data=await run("Venue created.",()=>hostApi({action:"createVenue",hotelId:form.get("hotelId"),name:form.get("name")}));
@@ -486,15 +577,22 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   }
 
   async function createActivity(event:FormEvent<HTMLFormElement>){
-    event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);
+    event.preventDefault();
+    if(creatingActivity.current)return;
+    const formElement=event.currentTarget;
+    if(!formElement.reportValidity())return;
+    const form=new FormData(formElement);
     const allowedLanguages=selectedLanguages(form);
     if(!allowedLanguages.length){setError("Select at least one guest language.");return;}
+    creatingActivity.current=true;setActivitySaving(true);
+    try {
     const data=await run("Activity created.",()=>hostApi({
       action:"createActivity",hotelId:form.get("hotelId"),venueId:form.get("venueId"),name:form.get("name"),
       defaultDurationSeconds:Number(form.get("durationMinutes"))*60,
       defaultTransitionSeconds:Number(form.get("transitionSeconds")),showCountdown:true,allowedLanguages
     }));
     if(data){formElement.reset();await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}
+    } finally {creatingActivity.current=false;setActivitySaving(false);}
   }
 
   async function updateActivityRecord(event:FormEvent<HTMLFormElement>,activity:Entity){
@@ -578,7 +676,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   if(loading)return <main className="hostPage"><section className="hostCard loadingCard"><RefreshCw className="spin"/>Loading secure Host Panel…</section></main>;
   if(!user)return <main className="hostPage"><section className="hostLogin hostCard">
-    <div className="hostMark"><ShieldCheck/></div><p className="hostEyebrow">GUEST STAR 4.2</p><h1>Host Panel</h1>
+    <div className="hostMark gs-product-mark"><img className="gs-product-symbol" src="/branding/brand-symbol.png" width="36" height="36" alt="" /></div><p className="hostEyebrow"><img className="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></p><h1>Host Panel</h1>
     <p>Sign in with the account created by your Superhost.</p>
     <form onSubmit={login}><label>Username or email<input name="username" autoComplete="username" required/></label><label>Password<input name="password" type="password" autoComplete="current-password" required/></label><button disabled={busy}><KeyRound/>Sign In</button></form>
     <p className="hostSetupHelp">Forgot your username or password, or having trouble signing in? <strong>Contact your Superhost.</strong></p>
@@ -591,6 +689,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
 
   const selectedActivity=selected?.activity as Entity|undefined;
   const selectedState=selected?.state as Entity|undefined;
+  const kioskAccess=selected?.kioskAccess as Entity|undefined;
   const accepting=selectedState?.accepting!==false;
   const publicStatusVisible=selectedState?.showPublicStatus===true;
   const activityRunning=selectedState?.activityRunning===true;
@@ -617,17 +716,26 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
   const selectedSchedules=((selected?.schedules as Entity[]|undefined)||[]);
   const editingAnnouncements=scheduleAnnouncements(editingSchedule||undefined);
   const selectedHotel=selection.hotels.find(item=>value(item,"hotelId")===hotelId);
+  const selectedVenue=venues.find(item=>value(item,"venueId")===venueId);
   const scheduleFormKey=value(editingSchedule||undefined,"scheduleId")||"new-schedule";
-  return <main className="hostPage">
-    <header className="hostTop"><div><p className="hostEyebrow notranslate" translate="no">GUEST STAR EXPERIENCE 4.4.0</p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
+  return <main className={user.role==="superhost"?"hostPage gs-superhost-page":"hostPage"} style={user.role==="host"?brandingTheme((selected?.branding as Entity|undefined)||{}) as React.CSSProperties:undefined}>
+    {user.role==="host"&&selected&&kioskAccess&&<aside className="hostRoomPin" aria-label="Activity PIN"><div><small>HOTEL · ACTIVITY · VENUE</small><strong>{value(selectedHotel,"name")||"Hotel"} · {value(selectedActivity,"name")||"Activity"} · {value(selectedVenue,"name")||"Venue"}</strong></div><div><small>ACTIVITY PIN</small><b>{value(kioskAccess,"pin")}</b></div></aside>}
+    <header className="hostTop"><div><p className="hostEyebrow notranslate" translate="no"><img className="gs-product-logo" src="/branding/brand-horizontal.png" width="300" height="100" alt="Guest Star Experience" /></p><h1>{user.role==="superhost"?"Superhost Administration":"Host Panel"}</h1><span>{user.displayName} · {user.role}{user.role==="superhost"&&codeVersion?` · Service v${codeVersion}`:""}</span></div><div className="entityLinks"><button onClick={()=>setShowOwnPasswordForm(value=>!value)}><KeyRound/>Change Password</button><button onClick={logout}><LogOut/>Log Out</button></div></header>
     {(notice||error)&&<div className={error?"hostNotice error":"hostNotice"}>{error||notice}</div>}
     {showOwnPasswordForm&&<section className="hostCard"><div className="sectionTitle"><KeyRound/><div><h2>Change Your Password</h2><p>Your current password is required. The new permanent password must contain at least 12 characters.</p></div></div><form className="inlineForm" onSubmit={changePassword}><input name="currentPassword" type="password" autoComplete="current-password" placeholder="Current password" required/><input name="newPassword" type="password" autoComplete="new-password" minLength={12} placeholder="New password" required/><input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} placeholder="Confirm new password" required/><button disabled={busy}>Save Password</button></form></section>}
     <section className="hostCard contextCard"><div className="sectionTitle"><Radio/><div><h2>Activity Controls</h2><p>Select only from the hotels and activities assigned to this account.</p></div></div>
-      <div className="hostGrid three"><label>Hotel<select value={hotelId} onChange={event=>{setHotelId(event.target.value);setSelected(null);}}>{selection.hotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
+      <div className="hostGrid three"><div className="hotelPicker"><span>Hotel</span><div className="hotelChoiceGrid">{selection.hotels.map(item=>{const id=value(item,"hotelId");const brand=(admin?.branding as Entity[]|undefined)?.find(entry=>value(entry,"hotelId")===id);return <button type="button" key={id} aria-pressed={hotelId===id} onClick={()=>{setHotelId(id);setActivityId("");setSelected(null);}}><BrandLogos hotelLogo={brand?.hotelLogoUrl||item.hotelLogoUrl||item.logoUrl||(value(selected?.hotel as Entity|undefined,"hotelId")===id?value(selected?.branding as Entity|undefined,"hotelLogoUrl"):"")}/><strong>{value(item,"name")}</strong></button>;})}</div></div><label>Venue<select value={venueId} onChange={event=>{setVenueId(event.target.value);setActivityId("");setSelected(null);}}>{venues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label><label>Activity<select value={activityId} onChange={event=>{setActivityId(event.target.value);setSelected(null);}}><option value="">Select Activity</option>{activities.map(item=><option key={value(item,"activityId")} value={value(item,"activityId")}>{value(item,"name")}</option>)}</select></label></div>
       <button className="primaryAction" disabled={busy||!activityId} onClick={chooseActivity}>Load Activity</button>
-      {selected&&<><div className="activityStrip"><div><small>ACTIVITY</small><strong>{value(selectedActivity,"name")}</strong></div><div><small>STATUS</small><strong>{value(selectedActivity,"status")||"ready"}</strong></div><div><small>REQUESTS</small><strong>{accepting?"Open":"Closed"}</strong></div></div><label>Reproductor de esta actividad<select value={activityRunning?lockedPlaybackMode:playbackMode} disabled={activityRunning} onChange={event=>setPlaybackMode(event.target.value as "player"|"bridge"|"")}><option value="">Selecciona antes de iniciar…</option><option value="player">Player interno</option><option value="bridge">Bridge con VirtualDJ</option></select><small>{activityRunning?`Modo ${lockedPlaybackMode==="player"?"Player":"Bridge"} bloqueado hasta finalizar.`:"No se puede alternar después de iniciar."}</small></label><div className="activityButtons"><button disabled={busy||activityRunning||!playbackMode} onClick={()=>activityAction("startActivityV4","Activity started.")}><Play/>Start</button><button disabled={busy||!activityRunning} onClick={()=>{if(window.confirm("Finish this activity and close new requests?"))void activityAction("finishActivityV4","Activity finished.");}}><Square/>Finish</button><button disabled={busy||activityRunning||!playbackMode} onClick={()=>{if(window.confirm("Archive the previous cycle and start a new empty activity?"))void activityAction("startNewActivityV4","New activity cycle started.");}}><RefreshCw/>Start New</button><button disabled={busy} onClick={()=>activityAction("toggleRequests",accepting?"Requests closed.":"Requests opened.",{open:!accepting})}>{accepting?"Close Requests":"Open Requests"}</button><button disabled={busy} onClick={()=>activityAction("updateActivitySettings",publicStatusVisible?"Public activity status hidden.":"Public activity status visible.",{showPublicStatus:!publicStatusVisible})}>{publicStatusVisible?"Hide Public Status":"Show Public Status"}</button><button disabled={busy||activityRunning} onClick={()=>{if(window.confirm("Archive and clear the active request queue?"))void activityAction("archiveClearQueue","Queue archived and cleared.");}}>Archive & Clear</button>{Boolean(selected.share)&&<a href={value(selected.share as Entity,"publicUrl")} target="_blank" rel="noreferrer"><Link2/>Public Link</a>}</div></>}
+      {selected&&preparingSession&&<SessionPreparation selected={selected} source={playbackMode} busy={busy} onCancel={()=>setPreparingSession(false)} onOpen={async settings=>Boolean(await run("Requests opened.",()=>hostApi({action:"prepareSession",...context,...settings})))}/>}
+      {selected&&<><div className="activityStrip"><div><small>ACTIVITY</small><strong>{value(selectedActivity,"name")}</strong></div><div><small>STATUS</small><strong>{value(selectedActivity,"status")||"ready"}</strong></div><div><small>REQUESTS</small><strong>{accepting?"Open":"Closed"}</strong></div></div><label>Reproductor de esta actividad<select value={activityRunning?lockedPlaybackMode:playbackMode} disabled={activityRunning} onChange={event=>setPlaybackMode(event.target.value as "player"|"bridge"|"")}><option value="">Selecciona antes de iniciar…</option><option value="player">Player interno</option><option value="bridge">Bridge con VirtualDJ</option></select><small>{activityRunning?`Modo ${lockedPlaybackMode==="player"?"Player":"Bridge"} bloqueado hasta finalizar.`:"No se puede alternar después de iniciar."}</small></label><div className="activityButtons"><button disabled={busy||activityRunning||!playbackMode} onClick={()=>activityAction("startActivityV4","Activity started.")}><Play/>Start</button><button disabled={busy||!activityRunning} onClick={()=>{if(!window.confirm("Finish this activity and close new requests?"))return;void activityAction("finishActivityV4","Activity finished.");}}><Square/>Finish</button><button disabled={busy||activityRunning||!playbackMode} onClick={()=>{if(window.confirm("Archive the previous cycle and start a new empty activity?"))void activityAction("startNewActivityV4","New activity cycle started.");}}><RefreshCw/>Start New</button><button disabled={busy} onClick={()=>{if(!accepting){setPreparingSession(true);return;}void activityAction("toggleRequests","Requests closed.",{open:false});}}>{accepting?"Close Requests":"Open Requests"}</button><button disabled={busy} onClick={()=>activityAction("updateActivitySettings",publicStatusVisible?"Public activity status hidden.":"Public activity status visible.",{showPublicStatus:!publicStatusVisible})}>{publicStatusVisible?"Hide Public Status":"Show Public Status"}</button><button disabled={busy||activityRunning} onClick={()=>{if(window.confirm("Archive and clear the active request queue?"))void activityAction("archiveClearQueue","Queue archived and cleared.");}}>Archive & Clear</button>{Boolean(selected.share)&&<a href={value(selected.share as Entity,"publicUrl")} target="_blank" rel="noreferrer"><Link2/>Public Link</a>}</div></>}
+      {user.role==="host"&&selected&&kioskAccess&&<section className="kioskHostCard">
+        <div className="sectionTitle"><MonitorSmartphone/><div><h2>Activity Access</h2><p>Fixed six-digit access for this hotel, activity and venue.</p></div></div>
+        <div className="kioskPinRow"><div><small>ACTIVITY PIN</small><strong>{value(kioskAccess,"pin")}</strong></div><div className="entityLinks"><button type="button" onClick={()=>void copyText(value(kioskAccess,"pin"),"Activity PIN copied.")}><Copy/>Copy PIN</button><button type="button" onClick={()=>void copyText(value(kioskAccess,"kioskUrl"),"Kiosk link copied.")}><Link2/>Copy Kiosk Link</button><a href={value(kioskAccess,"kioskUrl")} target="_blank" rel="noreferrer"><MonitorSmartphone/>Open Kiosk</a><button type="button" className="dangerAction" disabled={busy} onClick={()=>void resetKioskPin()}><RefreshCw/>Reset PIN</button></div></div>
+        <div className="kioskJoinPreview"><a className="kioskQrTarget" href={value(kioskAccess,"joinUrl")} target="_blank" rel="noreferrer" aria-label="Open permanent Activity QR destination"><img src={value(kioskAccess,"qrViewUrl")} alt="QR code for this activity"/></a><div><strong><QrCode/>Activity QR</strong><p>Permanent Request access for this activity and venue, including future shows.</p><div className="entityLinks"><button type="button" onClick={()=>void copyText(value(kioskAccess,"joinUrl"),"Guest join link copied.")}><Copy/>Copy Guest Link</button><a href={value(kioskAccess,"joinUrl")} target="_blank" rel="noreferrer"><QrCode/>Open Request</a></div></div></div>
+        <details><summary><MessageSquareText/> Kiosk Messages</summary><form key={`kiosk-${value(kioskAccess,"accessVersion")}-${(kioskAccess.customMessages as string[]|undefined)?.join("|")||""}`} onSubmit={saveKioskMessages}><label className="checkLine"><input name="defaultMessagesEnabled" type="checkbox" defaultChecked={kioskAccess.defaultMessagesEnabled!==false}/>Mix in default Guest Star messages</label><label>Custom messages, one per line<textarea name="customMessages" maxLength={1400} defaultValue={Array.isArray(kioskAccess.customMessages)?kioskAccess.customMessages.join("\n"):""} placeholder="Tonight's Karaoke Challenge — Winner gets a prize!"/></label><small>Up to eight short messages. They rotate locally and create no idle D1 traffic.</small><button disabled={busy}>Save Kiosk Messages</button></form></details>
+      </section>}
       {selected&&<div className="hostDetailsGrid">
-        <details><summary>Request Languages</summary><form key={`${value(selectedActivity,"activityId")}-${value(selectedActivity,"updatedAt")}`} onSubmit={event=>updateActivityLanguages(event,selectedActivity||{})}><p>Choose any of the seven guest languages.</p><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={activityLanguages(selectedActivity).includes(code)}/>{label}</label>)}</div><button disabled={busy}>Save Languages</button></form></details>
+        <details><summary>Request Languages</summary><form key={`${value(selectedActivity,"activityId")}-${value(selectedActivity,"updatedAt")}`} onSubmit={event=>updateActivityLanguages(event,selectedActivity||{})}><p>Choose any of the eight guest languages.</p><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={activityLanguages(selectedActivity).includes(code)}/>{label}</label>)}</div><button disabled={busy}>Save Languages</button></form></details>
         <details><summary>Schedule and Recurrence</summary>
           <form key={scheduleFormKey} onSubmit={scheduleActivity}>
             <label>Repeat
@@ -659,7 +767,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
     {user.role==="superhost"&&<section className="adminStack">
       <section className="hostCard"><div className="sectionTitle"><Hotel/><div><h2>Hotels and Permanent Links</h2><p>Create each hotel and manage its permanent guest link and QR code.</p></div></div>
         <form className="inlineForm" onSubmit={createHotel}><input name="name" placeholder="Hotel name" required/><input name="timezone" defaultValue="America/Santo_Domingo" placeholder="Timezone" required/><button disabled={busy}><Plus/>Create Hotel</button></form>
-        <DefaultPublicExperienceForm hotels={adminHotels} venues={adminVenues} activities={adminActivities} current={(admin?.defaultPublicExperience as Entity|undefined)||{}} busy={busy} onSave={saveDefaultPublicExperience}/>
+        <DefaultPublicExperienceDisabled/>
         <div className="entityList">{adminHotels.map(item=><article key={value(item,"hotelId")}><div><strong>{value(item,"name")}</strong><small>{value(item,"timezone")} · {value(item,"status")}</small></div><div className="entityLinks"><a href={value(item,"publicUrl")} target="_blank" rel="noreferrer"><ExternalLink/>Public Page</a>{hotelQrPngUrl(item)&&<a href={hotelQrPngUrl(item)} target="_blank" rel="noreferrer"><ExternalLink/>QR PNG</a>}<button onClick={async()=>{await run("Hotel QR regenerated.",()=>hostApi({action:"regenerateHotelQr",hotelId:value(item,"hotelId")}));await refreshAdmin();}}>Regenerate QR</button><button onClick={async()=>{const inactive=value(item,"status")==="inactive";let confirmHotelName="";if(!inactive){confirmHotelName=window.prompt(`Type ${value(item,"name")} exactly to delete this hotel:`,"")||"";if(confirmHotelName!==value(item,"name"))return;}await run(inactive?"Hotel restored.":"Hotel deleted and recoverable.",()=>hostApi({action:"updateHotel",hotelId:value(item,"hotelId"),status:inactive?"active":"inactive",confirmHotelName}));await refreshAdmin();await acceptIdentity(await hostApi({action:"me"}));}}>{value(item,"status")==="inactive"?"Restore":"Delete"}</button></div></article>)}</div>
       </section>
       <div className="adminColumns">
@@ -669,7 +777,7 @@ export default function HostPanel({ oneTimeCode = "" }: { oneTimeCode?: string }
           {adminVenues.some(item=>value(item,"status")==="inactive")&&<details><summary>Deleted venues</summary><div className="entityList compact">{adminVenues.filter(item=>value(item,"status")==="inactive").map(item=><article key={value(item,"venueId")}><div><strong>{value(item,"name")}</strong><small>{adminHotels.find(hotel=>value(hotel,"hotelId")===value(item,"hotelId"))?.name||"Hotel"} · Inactive · recoverable</small></div><button disabled={busy} onClick={()=>void setVenueStatus(item,"active")}>Restore</button></article>)}</div></details>}
         </section>
         <section className="hostCard"><div className="sectionTitle"><CalendarClock/><div><h2>Activities</h2><p>Create, edit or recover activities. Advanced options stay folded until needed.</p></div></div>
-          <details><summary>Create activity</summary><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)} required>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue / location<select key={activityHotelId} name="venueId" required disabled={!activityVenues.length}>{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label>{!activityVenues.length&&<small>Create an active venue for this hotel before creating the activity.</small>}<label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><fieldset><legend>Guest languages</legend><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked/>{label}</label>)}</div></fieldset><button disabled={busy||!activityVenues.length}><Plus/>Create Activity</button></form></details>
+          <details><summary>Create activity</summary><form onSubmit={createActivity}><label>Hotel<select name="hotelId" value={activityHotelId} onChange={event=>setNewActivityHotelId(event.target.value)} required>{activeAdminHotels.map(item=><option key={value(item,"hotelId")} value={value(item,"hotelId")}>{value(item,"name")}</option>)}</select></label><label>Venue / location<select key={activityHotelId} name="venueId" required disabled={!activityVenues.length}>{activityVenues.map(item=><option key={value(item,"venueId")} value={value(item,"venueId")}>{value(item,"name")}</option>)}</select></label>{!activityVenues.length&&<small>Create an active venue for this hotel before creating the activity.</small>}<label>Activity name<input name="name" required/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" defaultValue="120" min="15"/></label><label>Transition seconds<input name="transitionSeconds" type="number" defaultValue="30" min="0" max="900"/></label></div><fieldset><legend>Guest languages</legend><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked/>{label}</label>)}</div></fieldset><button disabled={busy||activitySaving||!activityVenues.length}><Plus/>Create Activity</button></form></details>
           <div className="entityList compact">{adminActivities.filter(item=>value(item,"status")!=="inactive").map(item=>{const languages=activityLanguages(item);const activityVenue=adminVenues.find(venue=>value(venue,"venueId")===value(item,"venueId"));return <article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>{adminHotels.find(hotel=>value(hotel,"hotelId")===value(item,"hotelId"))?.name||"Hotel"} · {value(activityVenue,"name")||"Venue"} · {languages.length} languages</small><details><summary>Edit</summary><form onSubmit={event=>updateActivityRecord(event,item)}><label>Name<input name="name" defaultValue={value(item,"name")} required/></label><label>Venue<input value={value(activityVenue,"name")||"Venue unavailable"} readOnly/></label><div className="hostGrid two"><label>Minutes<input name="durationMinutes" type="number" min="15" defaultValue={Math.max(15,Number(item.defaultDurationSeconds||7200)/60)}/></label><label>Transition seconds<input name="transitionSeconds" type="number" min="0" max="900" defaultValue={Number(item.defaultTransitionSeconds??30)}/></label></div><button disabled={busy}>Save Activity</button></form><form onSubmit={event=>updateActivityLanguages(event,item)}><fieldset><legend>Guest languages</legend><div className="hostGrid languageChoices">{GUEST_LANGUAGES.map(([code,label])=><label className="checkLine" key={code}><input name={`language_${code}`} type="checkbox" defaultChecked={languages.includes(code)}/>{label}</label>)}</div></fieldset><button disabled={busy}>Save Languages</button></form><button className="dangerAction" disabled={busy} onClick={()=>void setActivityStatus(item,"inactive")}>Delete Activity</button></details></div></article>;})}</div>
           {adminActivities.some(item=>value(item,"status")==="inactive")&&<details><summary>Deleted activities</summary><div className="entityList compact">{adminActivities.filter(item=>value(item,"status")==="inactive").map(item=><article key={value(item,"activityId")}><div><strong>{value(item,"name")}</strong><small>Inactive · recoverable</small></div><button disabled={busy} onClick={()=>void setActivityStatus(item,"active")}>Restore</button></article>)}</div></details>}
         </section>

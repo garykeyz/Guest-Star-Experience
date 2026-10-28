@@ -1,0 +1,3180 @@
+TAP version 13
+# Subtest: activity data archive isolates hotel, venue, activity and occurrence; survives a fresh store
+ok 1 - activity data archive isolates hotel, venue, activity and occurrence; survives a fresh store
+  ---
+  duration_ms: 10.586625
+  type: 'test'
+  ...
+# Subtest: A -> B -> A ten times, connected VDJ and restart preserve separate activity data without physical commands
+ok 2 - A -> B -> A ten times, connected VDJ and restart preserve separate activity data without physical commands
+  ---
+  duration_ms: 742.25025
+  type: 'test'
+  ...
+# Subtest: cuenta ya cantó, conserva la cola real y resta saltados
+ok 3 - cuenta ya cantó, conserva la cola real y resta saltados
+  ---
+  duration_ms: 1.621666
+  type: 'test'
+  ...
+# Subtest: no recomienda cerrar una actividad que todavía no ha empezado
+ok 4 - no recomienda cerrar una actividad que todavía no ha empezado
+  ---
+  duration_ms: 1.025333
+  type: 'test'
+  ...
+# Subtest: normaliza los resultados finales en español
+ok 5 - normaliza los resultados finales en español
+  ---
+  duration_ms: 0.062042
+  type: 'test'
+  ...
+# Subtest: mantiene el reloj en cero hasta iniciar y calcula la hora final exacta
+ok 6 - mantiene el reloj en cero hasta iniciar y calcula la hora final exacta
+  ---
+  duration_ms: 0.098167
+  type: 'test'
+  ...
+# Subtest: congela el tiempo exacto cuando el Host termina la actividad
+ok 7 - congela el tiempo exacto cuando el Host termina la actividad
+  ---
+  duration_ms: 0.133
+  type: 'test'
+  ...
+# Subtest: corrige la transición corrupta de 4:40:30 usando los 30 segundos configurados
+ok 8 - corrige la transición corrupta de 4:40:30 usando los 30 segundos configurados
+  ---
+  duration_ms: 0.08175
+  type: 'test'
+  ...
+# Subtest: el tiempo confirmado suma toda la cola real de VirtualDJ
+ok 9 - el tiempo confirmado suma toda la cola real de VirtualDJ
+  ---
+  duration_ms: 0.54475
+  type: 'test'
+  ...
+# Subtest: la capa adaptive pertenece solo al Host, no a la composición pública
+ok 10 - la capa adaptive pertenece solo al Host, no a la composición pública
+  ---
+  duration_ms: 0.509167
+  type: 'test'
+  ...
+# Subtest: ventanas estrechas permitidas sin reconstruir el WebView ni cambiar Star Screen
+ok 11 - ventanas estrechas permitidas sin reconstruir el WebView ni cambiar Star Screen
+  ---
+  duration_ms: 0.148375
+  type: 'test'
+  ...
+# Subtest: layout local por containers, scroll natural y Preview proporcional
+ok 12 - layout local por containers, scroll natural y Preview proporcional
+  ---
+  duration_ms: 0.10275
+  type: 'test'
+  ...
+# Subtest: safe zone real, scroll interno y etiquetas del mismo botón sin lógica de resize
+ok 13 - safe zone real, scroll interno y etiquetas del mismo botón sin lógica de resize
+  ---
+  duration_ms: 5.635875
+  type: 'test'
+  ...
+# Subtest: consola solo Host: búsqueda prioritaria y acciones movidas sin duplicación
+ok 14 - consola solo Host: búsqueda prioritaria y acciones movidas sin duplicación
+  ---
+  duration_ms: 1.583375
+  type: 'test'
+  ...
+# Subtest: Audio Mixer unifica solo la presentación y conserva decks independientes
+ok 15 - Audio Mixer unifica solo la presentación y conserva decks independientes
+  ---
+  duration_ms: 1.323375
+  type: 'test'
+  ...
+# Subtest: Resumen usa los mismos valores en una franja inline desplegada por defecto
+ok 16 - Resumen usa los mismos valores en una franja inline desplegada por defecto
+  ---
+  duration_ms: 1.53325
+  type: 'test'
+  ...
+# Subtest: espera el arranque lento del servicio D1 al iniciar sesion
+ok 17 - espera el arranque lento del servicio D1 al iniciar sesion
+  ---
+  duration_ms: 10532.039917
+  type: 'test'
+  ...
+# Subtest: envía los controles compartidos con origen bridge
+ok 18 - envía los controles compartidos con origen bridge
+  ---
+  duration_ms: 8.13225
+  type: 'test'
+  ...
+# Subtest: inicia el reloj compartido sin archivar las solicitudes
+ok 19 - inicia el reloj compartido sin archivar las solicitudes
+  ---
+  duration_ms: 3.32475
+  type: 'test'
+  ...
+# Subtest: inicia Player con origen player y no lo convierte en Bridge
+ok 20 - inicia Player con origen player y no lo convierte en Bridge
+  ---
+  duration_ms: 2.955791
+  type: 'test'
+  ...
+# Subtest: actualiza en la fila un solo enlace elegido y la duración exacta
+ok 21 - actualiza en la fila un solo enlace elegido y la duración exacta
+  ---
+  duration_ms: 2.781333
+  type: 'test'
+  ...
+# Subtest: envía el idioma de la canción al buscar opciones en YouTube
+ok 22 - envía el idioma de la canción al buscar opciones en YouTube
+  ---
+  duration_ms: 2.833958
+  type: 'test'
+  ...
+# Subtest: actualiza duración, transición y apertura desde la app
+ok 23 - actualiza duración, transición y apertura desde la app
+  ---
+  duration_ms: 1.980625
+  type: 'test'
+  ...
+# Subtest: avisa al Host cuando el servicio publicado todavía es anterior a 4.1
+ok 24 - avisa al Host cuando el servicio publicado todavía es anterior a 4.1
+  ---
+  duration_ms: 1.63875
+  type: 'test'
+  ...
+# Subtest: traduce completamente las filas críticas de la cola al español
+ok 25 - traduce completamente las filas críticas de la cola al español
+  ---
+  duration_ms: 2.625958
+  type: 'test'
+  ...
+# Subtest: permite volver a inglés sin mezclar los textos que originalmente estaban en español
+ok 26 - permite volver a inglés sin mezclar los textos que originalmente estaban en español
+  ---
+  duration_ms: 0.553375
+  type: 'test'
+  ...
+# Subtest: traduce también los marcadores vacíos sin tocar nombres de canciones o artistas
+ok 27 - traduce también los marcadores vacíos sin tocar nombres de canciones o artistas
+  ---
+  duration_ms: 0.273291
+  type: 'test'
+  ...
+# Subtest: Guest Star, Guest Star Experience y Guest Star Bridge son marcas no traducibles
+ok 28 - Guest Star, Guest Star Experience y Guest Star Bridge son marcas no traducibles
+  ---
+  duration_ms: 0.464833
+  type: 'test'
+  ...
+# Subtest: Bridge lifecycle: all thirteen regression scenarios with real HTTP, persistence and stale observations
+ok 29 - Bridge lifecycle: all thirteen regression scenarios with real HTTP, persistence and stale observations
+  ---
+  duration_ms: 1440.416375
+  type: 'test'
+  ...
+# Subtest: routine Bridge operations contain no blocking browser popup
+ok 30 - routine Bridge operations contain no blocking browser popup
+  ---
+  duration_ms: 0.811542
+  type: 'test'
+  ...
+# Subtest: Bridge HTTP: metadata CAS, offline admin, reorder, dedup, Skip/Next and VDJ Played events
+ok 31 - Bridge HTTP: metadata CAS, offline admin, reorder, dedup, Skip/Next and VDJ Played events
+  ---
+  duration_ms: 30571.6735
+  type: 'test'
+  ...
+# Subtest: YouTube pages cycle through 24 cached candidates, six visible, no network calls
+ok 32 - YouTube pages cycle through 24 cached candidates, six visible, no network calls
+  ---
+  duration_ms: 2.192584
+  type: 'test'
+  ...
+# Subtest: Bridge request UI changes before a delayed network response; rejection rolls back
+ok 33 - Bridge request UI changes before a delayed network response; rejection rolls back
+  ---
+  duration_ms: 1.34075
+  type: 'test'
+  ...
+# {"localFeedbackMs":[0.19525000000000148,0.029291000000000622,0.025959000000000287,0.0277499999999975,0.031416999999997586,0.32595799999999997],"maxMs":0.32595799999999997}
+# Subtest: copy confirms the clipboard before remote persistence finishes
+ok 34 - copy confirms the clipboard before remote persistence finishes
+  ---
+  duration_ms: 5.323792
+  type: 'test'
+  ...
+# Subtest: all local render/optimistic updates measured below 100ms in the isolated fixture
+ok 35 - all local render/optimistic updates measured below 100ms in the isolated fixture
+  ---
+  duration_ms: 0.18425
+  type: 'test'
+  ...
+# Subtest: resuming a validated running Bridge opens locally without waiting for selection or YouTube
+ok 36 - resuming a validated running Bridge opens locally without waiting for selection or YouTube
+  ---
+  duration_ms: 0.41825
+  type: 'test'
+  ...
+# Subtest: passive matching links files without inserting historically sent requests
+ok 37 - passive matching links files without inserting historically sent requests
+  ---
+  duration_ms: 2.6905
+  type: 'test'
+  ...
+# Subtest: same running Bridge opens and keeps receiving while YouTube maintenance is stalled
+ok 38 - same running Bridge opens and keeps receiving while YouTube maintenance is stalled
+  ---
+  duration_ms: 388.693917
+  type: 'test'
+  ...
+# Subtest: fast re-entry rejects another hotel, venue, activity, free context or Player
+ok 39 - fast re-entry rejects another hotel, venue, activity, free context or Player
+  ---
+  duration_ms: 1.382125
+  type: 'test'
+  ...
+# Subtest: remote run, start, playback and authorization scope must still match
+ok 40 - remote run, start, playback and authorization scope must still match
+  ---
+  duration_ms: 1.502667
+  type: 'test'
+  ...
+# Subtest: Bridge clears pending/active/completed/skipped, VDJ waits and disk; playing deck remains untouched across sync and restart
+ok 41 - Bridge clears pending/active/completed/skipped, VDJ waits and disk; playing deck remains untouched across sync and restart
+  ---
+  duration_ms: 604.727625
+  type: 'test'
+  ...
+# Subtest: Player clears local/public rows and history without any VirtualDJ mutation
+ok 42 - Player clears local/public rows and history without any VirtualDJ mutation
+  ---
+  duration_ms: 408.82125
+  type: 'test'
+  ...
+# Subtest: VDJ cleanup handles duplicate waiting copies and empty singers with guarded queue-only removals
+ok 43 - VDJ cleanup handles duplicate waiting copies and empty singers with guarded queue-only removals
+  ---
+  duration_ms: 0.928833
+  type: 'test'
+  ...
+# Subtest: cloud rejection never reports clear success; retry confirms all records and persists empty state
+ok 44 - cloud rejection never reports clear success; retry confirms all records and persists empty state
+  ---
+  duration_ms: 180.930666
+  type: 'test'
+  ...
+# Subtest: disk does not truncate cleared IDs, including large histories; keeps an empty singer for preserved VDJ identity
+ok 45 - disk does not truncate cleared IDs, including large histories; keeps an empty singer for preserved VDJ identity
+  ---
+  duration_ms: 3.484709
+  type: 'test'
+  ...
+# (node:30158) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/garykeyzz/Documents/ChatGPT/Guest%20star%202/release-audit-20261027/release-source/karaoke-github-package/lib/guest-star/realtime-event.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /Users/garykeyzz/Documents/ChatGPT/Guest star 2/release-audit-20261027/release-source/karaoke-github-package/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: realtime keeps credentials out of the URL and isolates the hotel channel
+ok 46 - realtime keeps credentials out of the URL and isolates the hotel channel
+  ---
+  duration_ms: 0.90225
+  type: 'test'
+  ...
+# Subtest: realtime publishes only the supported operating mode
+ok 47 - realtime publishes only the supported operating mode
+  ---
+  duration_ms: 0.152541
+  type: 'test'
+  ...
+# Subtest: the cloud connection is event-driven when WebSocket is healthy
+ok 48 - the cloud connection is event-driven when WebSocket is healthy
+  ---
+  duration_ms: 4.702542
+  type: 'test'
+  ...
+# Subtest: realtime refreshes preserve a trailing invalidation
+ok 49 - realtime refreshes preserve a trailing invalidation
+  ---
+  duration_ms: 2.260917
+  type: 'test'
+  ...
+# Subtest: the Worker accepts bridge credentials only in the first authenticated frame
+ok 50 - the Worker accepts bridge credentials only in the first authenticated frame
+  ---
+  duration_ms: 0.352625
+  type: 'test'
+  ...
+# Subtest: realtime routing trusts the authorized response, never a submitted hotel
+ok 51 - realtime routing trusts the authorized response, never a submitted hotel
+  ---
+  duration_ms: 0.234292
+  type: 'test'
+  ...
+# Subtest: no-op and idempotent writes do not fan out invalidations
+ok 52 - no-op and idempotent writes do not fan out invalidations
+  ---
+  duration_ms: 0.146084
+  type: 'test'
+  ...
+# Subtest: public queue changes carry an absolute count instead of causing one D1 read per guest
+ok 53 - public queue changes carry an absolute count instead of causing one D1 read per guest
+  ---
+  duration_ms: 0.696542
+  type: 'test'
+  ...
+# Subtest: the disabled root experience cannot invalidate any hotel
+ok 54 - the disabled root experience cannot invalidate any hotel
+  ---
+  duration_ms: 0.233667
+  type: 'test'
+  ...
+# Subtest: recuerda la carpeta y descarta controles heredados de PIN y polling
+ok 55 - recuerda la carpeta y descarta controles heredados de PIN y polling
+  ---
+  duration_ms: 2.873959
+  type: 'test'
+  ...
+# Subtest: permite olvidar la carpeta al cerrar
+ok 56 - permite olvidar la carpeta al cerrar
+  ---
+  duration_ms: 0.730166
+  type: 'test'
+  ...
+# Subtest: la configuración 15 recuerda sesión, selección e idioma sin guardar contraseñas de usuario
+ok 57 - la configuración 15 recuerda sesión, selección e idioma sin guardar contraseñas de usuario
+  ---
+  duration_ms: 0.505834
+  type: 'test'
+  ...
+# Subtest: persiste las Preferencias generales de audio, pantalla, IA e interfaz
+ok 58 - persiste las Preferencias generales de audio, pantalla, IA e interfaz
+  ---
+  duration_ms: 0.7
+  type: 'test'
+  ...
+# Subtest: Streaming vocal y diagnósticos privados son los valores iniciales de la configuración 15
+ok 59 - Streaming vocal y diagnósticos privados son los valores iniciales de la configuración 15
+  ---
+  duration_ms: 0.7585
+  type: 'test'
+  ...
+# Subtest: normaliza Preferencias inválidas a valores seguros
+ok 60 - normaliza Preferencias inválidas a valores seguros
+  ---
+  duration_ms: 0.242333
+  type: 'test'
+  ...
+# Subtest: conserva las carpetas y archivos elegidos para música ambiental
+ok 61 - conserva las carpetas y archivos elegidos para música ambiental
+  ---
+  duration_ms: 0.440333
+  type: 'test'
+  ...
+# Subtest: guarda favoritos independientes por hotel y elimina duplicados
+ok 62 - guarda favoritos independientes por hotel y elimina duplicados
+  ---
+  duration_ms: 1.254416
+  type: 'test'
+  ...
+# Subtest: la actualización migra cualquier endpoint directo de Apps Script al proxy estable
+ok 63 - la actualización migra cualquier endpoint directo de Apps Script al proxy estable
+  ---
+  duration_ms: 1.885708
+  type: 'test'
+  ...
+# Subtest: permite no recordar tokens ni última actividad
+ok 64 - permite no recordar tokens ni última actividad
+  ---
+  duration_ms: 1.94375
+  type: 'test'
+  ...
+# Subtest: conserva la sesión guardada si Keychain no devuelve los tokens
+ok 65 - conserva la sesión guardada si Keychain no devuelve los tokens
+  ---
+  duration_ms: 0.546125
+  type: 'test'
+  ...
+# Subtest: an invalidation received during an older sync fetches again before resolving
+ok 66 - an invalidation received during an older sync fetches again before resolving
+  ---
+  duration_ms: 1.076042
+  type: 'test'
+  ...
+# Subtest: request invalidation while clear holds the lock survives until a scheduled retry
+ok 67 - request invalidation while clear holds the lock survives until a scheduled retry
+  ---
+  duration_ms: 1.180666
+  type: 'test'
+  ...
+# Subtest: clear always releases its lock even when final persistence fails
+ok 68 - clear always releases its lock even when final persistence fails
+  ---
+  duration_ms: 0.604042
+  type: 'test'
+  ...
+# Subtest: burst invalidations coalesce into one trailing read and a lock stops draining
+ok 69 - burst invalidations coalesce into one trailing read and a lock stops draining
+  ---
+  duration_ms: 0.436042
+  type: 'test'
+  ...
+# Subtest: commands deferred by an activity lock are retained and an obsolete generation does not retry
+ok 70 - commands deferred by an activity lock are retained and an obsolete generation does not retry
+  ---
+  duration_ms: 0.356375
+  type: 'test'
+  ...
+# Subtest: 2-hour activity: 42 minutes future covers until 8:42, leaving 18 minutes
+ok 71 - 2-hour activity: 42 minutes future covers until 8:42, leaving 18 minutes
+  ---
+  duration_ms: 2.533334
+  type: 'test'
+  ...
+# Subtest: pending/queued overlap, current progress, skipped and standby never inflate coverage
+ok 72 - pending/queued overlap, current progress, skipped and standby never inflate coverage
+  ---
+  duration_ms: 0.446333
+  type: 'test'
+  ...
+# Subtest: unknown duration uses completed median before queue, robust against a long outlier
+ok 73 - unknown duration uses completed median before queue, robust against a long outlier
+  ---
+  duration_ms: 0.163625
+  type: 'test'
+  ...
+# Subtest: coverage warning boundaries and host consent, never automatic closure
+ok 74 - coverage warning boundaries and host consent, never automatic closure
+  ---
+  duration_ms: 0.294334
+  type: 'test'
+  ...
+# Subtest: free/finished/overrun clocks stay bounded; no false prompt after end
+ok 75 - free/finished/overrun clocks stay bounded; no false prompt after end
+  ---
+  duration_ms: 0.127792
+  type: 'test'
+  ...
+# Subtest: reserve promotion adds the next existing identity without increasing reserve beyond 3
+ok 76 - reserve promotion adds the next existing identity without increasing reserve beyond 3
+  ---
+  duration_ms: 0.530917
+  type: 'test'
+  ...
+# Subtest: meter reads genuinely independent L/R post-master values
+ok 77 - meter reads genuinely independent L/R post-master values
+  ---
+  duration_ms: 0.304958
+  type: 'test'
+  ...
+# Subtest: short real clip tolerates a final sample at 97%, but a seek is never sufficient
+ok 78 - short real clip tolerates a final sample at 97%, but a seek is never sufficient
+  ---
+  duration_ms: 0.063125
+  type: 'test'
+  ...
+# Subtest: light queue signature uses one query and caps large snapshots
+ok 79 - light queue signature uses one query and caps large snapshots
+  ---
+  duration_ms: 0.38275
+  type: 'test'
+  ...
+# Subtest: disk retains the new external occurrence ID and excludes unusable identities
+ok 80 - disk retains the new external occurrence ID and excludes unusable identities
+  ---
+  duration_ms: 0.929708
+  type: 'test'
+  ...
+# Subtest: external performance history is preserved beyond 500 rows
+ok 81 - external performance history is preserved beyond 500 rows
+  ---
+  duration_ms: 0.347583
+  type: 'test'
+  ...
+# Subtest: unavailable physical row retains queue count without inflating useful future coverage
+ok 82 - unavailable physical row retains queue count without inflating useful future coverage
+  ---
+  duration_ms: 0.142084
+  type: 'test'
+  ...
+# Subtest: HTTP aislado: dos controles, sesión, permisos, entrega, reinicio y desconexión
+ok 83 - HTTP aislado: dos controles, sesión, permisos, entrega, reinicio y desconexión
+  ---
+  duration_ms: 4875.12475
+  type: 'test'
+  ...
+# Subtest: validación real del contrato de rol: host
+ok 84 - validación real del contrato de rol: host
+  ---
+  duration_ms: 13.775584
+  type: 'test'
+  ...
+# Subtest: validación real del contrato de rol: tester
+ok 85 - validación real del contrato de rol: tester
+  ---
+  duration_ms: 0.253541
+  type: 'test'
+  ...
+# Subtest: validación real del contrato de rol: developer
+ok 86 - validación real del contrato de rol: developer
+  ---
+  duration_ms: 0.302208
+  type: 'test'
+  ...
+# Subtest: validación real del contrato de rol: superhost
+ok 87 - validación real del contrato de rol: superhost
+  ---
+  duration_ms: 0.200834
+  type: 'test'
+  ...
+# Subtest: validación real del contrato de rol: guest
+ok 88 - validación real del contrato de rol: guest
+  ---
+  duration_ms: 0.796958
+  type: 'test'
+  ...
+# Subtest: sesión ausente, expirada, HTTP 403, backend inválido, desconexión y timeout conservan causa
+ok 89 - sesión ausente, expirada, HTTP 403, backend inválido, desconexión y timeout conservan causa
+  ---
+  duration_ms: 0.385084
+  type: 'test'
+  ...
+# Subtest: una entrega no implementada conserva el código exacto del backend
+ok 90 - una entrega no implementada conserva el código exacto del backend
+  ---
+  duration_ms: 0.160334
+  type: 'test'
+  ...
+# Subtest: persistencia, reinicio, fallo sin mutación, desactivación offline y carrera de sesión
+ok 91 - persistencia, reinicio, fallo sin mutación, desactivación offline y carrera de sesión
+  ---
+  duration_ms: 12.982625
+  type: 'test'
+  ...
+# Subtest: tick espera confirmación, ignora SSE anterior, muestra fallo persistente y se restaura
+ok 92 - tick espera confirmación, ignora SSE anterior, muestra fallo persistente y se restaura
+  ---
+  duration_ms: 1.079458
+  type: 'test'
+  ...
+# Subtest: un evento compartido conserva severity en recentErrors; ciclos reales siguen saneados
+ok 93 - un evento compartido conserva severity en recentErrors; ciclos reales siguen saneados
+  ---
+  duration_ms: 4.2915
+  type: 'test'
+  ...
+# Subtest: normaliza timestamps inválidos y conserva el valor original para diagnóstico
+ok 94 - normaliza timestamps inválidos y conserva el valor original para diagnóstico
+  ---
+  duration_ms: 0.195625
+  type: 'test'
+  ...
+# Subtest: guardado concurrente y fallo de disco no confirman un estado falso
+ok 95 - guardado concurrente y fallo de disco no confirman un estado falso
+  ---
+  duration_ms: 3.679459
+  type: 'test'
+  ...
+# Subtest: sanitiza credenciales, datos personales y rutas de usuario
+ok 96 - sanitiza credenciales, datos personales y rutas de usuario
+  ---
+  duration_ms: 0.811125
+  type: 'test'
+  ...
+# Subtest: sanitiza estructuras anidadas, claves sensibles y referencias circulares
+ok 97 - sanitiza estructuras anidadas, claves sensibles y referencias circulares
+  ---
+  duration_ms: 0.740041
+  type: 'test'
+  ...
+# Subtest: normaliza eventos a módulos, severidades, ubicación y contexto seguros
+ok 98 - normaliza eventos a módulos, severidades, ubicación y contexto seguros
+  ---
+  duration_ms: 1.198291
+  type: 'test'
+  ...
+# Subtest: la huella agrupa el mismo fallo aunque cambien IDs, contadores y líneas del stack
+ok 99 - la huella agrupa el mismo fallo aunque cambien IDs, contadores y líneas del stack
+  ---
+  duration_ms: 0.14425
+  type: 'test'
+  ...
+# Subtest: deduplica incidentes abiertos y abre uno nuevo después de resolver
+ok 100 - deduplica incidentes abiertos y abre uno nuevo después de resolver
+  ---
+  duration_ms: 0.383166
+  type: 'test'
+  ...
+# Subtest: mantiene un ring buffer acotado y actualiza salud con errores y recuperaciones
+ok 101 - mantiene un ring buffer acotado y actualiza salud con errores y recuperaciones
+  ---
+  duration_ms: 2.260125
+  type: 'test'
+  ...
+# Subtest: persiste eventos, reportes, fallos y salud sin conservar secretos
+ok 102 - persiste eventos, reportes, fallos y salud sin conservar secretos
+  ---
+  duration_ms: 9.06375
+  type: 'test'
+  ...
+# Subtest: genera un reporte técnico reutilizable con estado, eventos y salud sanitizados
+ok 103 - genera un reporte técnico reutilizable con estado, eventos y salud sanitizados
+  ---
+  duration_ms: 1.040542
+  type: 'test'
+  ...
+# Subtest: remembered entry requires current access and an eligible activity; free has its own context
+ok 104 - remembered entry requires current access and an eligible activity; free has its own context
+  ---
+  duration_ms: 1.018125
+  type: 'test'
+  ...
+# Subtest: A -> B -> free -> A isolates data and retains remembered future activity after restart
+ok 105 - A -> B -> free -> A isolates data and retains remembered future activity after restart
+  ---
+  duration_ms: 520.570542
+  type: 'test'
+  ...
+# Subtest: Superhost suspends a running free activity and resumes the same session after restart
+ok 106 - Superhost suspends a running free activity and resumes the same session after restart
+  ---
+  duration_ms: 6274.481958
+  type: 'test'
+  ...
+# Subtest: Host cannot override a running free activity
+ok 107 - Host cannot override a running free activity
+  ---
+  duration_ms: 167.180125
+  type: 'test'
+  ...
+# Subtest: external output automatically opens in Host, preserves the configured destination, and does not open in Superhost
+ok 108 - external output automatically opens in Host, preserves the configured destination, and does not open in Superhost
+  ---
+  duration_ms: 0.900708
+  type: 'test'
+  ...
+# Subtest: asigna Alex A y Alex B por dispositivo y conserva la letra en otras canciones
+ok 109 - asigna Alex A y Alex B por dispositivo y conserva la letra en otras canciones
+  ---
+  duration_ms: 1.045958
+  type: 'test'
+  ...
+# Subtest: la letra depende de la primera llegada y no de la posición actual
+ok 110 - la letra depende de la primera llegada y no de la posición actual
+  ---
+  duration_ms: 0.11175
+  type: 'test'
+  ...
+# Subtest: no añade una letra cuando no existe otro huésped con ese nombre
+ok 111 - no añade una letra cuando no existe otro huésped con ese nombre
+  ---
+  duration_ms: 0.058083
+  type: 'test'
+  ...
+# Subtest: continúa después de Z sin repetir identificadores
+ok 112 - continúa después de Z sin repetir identificadores
+  ---
+  duration_ms: 0.506458
+  type: 'test'
+  ...
+# Subtest: VirtualDJ recibe el alias humano y nunca el código técnico del dispositivo
+ok 113 - VirtualDJ recibe el alias humano y nunca el código técnico del dispositivo
+  ---
+  duration_ms: 0.256917
+  type: 'test'
+  ...
+# Subtest: equilibra el Plan B entre español e inglés
+ok 114 - equilibra el Plan B entre español e inglés
+  ---
+  duration_ms: 0.578375
+  type: 'test'
+  ...
+# Subtest: da prioridad inicial al idioma más solicitado sin perder el equilibrio
+ok 115 - da prioridad inicial al idioma más solicitado sin perder el equilibrio
+  ---
+  duration_ms: 0.485084
+  type: 'test'
+  ...
+# Subtest: Host conserva el acceso de la actividad persistente después de finalizar la ocurrencia
+ok 116 - Host conserva el acceso de la actividad persistente después de finalizar la ocurrencia
+  ---
+  duration_ms: 0.471417
+  type: 'test'
+  ...
+# Subtest: no muestra el PIN de otra actividad o sala mientras llega el nuevo estado
+ok 117 - no muestra el PIN de otra actividad o sala mientras llega el nuevo estado
+  ---
+  duration_ms: 0.065958
+  type: 'test'
+  ...
+# Subtest: Superhost solo obtiene acceso en Modo Host con la actividad correcta
+ok 118 - Superhost solo obtiene acceso en Modo Host con la actividad correcta
+  ---
+  duration_ms: 0.05075
+  type: 'test'
+  ...
+# Subtest: PIN inválido y enlace ajeno no obtienen acceso operativo
+ok 119 - PIN inválido y enlace ajeno no obtienen acceso operativo
+  ---
+  duration_ms: 0.05025
+  type: 'test'
+  ...
+# Subtest: real-sample bars remain fixed and centered without any decorative profile
+ok 120 - real-sample bars remain fixed and centered without any decorative profile
+  ---
+  duration_ms: 0.483208
+  type: 'test'
+  ...
+# Subtest: invalid, absent and out-of-range meters are safe
+ok 121 - invalid, absent and out-of-range meters are safe
+  ---
+  duration_ms: 0.672209
+  type: 'test'
+  ...
+# Subtest: each PCM bar reacts independently, stale frames are ignored and silence is real
+ok 122 - each PCM bar reacts independently, stale frames are ignored and silence is real
+  ---
+  duration_ms: 1.273458
+  type: 'test'
+  ...
+# Subtest: publisher forwards real background frames only, never karaoke meters or invalid data
+ok 123 - publisher forwards real background frames only, never karaoke meters or invalid data
+  ---
+  duration_ms: 0.917625
+  type: 'test'
+  ...
+# Subtest: detecta cuando una canción que estaba local deja de estar disponible
+ok 124 - detecta cuando una canción que estaba local deja de estar disponible
+  ---
+  duration_ms: 0.583584
+  type: 'test'
+  ...
+# Subtest: no considera desaparición una solicitud nueva y limpia las solicitudes eliminadas
+ok 125 - no considera desaparición una solicitud nueva y limpia las solicitudes eliminadas
+  ---
+  duration_ms: 0.066042
+  type: 'test'
+  ...
+# Subtest: biblioteca vacía y un archivo, sin acceder al disco
+ok 126 - biblioteca vacía y un archivo, sin acceder al disco
+  ---
+  duration_ms: 1.491959
+  type: 'test'
+  ...
+# Subtest: metadata limpia, archivo, canal, acentos y tokens comparten búsqueda
+ok 127 - metadata limpia, archivo, canal, acentos y tokens comparten búsqueda
+  ---
+  duration_ms: 0.205542
+  type: 'test'
+  ...
+# Subtest: orden por título, artista e idioma; filtros conocidos/desconocidos
+ok 128 - orden por título, artista e idioma; filtros conocidos/desconocidos
+  ---
+  duration_ms: 5.928292
+  type: 'test'
+  ...
+# Subtest: muchos archivos: paginación estable, sin mutar índice ni objetos
+ok 129 - muchos archivos: paginación estable, sin mutar índice ni objetos
+  ---
+  duration_ms: 3827.592375
+  type: 'test'
+  ...
+# Subtest: abrir/cerrar/buscar no contiene transporte ni escaneo; asignación existente es solo fila
+ok 130 - abrir/cerrar/buscar no contiene transporte ni escaneo; asignación existente es solo fila
+  ---
+  duration_ms: 1.034125
+  type: 'test'
+  ...
+# Subtest: plain host edit changes words without exposing or moving timestamps
+ok 131 - plain host edit changes words without exposing or moving timestamps
+  ---
+  duration_ms: 0.788667
+  type: 'test'
+  ...
+# Subtest: adding a word keeps the adjustment inside its line
+ok 132 - adding a word keeps the adjustment inside its line
+  ---
+  duration_ms: 0.5565
+  type: 'test'
+  ...
+# Subtest: moving a contiguous word reshapes its immediate neighbor without overlap
+ok 133 - moving a contiguous word reshapes its immediate neighbor without overlap
+  ---
+  duration_ms: 0.097834
+  type: 'test'
+  ...
+# Subtest: missing acoustic words stay visible while reliable anchors keep their timing
+ok 134 - missing acoustic words stay visible while reliable anchors keep their timing
+  ---
+  duration_ms: 0.75
+  type: 'test'
+  ...
+# Subtest: one late acoustic anchor never squeezes a whole line into milliseconds
+ok 135 - one late acoustic anchor never squeezes a whole line into milliseconds
+  ---
+  duration_ms: 0.085709
+  type: 'test'
+  ...
+# Subtest: concurrent requests and identical recording aliases create one lookup and one analysis
+ok 136 - concurrent requests and identical recording aliases create one lookup and one analysis
+  ---
+  duration_ms: 12.90275
+  type: 'test'
+  ...
+# Subtest: cache cannot mask active forced analysis; cancellation reaches its actual controller
+ok 137 - cache cannot mask active forced analysis; cancellation reaches its actual controller
+  ---
+  duration_ms: 15.446208
+  type: 'test'
+  ...
+# Subtest: cancel or shutdown during a shared lookup never launches the delayed analysis
+ok 138 - cancel or shutdown during a shared lookup never launches the delayed analysis
+  ---
+  duration_ms: 3.863375
+  type: 'test'
+  ...
+# Subtest: a failed cache operation releases the request lock for a valid retry
+ok 139 - a failed cache operation releases the request lock for a valid retry
+  ---
+  duration_ms: 1.87775
+  type: 'test'
+  ...
+# Subtest: identity decoding is single flight with bounded concurrency and persistent cache survives restart
+ok 140 - identity decoding is single flight with bounded concurrency and persistent cache survives restart
+  ---
+  duration_ms: 1151.706167
+  type: 'test'
+  ...
+# Subtest: a persisted identity cache hit bypasses an unrelated active decoder
+ok 141 - a persisted identity cache hit bypasses an unrelated active decoder
+  ---
+  duration_ms: 620.205083
+  type: 'test'
+  ...
+# Subtest: fallback hashes media incrementally with the same identity and invalidates after source changes
+ok 142 - fallback hashes media incrementally with the same identity and invalidates after source changes
+  ---
+  duration_ms: 5.801
+  type: 'test'
+  ...
+# Subtest: shutdown kills an active identity decoder and queued work cannot create another process
+ok 143 - shutdown kills an active identity decoder and queued work cannot create another process
+  ---
+  duration_ms: 282.725209
+  type: 'test'
+  ...
+# Subtest: an ASR subprocess error kills the paired decoder instead of leaving a worker behind
+ok 144 - an ASR subprocess error kills the paired decoder instead of leaving a worker behind
+  ---
+  duration_ms: 672.265333
+  type: 'test'
+  ...
+# Subtest: sidecar timing and word corrections invalidate only the imported cache without analysis
+ok 145 - sidecar timing and word corrections invalidate only the imported cache without analysis
+  ---
+  duration_ms: 5.921417
+  type: 'test'
+  ...
+# Subtest: manual words, CAS, history, restore and cached reuse remain intact
+ok 146 - manual words, CAS, history, restore and cached reuse remain intact
+  ---
+  duration_ms: 14.159083
+  type: 'test'
+  ...
+# Subtest: lyrics HTTP isolated: allowed resolution, cache/export, jobs and origin
+    # Subtest: GET idle and request id resolve the same source; client path cannot redirect
+    ok 1 - GET idle and request id resolve the same source; client path cannot redirect
+      ---
+      duration_ms: 312.262833
+      type: 'test'
+      ...
+    # Subtest: sidecar and LRC export ready, sanitized headers; force retains authorized sidecar
+    ok 2 - sidecar and LRC export ready, sanitized headers; force retains authorized sidecar
+      ---
+      duration_ms: 50.9735
+      type: 'test'
+      ...
+    # Subtest: outside paths, sibling prefix, directory and symlink escape rejected; sidecar escape ignored
+    ok 3 - outside paths, sibling prefix, directory and symlink escape rejected; sidecar escape ignored
+      ---
+      duration_ms: 32.220958
+      type: 'test'
+      ...
+    # Subtest: Origin mismatch rejected for GET/POST/DELETE including LRC; same origin accepted
+    ok 4 - Origin mismatch rejected for GET/POST/DELETE including LRC; same origin accepted
+      ---
+      duration_ms: 4.982208
+      type: 'test'
+      ...
+    # Subtest: POST validated language, asynchronous native protocol fixture, DELETE cancellation and force retry
+    ok 5 - POST validated language, asynchronous native protocol fixture, DELETE cancellation and force retry
+      ---
+      duration_ms: 1164.091917
+      type: 'test'
+      ...
+    # Subtest: lyrics operations preserve queue/config and do not issue cloud mutations
+    ok 6 - lyrics operations preserve queue/config and do not issue cloud mutations
+      ---
+      duration_ms: 0.508375
+      type: 'test'
+      ...
+    # Subtest: restart reads persisted native-result cache without requesting inference again
+    ok 7 - restart reads persisted native-result cache without requesting inference again
+      ---
+      duration_ms: 232.460084
+      type: 'test'
+      ...
+    1..7
+ok 147 - lyrics HTTP isolated: allowed resolution, cache/export, jobs and origin
+  ---
+  duration_ms: 2060.860167
+  type: 'test'
+  ...
+# Subtest: lyrics HTTP isolated: no signed-in session rejects mutations but permits authorized local GET
+ok 148 - lyrics HTTP isolated: no signed-in session rejects mutations but permits authorized local GET
+  ---
+  duration_ms: 572.778458
+  type: 'test'
+  ...
+# Subtest: Player media preferences persist; priority applies on load, active source stays latched and manual override wins
+ok 149 - Player media preferences persist; priority applies on load, active source stays latched and manual override wins
+  ---
+  duration_ms: 479.618125
+  type: 'test'
+  ...
+# Subtest: construye una app Cocoa/WebKit Universal con identidad propia
+ok 150 - construye una app Cocoa/WebKit Universal con identidad propia
+  ---
+  duration_ms: 0.721791
+  type: 'test'
+  ...
+# Subtest: ofrece menú nativo Guest Star y Preferencias con Comando-coma
+ok 151 - ofrece menú nativo Guest Star y Preferencias con Comando-coma
+  ---
+  duration_ms: 0.281083
+  type: 'test'
+  ...
+# Subtest: el primer plano pertenece a Cocoa y no a automatización osascript/JXA
+ok 152 - el primer plano pertenece a Cocoa y no a automatización osascript/JXA
+  ---
+  duration_ms: 0.280125
+  type: 'test'
+  ...
+# Subtest: Star Screen reutiliza una sola ventana, respeta pantalla y recupera foco
+ok 153 - Star Screen reutiliza una sola ventana, respeta pantalla y recupera foco
+  ---
+  duration_ms: 0.356458
+  type: 'test'
+  ...
+# Subtest: Star Screen es flotante con una sola pantalla y conserva la salida externa
+ok 154 - Star Screen es flotante con una sola pantalla y conserva la salida externa
+  ---
+  duration_ms: 0.163208
+  type: 'test'
+  ...
+# Subtest: incluye y ejercita Spleeter rápido y Demucs HQ en el motor Universal
+ok 155 - incluye y ejercita Spleeter rápido y Demucs HQ en el motor Universal
+  ---
+  duration_ms: 0.162625
+  type: 'test'
+  ...
+# Subtest: firma y valida plist, frameworks, binario final, DMG y ZIP
+ok 156 - firma y valida plist, frameworks, binario final, DMG y ZIP
+  ---
+  duration_ms: 0.179209
+  type: 'test'
+  ...
+# Subtest: selecciona automáticamente el runtime correcto en cada Mac
+ok 157 - selecciona automáticamente el runtime correcto en cada Mac
+  ---
+  duration_ms: 0.1145
+  type: 'test'
+  ...
+# Subtest: la publicación deriva Guest Star Universal de la versión del paquete
+ok 158 - la publicación deriva Guest Star Universal de la versión del paquete
+  ---
+  duration_ms: 0.551125
+  type: 'test'
+  ...
+# Subtest: bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare
+ok 159 - bloquea la publicación hasta aprobar seguridad, regresión, web y Cloudflare
+  ---
+  duration_ms: 0.351333
+  type: 'test'
+  ...
+# Subtest: normaliza acentos y signos para comparar títulos
+ok 160 - normaliza acentos y signos para comparar títulos
+  ---
+  duration_ms: 0.751125
+  type: 'test'
+  ...
+# Subtest: detecta una coincidencia exacta aunque el archivo diga karaoke lyrics
+ok 161 - detecta una coincidencia exacta aunque el archivo diga karaoke lyrics
+  ---
+  duration_ms: 0.729709
+  type: 'test'
+  ...
+# Subtest: ordena primero la pista que coincide con canción y artista
+ok 162 - ordena primero la pista que coincide con canción y artista
+  ---
+  duration_ms: 0.284625
+  type: 'test'
+  ...
+# Subtest: el idioma seleccionado cambia cuál archivo local queda primero
+ok 163 - el idioma seleccionado cambia cuál archivo local queda primero
+  ---
+  duration_ms: 1.199167
+  type: 'test'
+  ...
+# Subtest: acepta una coincidencia exacta sin etiqueta de idioma
+ok 164 - acepta una coincidencia exacta sin etiqueta de idioma
+  ---
+  duration_ms: 0.190666
+  type: 'test'
+  ...
+# Subtest: normaliza los ocho idiomas locales sin inventar un valor
+ok 165 - normaliza los ocho idiomas locales sin inventar un valor
+  ---
+  duration_ms: 0.122333
+  type: 'test'
+  ...
+# Subtest: escanea subcarpetas y omite archivos que no son multimedia
+ok 166 - escanea subcarpetas y omite archivos que no son multimedia
+  ---
+  duration_ms: 3.530875
+  type: 'test'
+  ...
+# Subtest: no convierte un fallo temporal de carpeta en una biblioteca vacía
+ok 167 - no convierte un fallo temporal de carpeta en una biblioteca vacía
+  ---
+  duration_ms: 0.3835
+  type: 'test'
+  ...
+# Subtest: caso A: título y artista correctos producen confianza real muy alta
+ok 168 - caso A: título y artista correctos producen confianza real muy alta
+  ---
+  duration_ms: 0.364834
+  type: 'test'
+  ...
+# Subtest: caso B: formato artista conjunto antes del separador conserva una coincidencia fuerte
+ok 169 - caso B: formato artista conjunto antes del separador conserva una coincidencia fuerte
+  ---
+  duration_ms: 0.280709
+  type: 'test'
+  ...
+# Subtest: caso C: mismo título con artista incorrecto nunca recibe un falso 90%
+ok 170 - caso C: mismo título con artista incorrecto nunca recibe un falso 90%
+  ---
+  duration_ms: 0.113583
+  type: 'test'
+  ...
+# Subtest: caso D: una versión alternativa no se autoasigna a una solicitud genérica
+ok 171 - caso D: una versión alternativa no se autoasigna a una solicitud genérica
+  ---
+  duration_ms: 0.050708
+  type: 'test'
+  ...
+# Subtest: caso E: candidatos casi idénticos quedan ambiguos por margen
+ok 172 - caso E: candidatos casi idénticos quedan ambiguos por margen
+  ---
+  duration_ms: 5.181833
+  type: 'test'
+  ...
+# Subtest: caso F: YouTube puede corroborar pero no rescata un conflicto de artista
+ok 173 - caso F: YouTube puede corroborar pero no rescata un conflicto de artista
+  ---
+  duration_ms: 0.167291
+  type: 'test'
+  ...
+# Subtest: caso G: duración compatible suma evidencia y una duración incompatible penaliza
+ok 174 - caso G: duración compatible suma evidencia y una duración incompatible penaliza
+  ---
+  duration_ms: 0.19375
+  type: 'test'
+  ...
+# Subtest: Superhost puede cambiar el modo durante una actividad sin finalizarla
+ok 175 - Superhost puede cambiar el modo durante una actividad sin finalizarla
+  ---
+  duration_ms: 732.487084
+  type: 'test'
+  ...
+# Subtest: el Player crea una fila local antes de iniciar la actividad y la conserva al comenzar
+ok 176 - el Player crea una fila local antes de iniciar la actividad y la conserva al comenzar
+  ---
+  duration_ms: 362.9045
+  type: 'test'
+  ...
+# Subtest: timeline seeks forward/backward among thousands of words without accumulated clock state
+ok 177 - timeline seeks forward/backward among thousands of words without accumulated clock state
+  ---
+  duration_ms: 2.488792
+  type: 'test'
+  ...
+# Subtest: one word, gaps, pause, tempo and repeated seek use supplied playback time
+ok 178 - one word, gaps, pause, tempo and repeated seek use supplied playback time
+  ---
+  duration_ms: 0.15525
+  type: 'test'
+  ...
+# Subtest: drag start/end/whole word respects neighbors and inverse zoom mapping
+ok 179 - drag start/end/whole word respects neighbors and inverse zoom mapping
+  ---
+  duration_ms: 0.132208
+  type: 'test'
+  ...
+# Subtest: slightly negative timing normalizes at zero and impossible word intervals are omitted
+ok 180 - slightly negative timing normalizes at zero and impossible word intervals are omitted
+  ---
+  duration_ms: 0.471375
+  type: 'test'
+  ...
+# Subtest: overlapping analysis words are repaired, while overlapping manual intervals are rejected
+ok 181 - overlapping analysis words are repaired, while overlapping manual intervals are rejected
+  ---
+  duration_ms: 0.3445
+  type: 'test'
+  ...
+# Subtest: manual word edit persists over reload and ordinary request does not transcribe again
+ok 182 - manual word edit persists over reload and ordinary request does not transcribe again
+  ---
+  duration_ms: 13.339083
+  type: 'test'
+  ...
+# Subtest: audio and video use a persistent waveform by decoded recording, including a renamed audio file
+ok 183 - audio and video use a persistent waveform by decoded recording, including a renamed audio file
+  ---
+  duration_ms: 117.682666
+  type: 'test'
+  ...
+# Subtest: first fingerprint decode also writes waveform, avoiding a second complete audio pass
+ok 184 - first fingerprint decode also writes waveform, avoiding a second complete audio pass
+  ---
+  duration_ms: 17.400958
+  type: 'test'
+  ...
+# Subtest: long recording overview remains compact while detailed zoom keeps 80 bins per second
+ok 185 - long recording overview remains compact while detailed zoom keeps 80 bins per second
+  ---
+  duration_ms: 44.563417
+  type: 'test'
+  ...
+# Subtest: cinco turnos: mover \#5 a \#1, \#1 a \#4 y conservar los demás en orden
+ok 186 - cinco turnos: mover \#5 a \#1, \#1 a \#4 y conservar los demás en orden
+  ---
+  duration_ms: 0.919
+  type: 'test'
+  ...
+# Subtest: movimientos repetidos conservan cada ID, incluso con títulos repetidos
+ok 187 - movimientos repetidos conservan cada ID, incluso con títulos repetidos
+  ---
+  duration_ms: 0.2175
+  type: 'test'
+  ...
+# Subtest: drops obsoletos, sobre sí mismo y duplicados no pierden IDs
+ok 188 - drops obsoletos, sobre sí mismo y duplicados no pierden IDs
+  ---
+  duration_ms: 0.091791
+  type: 'test'
+  ...
+# Subtest: el acuse remoto no revierte el orden mientras espera persistencia
+ok 189 - el acuse remoto no revierte el orden mientras espera persistencia
+  ---
+  duration_ms: 0.086291
+  type: 'test'
+  ...
+# Subtest: reordenar con pista activa y stems preparando no llama al transporte
+ok 190 - reordenar con pista activa y stems preparando no llama al transporte
+  ---
+  duration_ms: 0.534916
+  type: 'test'
+  ...
+# Subtest: el endpoint existente recibe solamente queueOrder y serializa cambios en vuelo
+ok 191 - el endpoint existente recibe solamente queueOrder y serializa cambios en vuelo
+  ---
+  duration_ms: 0.365584
+  type: 'test'
+  ...
+# Subtest: stems se representan en una sola etiqueta compacta para todos sus estados
+ok 192 - stems se representan en una sola etiqueta compacta para todos sus estados
+  ---
+  duration_ms: 0.114166
+  type: 'test'
+  ...
+# Subtest: si falla la entrega, conserva el orden y reintenta sin enviar playback
+ok 193 - si falla la entrega, conserva el orden y reintenta sin enviar playback
+  ---
+  duration_ms: 2.54625
+  type: 'test'
+  ...
+# Subtest: el bloqueo de sesión impide sustituir la pista activa sin autorización
+ok 194 - el bloqueo de sesión impide sustituir la pista activa sin autorización
+  ---
+  duration_ms: 0.419584
+  type: 'test'
+  ...
+# Subtest: el progreso vuelve a cero cuando aún no hay duración válida
+ok 195 - el progreso vuelve a cero cuando aún no hay duración válida
+  ---
+  duration_ms: 0.333084
+  type: 'test'
+  ...
+# Subtest: el orden local exacto no se revierte antes de recibir su acuse remoto
+ok 196 - el orden local exacto no se revierte antes de recibir su acuse remoto
+  ---
+  duration_ms: 0.155667
+  type: 'test'
+  ...
+# Subtest: el heartbeat distingue Star Screen conectada, oculta y vencida
+ok 197 - el heartbeat distingue Star Screen conectada, oculta y vencida
+  ---
+  duration_ms: 0.062
+  type: 'test'
+  ...
+# Subtest: la recuperación de AudioContext y la capacidad de salida son explícitas
+ok 198 - la recuperación de AudioContext y la capacidad de salida son explícitas
+  ---
+  duration_ms: 0.067708
+  type: 'test'
+  ...
+# Subtest: tempo y tonalidad se calculan y transponen sin acoplarse
+ok 199 - tempo y tonalidad se calculan y transponen sin acoplarse
+  ---
+  duration_ms: 28.810417
+  type: 'test'
+  ...
+# Subtest: el detector distingue acordes de Mi mayor y menor y no inventa tonalidad en silencio
+ok 200 - el detector distingue acordes de Mi mayor y menor y no inventa tonalidad en silencio
+  ---
+  duration_ms: 52.51325
+  type: 'test'
+  ...
+# Subtest: el tempo aplica playbackRate real y preserva la tonalidad por reproductor
+ok 201 - el tempo aplica playbackRate real y preserva la tonalidad por reproductor
+  ---
+  duration_ms: 0.193875
+  type: 'test'
+  ...
+# Subtest: el tempo coalesce cambios del slider sin reconfigurar rutas ajenas
+ok 202 - el tempo coalesce cambios del slider sin reconfigurar rutas ajenas
+  ---
+  duration_ms: 0.275042
+  type: 'test'
+  ...
+# Subtest: el reloj visual sigue AVAudioEngine sin seeks pequeños en 50–150%
+ok 203 - el reloj visual sigue AVAudioEngine sin seeks pequeños en 50–150%
+  ---
+  duration_ms: 0.312291
+  type: 'test'
+  ...
+# Subtest: el fade conserva separado el volumen configurado y la ganancia temporal
+ok 204 - el fade conserva separado el volumen configurado y la ganancia temporal
+  ---
+  duration_ms: 0.08825
+  type: 'test'
+  ...
+# Subtest: el grafo único conecta karaoke, stems y ambiente a la misma salida
+ok 205 - el grafo único conecta karaoke, stems y ambiente a la misma salida
+  ---
+  duration_ms: 0.216125
+  type: 'test'
+  ...
+# Subtest: la UI de diagnósticos escapa texto y atributos antes de usar HTML
+ok 206 - la UI de diagnósticos escapa texto y atributos antes de usar HTML
+  ---
+  duration_ms: 0.074625
+  type: 'test'
+  ...
+# Subtest: Play follows the final paused seek owner before using the committed clock
+ok 207 - Play follows the final paused seek owner before using the committed clock
+  ---
+  duration_ms: 3.071583
+  type: 'test'
+  ...
+# Subtest: 200 scrub inputs preview locally; release dispatches only latest immediately
+ok 208 - 200 scrub inputs preview locally; release dispatches only latest immediately
+  ---
+  duration_ms: 0.8225
+  type: 'test'
+  ...
+# Subtest: new final destination supersedes unfinished seek without waiting; old reply never commits
+ok 209 - new final destination supersedes unfinished seek without waiting; old reply never commits
+  ---
+  duration_ms: 0.5585
+  type: 'test'
+  ...
+# Subtest: track change cancels seek and rejects previous source completion
+ok 210 - track change cancels seek and rejects previous source completion
+  ---
+  duration_ms: 0.387792
+  type: 'test'
+  ...
+# Subtest: pointer cancel does not commit; keyboard change commits and clamps target
+ok 211 - pointer cancel does not commit; keyboard change commits and clamps target
+  ---
+  duration_ms: 0.903708
+  type: 'test'
+  ...
+# Subtest: Vocal adds vocals while accompaniment stays at reference gain throughout 0–100%
+ok 212 - Vocal adds vocals while accompaniment stays at reference gain throughout 0–100%
+  ---
+  duration_ms: 0.215916
+  type: 'test'
+  ...
+# Subtest: native transport ticks use no full snapshot publication or Lyrics refresh
+ok 213 - native transport ticks use no full snapshot publication or Lyrics refresh
+  ---
+  duration_ms: 0.313125
+  type: 'test'
+  ...
+# Subtest: superseded native requests release IPC pending map and timeout immediately
+ok 214 - superseded native requests release IPC pending map and timeout immediately
+  ---
+  duration_ms: 0.534917
+  type: 'test'
+  ...
+# Subtest: a native snapshot from before seek cannot overwrite committed media clock
+ok 215 - a native snapshot from before seek cannot overwrite committed media clock
+  ---
+  duration_ms: 0.323875
+  type: 'test'
+  ...
+# Subtest: a seek staged during source preparation does not claim a native revision until load ready
+ok 216 - a seek staged during source preparation does not claim a native revision until load ready
+  ---
+  duration_ms: 0.571583
+  type: 'test'
+  ...
+# Subtest: Saltar: el primer click y Cancelar no modifican A
+ok 217 - Saltar: el primer click y Cancelar no modifican A
+  ---
+  duration_ms: 1.596166
+  type: 'test'
+  ...
+# Subtest: Saltar: solo la segunda confirmación libera A
+ok 218 - Saltar: solo la segunda confirmación libera A
+  ---
+  duration_ms: 0.530667
+  type: 'test'
+  ...
+# Subtest: Ya cantó: el primer click y Cancelar no modifican A
+ok 219 - Ya cantó: el primer click y Cancelar no modifican A
+  ---
+  duration_ms: 0.279625
+  type: 'test'
+  ...
+# Subtest: Ya cantó: solo la segunda confirmación libera A
+ok 220 - Ya cantó: solo la segunda confirmación libera A
+  ---
+  duration_ms: 0.358041
+  type: 'test'
+  ...
+# Subtest: Quitar de todas formas: el primer click y Cancelar no modifican A
+ok 221 - Quitar de todas formas: el primer click y Cancelar no modifican A
+  ---
+  duration_ms: 0.249292
+  type: 'test'
+  ...
+# Subtest: Quitar de todas formas: solo la segunda confirmación libera A
+ok 222 - Quitar de todas formas: solo la segunda confirmación libera A
+  ---
+  duration_ms: 0.271125
+  type: 'test'
+  ...
+# Subtest: Devolver: Cancelar conserva la sesión y confirmar la libera
+ok 223 - Devolver: Cancelar conserva la sesión y confirmar la libera
+  ---
+  duration_ms: 0.559416
+  type: 'test'
+  ...
+# Subtest: acciones sobre B no pausan ni descargan la sesión A
+ok 224 - acciones sobre B no pausan ni descargan la sesión A
+  ---
+  duration_ms: 0.338416
+  type: 'test'
+  ...
+# Subtest: el guard central rechaza B/C/D/E antes de cualquier operación de transporte
+ok 225 - el guard central rechaza B/C/D/E antes de cualquier operación de transporte
+  ---
+  duration_ms: 0.848166
+  type: 'test'
+  ...
+# Subtest: Superhost suspende la canción al cambiar de actividad y conserva su posición sin finalizar
+ok 226 - Superhost suspende la canción al cambiar de actividad y conserva su posición sin finalizar
+  ---
+  duration_ms: 0.583583
+  type: 'test'
+  ...
+# Subtest: copies an already decoded local frame without mutating or controlling media
+ok 227 - copies an already decoded local frame without mutating or controlling media
+  ---
+  duration_ms: 0.414916
+  type: 'test'
+  ...
+# Subtest: repeated ON/OFF changes hide only the visual layer
+ok 228 - repeated ON/OFF changes hide only the visual layer
+  ---
+  duration_ms: 0.208292
+  type: 'test'
+  ...
+# Subtest: missing frame, audio-only media and broken media use normal background
+ok 229 - missing frame, audio-only media and broken media use normal background
+  ---
+  duration_ms: 0.360916
+  type: 'test'
+  ...
+# Subtest: a stale track, different source or external URL never supplies the backdrop
+ok 230 - a stale track, different source or external URL never supplies the backdrop
+  ---
+  duration_ms: 0.119
+  type: 'test'
+  ...
+# Subtest: frame rendering failure clears a previously visible background
+ok 231 - frame rendering failure clears a previously visible background
+  ---
+  duration_ms: 0.076875
+  type: 'test'
+  ...
+# Subtest: can use an existing preview frame when the principal media is metadata-only
+ok 232 - can use an existing preview frame when the principal media is metadata-only
+  ---
+  duration_ms: 0.047625
+  type: 'test'
+  ...
+# Subtest: bridge: confirmed schedule exits with success without opening activity
+ok 233 - bridge: confirmed schedule exits with success without opening activity
+  ---
+  duration_ms: 1.580417
+  type: 'test'
+  ...
+# Subtest: bridge: free confirmation calls open once and applies confirmed state
+ok 234 - bridge: free confirmation calls open once and applies confirmed state
+  ---
+  duration_ms: 0.35425
+  type: 'test'
+  ...
+# Subtest: bridge: pending free confirmation produces no premature success
+ok 235 - bridge: pending free confirmation produces no premature success
+  ---
+  duration_ms: 0.314833
+  type: 'test'
+  ...
+# Subtest: bridge: failed free confirmation does not report success
+ok 236 - bridge: failed free confirmation does not report success
+  ---
+  duration_ms: 0.292292
+  type: 'test'
+  ...
+# Subtest: bridge: cancelling preparation releases controls
+ok 237 - bridge: cancelling preparation releases controls
+  ---
+  duration_ms: 0.217584
+  type: 'test'
+  ...
+# Subtest: player: confirmed schedule exits with success without opening activity
+ok 238 - player: confirmed schedule exits with success without opening activity
+  ---
+  duration_ms: 0.2695
+  type: 'test'
+  ...
+# Subtest: player: free confirmation calls open once and applies confirmed state
+ok 239 - player: free confirmation calls open once and applies confirmed state
+  ---
+  duration_ms: 0.247125
+  type: 'test'
+  ...
+# Subtest: player: pending free confirmation produces no premature success
+ok 240 - player: pending free confirmation produces no premature success
+  ---
+  duration_ms: 0.1935
+  type: 'test'
+  ...
+# Subtest: player: failed free confirmation does not report success
+ok 241 - player: failed free confirmation does not report success
+  ---
+  duration_ms: 0.41425
+  type: 'test'
+  ...
+# Subtest: player: cancelling preparation releases controls
+ok 242 - player: cancelling preparation releases controls
+  ---
+  duration_ms: 0.720541
+  type: 'test'
+  ...
+# Subtest: bridge: platform free mode waits for confirmation and updates shared state
+ok 243 - bridge: platform free mode waits for confirmation and updates shared state
+  ---
+  duration_ms: 0.2855
+  type: 'test'
+  ...
+# Subtest: bridge: platform free mode failure reports error without success
+ok 244 - bridge: platform free mode failure reports error without success
+  ---
+  duration_ms: 0.212458
+  type: 'test'
+  ...
+# Subtest: player: platform free mode waits for confirmation and updates shared state
+ok 245 - player: platform free mode waits for confirmation and updates shared state
+  ---
+  duration_ms: 0.181583
+  type: 'test'
+  ...
+# Subtest: player: platform free mode failure reports error without success
+ok 246 - player: platform free mode failure reports error without success
+  ---
+  duration_ms: 0.186584
+  type: 'test'
+  ...
+# Subtest: Request, Host and Bridge operate only on D1 and never on Apps Script
+ok 247 - Request, Host and Bridge operate only on D1 and never on Apps Script
+  ---
+  duration_ms: 3.839
+  type: 'test'
+  ...
+# Subtest: el Bridge genera el QR localmente y no intenta mostrar un archivo de Drive
+ok 248 - el Bridge genera el QR localmente y no intenta mostrar un archivo de Drive
+  ---
+  duration_ms: 2.452458
+  type: 'test'
+  ...
+# Subtest: el generador incluido codifica el enlace público sin conexión externa
+ok 249 - el generador incluido codifica el enlace público sin conexión externa
+  ---
+  duration_ms: 10.254167
+  type: 'test'
+  ...
+# Subtest: acciones consecutivas sobre otras canciones y Deshacer no operan el transporte activo
+ok 250 - acciones consecutivas sobre otras canciones y Deshacer no operan el transporte activo
+  ---
+  duration_ms: 1.275167
+  type: 'test'
+  ...
+# Subtest: toast compacto: no roba foco, conserva varios Deshacer y desaparece automáticamente
+ok 251 - toast compacto: no roba foco, conserva varios Deshacer y desaparece automáticamente
+  ---
+  duration_ms: 0.4505
+  type: 'test'
+  ...
+# Subtest: espera tres lecturas ausentes antes de confirmar que una pista salió
+ok 252 - espera tres lecturas ausentes antes de confirmar que una pista salió
+  ---
+  duration_ms: 0.587292
+  type: 'test'
+  ...
+# Subtest: la gracia de inserción evita el ciclo agregado a pendiente
+ok 253 - la gracia de inserción evita el ciclo agregado a pendiente
+  ---
+  duration_ms: 0.070125
+  type: 'test'
+  ...
+# Subtest: una coincidencia restablece el contador de ausencias
+ok 254 - una coincidencia restablece el contador de ausencias
+  ---
+  duration_ms: 0.089458
+  type: 'test'
+  ...
+# Subtest: un comando aceptado nunca vuelve a pendiente ni se reenvía por baja coincidencia
+ok 255 - un comando aceptado nunca vuelve a pendiente ni se reenvía por baja coincidencia
+  ---
+  duration_ms: 0.118833
+  type: 'test'
+  ...
+# Subtest: detecta qué solicitudes siguen realmente en la cola de VirtualDJ
+ok 256 - detecta qué solicitudes siguen realmente en la cola de VirtualDJ
+  ---
+  duration_ms: 1.801292
+  type: 'test'
+  ...
+# Subtest: asigna por separado dos entradas repetidas en la cola
+ok 257 - asigna por separado dos entradas repetidas en la cola
+  ---
+  duration_ms: 0.212291
+  type: 'test'
+  ...
+# Subtest: reconcilia por cantante y metadatos cuando VirtualDJ no entrega filepath
+ok 258 - reconcilia por cantante y metadatos cuando VirtualDJ no entrega filepath
+  ---
+  duration_ms: 0.073417
+  type: 'test'
+  ...
+# Subtest: tolera un typo del artista si cantante y canción coinciden
+ok 259 - tolera un typo del artista si cantante y canción coinciden
+  ---
+  duration_ms: 0.111625
+  type: 'test'
+  ...
+# Subtest: preserva un vínculo manual aunque el título tenga baja coincidencia
+ok 260 - preserva un vínculo manual aunque el título tenga baja coincidencia
+  ---
+  duration_ms: 0.453083
+  type: 'test'
+  ...
+# Subtest: no usa solo cantante y duración cuando dos vínculos compiten
+ok 261 - no usa solo cantante y duración cuando dos vínculos compiten
+  ---
+  duration_ms: 0.152375
+  type: 'test'
+  ...
+# Subtest: reconoce Mi Vida aunque VirtualDJ invierta título y artista
+ok 262 - reconoce Mi Vida aunque VirtualDJ invierta título y artista
+  ---
+  duration_ms: 0.108458
+  type: 'test'
+  ...
+# Subtest: no vincula metadatos únicos si el cantante físico de VirtualDJ es otro
+ok 263 - no vincula metadatos únicos si el cantante físico de VirtualDJ es otro
+  ---
+  duration_ms: 0.169833
+  type: 'test'
+  ...
+# Subtest: no vincula una pista propia por ruta, título o identificador si el cantante no coincide
+ok 264 - no vincula una pista propia por ruta, título o identificador si el cantante no coincide
+  ---
+  duration_ms: 0.261333
+  type: 'test'
+  ...
+# Subtest: clasifica como propias las filas de la captura con cantantes distintos
+ok 265 - clasifica como propias las filas de la captura con cantantes distintos
+  ---
+  duration_ms: 1.221833
+  type: 'test'
+  ...
+# Subtest: un vínculo manual estable sigue protegido aunque cambien cantante y metadatos
+ok 266 - un vínculo manual estable sigue protegido aunque cambien cantante y metadatos
+  ---
+  duration_ms: 0.114292
+  type: 'test'
+  ...
+# Subtest: una pista ya reconocida como propia de VirtualDJ no se adopta por coincidencia
+ok 267 - una pista ya reconocida como propia de VirtualDJ no se adopta por coincidencia
+  ---
+  duration_ms: 0.073084
+  type: 'test'
+  ...
+# Subtest: solo el vínculo manual exacto puede reclamar una pista externa conocida
+ok 268 - solo el vínculo manual exacto puede reclamar una pista externa conocida
+  ---
+  duration_ms: 0.054042
+  type: 'test'
+  ...
+# Subtest: no adivina por metadatos cuando dos solicitudes compiten por la misma canción
+ok 269 - no adivina por metadatos cuando dos solicitudes compiten por la misma canción
+  ---
+  duration_ms: 0.063542
+  type: 'test'
+  ...
+# Subtest: mantiene el identificador estable cuando VirtualDJ reordena la cola
+ok 270 - mantiene el identificador estable cuando VirtualDJ reordena la cola
+  ---
+  duration_ms: 0.059375
+  type: 'test'
+  ...
+# Subtest: prefiere el vínculo estable y expone pistas externas sin perder duplicados
+ok 271 - prefiere el vínculo estable y expone pistas externas sin perder duplicados
+  ---
+  duration_ms: 0.113166
+  type: 'test'
+  ...
+# Subtest: la cola de cuatro filas conserva tres pistas propias y vincula una sola solicitud
+ok 272 - la cola de cuatro filas conserva tres pistas propias y vincula una sola solicitud
+  ---
+  duration_ms: 0.176333
+  type: 'test'
+  ...
+# Subtest: conserva solo entradas eliminables de VirtualDJ
+ok 273 - conserva solo entradas eliminables de VirtualDJ
+  ---
+  duration_ms: 0.921708
+  type: 'test'
+  ...
+# Subtest: la rotación infinita no repite antes de completar una vuelta
+ok 274 - la rotación infinita no repite antes de completar una vuelta
+  ---
+  duration_ms: 0.800458
+  type: 'test'
+  ...
+# Subtest: una vuelta nueva evita repetir inmediatamente el último tema
+ok 275 - una vuelta nueva evita repetir inmediatamente el último tema
+  ---
+  duration_ms: 0.173209
+  type: 'test'
+  ...
+# Subtest: los favoritos se limpian, deduplican y conservan por canción y artista
+ok 276 - los favoritos se limpian, deduplican y conservan por canción y artista
+  ---
+  duration_ms: 0.112542
+  type: 'test'
+  ...
+# Subtest: authentication timeout closes the actual Node WebSocket without terminating the bridge
+ok 277 - authentication timeout closes the actual Node WebSocket without terminating the bridge
+  ---
+  duration_ms: 16.614625
+  type: 'test'
+  ...
+# Subtest: healthy heartbeat uses only the socket and owns one timer
+ok 278 - healthy heartbeat uses only the socket and owns one timer
+  ---
+  duration_ms: 0.906291
+  type: 'test'
+  ...
+# Subtest: a silent socket is detached even if close never emits an event
+ok 279 - a silent socket is detached even if close never emits an event
+  ---
+  duration_ms: 0.393125
+  type: 'test'
+  ...
+# Subtest: durable reconciliation runs even while valid pongs keep the socket healthy
+ok 280 - durable reconciliation runs even while valid pongs keep the socket healthy
+  ---
+  duration_ms: 0.477833
+  type: 'test'
+  ...
+# Subtest: retired generations cannot refresh, ping, reconnect or create another timer
+ok 281 - retired generations cannot refresh, ping, reconnect or create another timer
+  ---
+  duration_ms: 0.323458
+  type: 'test'
+  ...
+# Subtest: persisted requests survive lost invalidations, silent sockets, command stalls, outages and restart
+ok 282 - persisted requests survive lost invalidations, silent sockets, command stalls, outages and restart
+  ---
+  duration_ms: 7653.52275
+  type: 'test'
+  ...
+# lost fourth recovered
+# {"accepted":225,"received":225,"reads":136,"connections":4,"soakMs":2,"soakCount":0,"p95Ms":31.035792000000015,"maxMs":716.11725,"acceleratedTimers":true}
+# Subtest: conserva el orden de llegada aunque cambie la posición de VirtualDJ
+ok 283 - conserva el orden de llegada aunque cambie la posición de VirtualDJ
+  ---
+  duration_ms: 0.596292
+  type: 'test'
+  ...
+# Subtest: recolocar una canción no altera su número de llegada
+ok 284 - recolocar una canción no altera su número de llegada
+  ---
+  duration_ms: 0.06525
+  type: 'test'
+  ...
+# Subtest: los resultados finales conservan su llegada para separarlos en la interfaz
+ok 285 - los resultados finales conservan su llegada para separarlos en la interfaz
+  ---
+  duration_ms: 0.052375
+  type: 'test'
+  ...
+# Subtest: mantiene solicitudes online separadas de las pistas propias de VirtualDJ
+ok 286 - mantiene solicitudes online separadas de las pistas propias de VirtualDJ
+  ---
+  duration_ms: 0.722375
+  type: 'test'
+  ...
+# Subtest: oculta filas técnicas antiguas aunque hayan perdido su tipo de origen
+ok 287 - oculta filas técnicas antiguas aunque hayan perdido su tipo de origen
+  ---
+  duration_ms: 0.069375
+  type: 'test'
+  ...
+# Subtest: conserva la misma solicitud visible cuando una actualización reconstruye la lista
+ok 288 - conserva la misma solicitud visible cuando una actualización reconstruye la lista
+  ---
+  duration_ms: 0.680625
+  type: 'test'
+  ...
+# Subtest: conserva el desplazamiento numérico de la cola VDJ si el ancla desaparece
+ok 289 - conserva el desplazamiento numérico de la cola VDJ si el ancla desaparece
+  ---
+  duration_ms: 0.075125
+  type: 'test'
+  ...
+# Subtest: reconcilia retiro, reingreso, orden y opciones de YouTube
+ok 290 - reconcilia retiro, reingreso, orden y opciones de YouTube
+  ---
+  duration_ms: 18101.320667
+  type: 'test'
+  ...
+# Subtest: activity mutations commit without a second cloud fetch; duplicate windows serialize; finish preserves loaded deck and history
+ok 291 - activity mutations commit without a second cloud fetch; duplicate windows serialize; finish preserves loaded deck and history
+  ---
+  duration_ms: 1442.173583
+  type: 'test'
+  ...
+# Subtest: all guest-facing shared catalogs cover the same eight stable language IDs
+ok 292 - all guest-facing shared catalogs cover the same eight stable language IDs
+  ---
+  duration_ms: 0.59575
+  type: 'test'
+  ...
+# Subtest: Plan B is local, filter-ready and avoids immediate repeats when fresh songs exist
+ok 293 - Plan B is local, filter-ready and avoids immediate repeats when fresh songs exist
+  ---
+  duration_ms: 0.265
+  type: 'test'
+  ...
+# Subtest: Host Plan B derives its existing rotations from the same logical song metadata catalog
+ok 294 - Host Plan B derives its existing rotations from the same logical song metadata catalog
+  ---
+  duration_ms: 1.517458
+  type: 'test'
+  ...
+# Subtest: the selected funny message is deterministic for Preview and Star Screen payload parity
+ok 295 - the selected funny message is deterministic for Preview and Star Screen payload parity
+  ---
+  duration_ms: 0.099
+  type: 'test'
+  ...
+# Subtest: la selección responde antes de ejecutar la sincronización completa
+ok 296 - la selección responde antes de ejecutar la sincronización completa
+  ---
+  duration_ms: 0.659458
+  type: 'test'
+  ...
+# Subtest: la sesión revocable queda disponible aunque Keychain no responda
+ok 297 - la sesión revocable queda disponible aunque Keychain no responda
+  ---
+  duration_ms: 0.169208
+  type: 'test'
+  ...
+# Subtest: el Superhost administra credenciales permanentes sin revelar hashes
+ok 298 - el Superhost administra credenciales permanentes sin revelar hashes
+  ---
+  duration_ms: 0.111667
+  type: 'test'
+  ...
+# Subtest: los ocho idiomas se configuran por actividad
+ok 299 - los ocho idiomas se configuran por actividad
+  ---
+  duration_ms: 0.153292
+  type: 'test'
+  ...
+# Subtest: cada acción del menú More tiene un control único y un manejador real
+ok 300 - cada acción del menú More tiene un control único y un manejador real
+  ---
+  duration_ms: 0.291041
+  type: 'test'
+  ...
+# Subtest: canvas canónico mantiene 16:9 con contain y letterboxing en resoluciones reales
+ok 301 - canvas canónico mantiene 16:9 con contain y letterboxing en resoluciones reales
+  ---
+  duration_ms: 0.387459
+  type: 'test'
+  ...
+# Subtest: Preview y Star Screen usan el mismo canvas, sin ramas visuales internas
+ok 302 - Preview y Star Screen usan el mismo canvas, sin ramas visuales internas
+  ---
+  duration_ms: 2.6445
+  type: 'test'
+  ...
+# Subtest: altura natural de Star Lineup contiene 1–5 filas consistentes dentro del área central
+ok 303 - altura natural de Star Lineup contiene 1–5 filas consistentes dentro del área central
+  ---
+  duration_ms: 0.304
+  type: 'test'
+  ...
+# Subtest: A: Perry displays exact guest semantics, never the unrelated playback filename; projection cannot mutate source
+ok 304 - A: Perry displays exact guest semantics, never the unrelated playback filename; projection cannot mutate source
+  ---
+  duration_ms: 1.203459
+  type: 'test'
+  ...
+# Subtest: B: counts 1–5 select the next real requests, excluding current on-stage singer
+ok 305 - B: counts 1–5 select the next real requests, excluding current on-stage singer
+  ---
+  duration_ms: 0.4605
+  type: 'test'
+  ...
+# Subtest: C: five configured with two available renders only two, without fillers or duplicates
+ok 306 - C: five configured with two available renders only two, without fillers or duplicates
+  ---
+  duration_ms: 0.069208
+  type: 'test'
+  ...
+# Subtest: D: reorder, add, remove, skip, sung and hidden requests derive immediately from the actual input queue
+ok 307 - D: reorder, add, remove, skip, sung and hidden requests derive immediately from the actual input queue
+  ---
+  duration_ms: 0.296708
+  type: 'test'
+  ...
+# Subtest: fallback hierarchy, local source and privacy: no paths, extensions or internal identifiers
+ok 308 - fallback hierarchy, local source and privacy: no paths, extensions or internal identifiers
+  ---
+  duration_ms: 0.108583
+  type: 'test'
+  ...
+# Subtest: F: existing config storage round-trip persists presentation preferences, merges partial updates and rejects invalid counts
+ok 309 - F: existing config storage round-trip persists presentation preferences, merges partial updates and rejects invalid counts
+  ---
+  duration_ms: 0.829417
+  type: 'test'
+  ...
+# Subtest: E: actual Star Screen preference handler updates live DOM without play, pause, load, seek or rate writes
+ok 310 - E: actual Star Screen preference handler updates live DOM without play, pause, load, seek or rate writes
+  ---
+  duration_ms: 6.535542
+  type: 'test'
+  ...
+# Subtest: AUTO consulta primero el mejor caché y nunca espera una mejora Demucs
+ok 311 - AUTO consulta primero el mejor caché y nunca espera una mejora Demucs
+  ---
+  duration_ms: 0.583916
+  type: 'test'
+  ...
+# Subtest: la fuente queda bloqueada durante reproducción y no cambia por una mejora tardía
+ok 312 - la fuente queda bloqueada durante reproducción y no cambia por una mejora tardía
+  ---
+  duration_ms: 0.076042
+  type: 'test'
+  ...
+# Subtest: normaliza el motor e identifica cada trabajo por solicitud y motor
+ok 313 - normaliza el motor e identifica cada trabajo por solicitud y motor
+  ---
+  duration_ms: 0.089042
+  type: 'test'
+  ...
+# Subtest: prioriza Spleeter requerido, luego Spleeter opcional y Demucs explícito
+ok 314 - prioriza Spleeter requerido, luego Spleeter opcional y Demucs explícito
+  ---
+  duration_ms: 0.123125
+  type: 'test'
+  ...
+# Subtest: estima el tiempo hasta el turno usando progreso, duraciones y transiciones
+ok 315 - estima el tiempo hasta el turno usando progreso, duraciones y transiciones
+  ---
+  duration_ms: 0.093666
+  type: 'test'
+  ...
+# Subtest: IDLE, LIVE y PRESSURE se derivan de señales reales de reproducción y recursos
+ok 316 - IDLE, LIVE y PRESSURE se derivan de señales reales de reproducción y recursos
+  ---
+  duration_ms: 0.099334
+  type: 'test'
+  ...
+# Subtest: la histéresis escala de inmediato y recupera capacidad de forma gradual
+ok 317 - la histéresis escala de inmediato y recupera capacidad de forma gradual
+  ---
+  duration_ms: 0.151792
+  type: 'test'
+  ...
+# Subtest: Demucs admite como máximo una tarea pesada y PRESSURE pausa ambos motores
+ok 318 - Demucs admite como máximo una tarea pesada y PRESSURE pausa ambos motores
+  ---
+  duration_ms: 0.103
+  type: 'test'
+  ...
+# Subtest: la huella identifica el contenido y no depende del nombre ni de la ruta
+ok 319 - la huella identifica el contenido y no depende del nombre ni de la ruta
+  ---
+  duration_ms: 4.194709
+  type: 'test'
+  ...
+# Subtest: la clave de caché separa huella, motor, versión de modelo y formato
+ok 320 - la clave de caché separa huella, motor, versión de modelo y formato
+  ---
+  duration_ms: 0.304667
+  type: 'test'
+  ...
+# Subtest: acepta únicamente un manifiesto completo con ambos stems y duraciones coherentes
+ok 321 - acepta únicamente un manifiesto completo con ambos stems y duraciones coherentes
+  ---
+  duration_ms: 0.402625
+  type: 'test'
+  ...
+# Subtest: inspecciona una entrada íntegra y devuelve rutas del motor bloqueado
+ok 322 - inspecciona una entrada íntegra y devuelve rutas del motor bloqueado
+  ---
+  duration_ms: 2.580917
+  type: 'test'
+  ...
+# Subtest: rechaza cachés parciales, corruptos, demasiado pequeños o de otro modelo
+ok 323 - rechaza cachés parciales, corruptos, demasiado pequeños o de otro modelo
+  ---
+  duration_ms: 2.4905
+  type: 'test'
+  ...
+# Subtest: las rutas de Spleeter y Demucs nunca comparten la misma entrada
+ok 324 - las rutas de Spleeter y Demucs nunca comparten la misma entrada
+  ---
+  duration_ms: 0.631208
+  type: 'test'
+  ...
+# Subtest: storage HTTP: isolated real endpoints, live update after file changes, no originals and safe reveal
+ok 325 - storage HTTP: isolated real endpoints, live update after file changes, no originals and safe reveal
+  ---
+  duration_ms: 108.400167
+  type: 'test'
+  ...
+# Subtest: storage UI: calculating, actual values, path tooltip and language without scanning again
+ok 326 - storage UI: calculating, actual values, path tooltip and language without scanning again
+  ---
+  duration_ms: 8.769709
+  type: 'test'
+  ...
+# Subtest: storage UI: unavailable and partial results never show a misleading total
+ok 327 - storage UI: unavailable and partial results never show a misleading total
+  ---
+  duration_ms: 0.173
+  type: 'test'
+  ...
+# Subtest: storage UI: existing state transitions refresh once; clocks/progress and closed dialog do not poll
+ok 328 - storage UI: existing state transitions refresh once; clocks/progress and closed dialog do not poll
+  ---
+  duration_ms: 1203.201958
+  type: 'test'
+  ...
+# Subtest: storage UI: Finder sends only the location ID and reports absent folder fallback
+ok 329 - storage UI: Finder sends only the location ID and reports absent folder fallback
+  ---
+  duration_ms: 1.046416
+  type: 'test'
+  ...
+# Subtest: storage UI: translation and direct compact Preferences surface
+ok 330 - storage UI: translation and direct compact Preferences surface
+  ---
+  duration_ms: 2.575958
+  type: 'test'
+  ...
+# Subtest: storage: absent and empty folders measure zero without creating them
+ok 331 - storage: absent and empty folders measure zero without creating them
+  ---
+  duration_ms: 5.420958
+  type: 'test'
+  ...
+# Subtest: storage: nested stems, legacy files, work files and native audio only; originals excluded
+ok 332 - storage: nested stems, legacy files, work files and native audio only; originals excluded
+  ---
+  duration_ms: 3.464333
+  type: 'test'
+  ...
+# Subtest: storage: folder aliases deduplicate and IDs remain stable when libraries reorder
+ok 333 - storage: folder aliases deduplicate and IDs remain stable when libraries reorder
+  ---
+  duration_ms: 0.903542
+  type: 'test'
+  ...
+# Subtest: storage: symbolic links never add external files or enter cycles
+ok 334 - storage: symbolic links never add external files or enter cycles
+  ---
+  duration_ms: 1.495375
+  type: 'test'
+  ...
+# Subtest: storage: thousands of files and multi-GB logical sizes do not read media or block the loop
+ok 335 - storage: thousands of files and multi-GB logical sizes do not read media or block the loop
+  ---
+  duration_ms: 94.861167
+  type: 'test'
+  ...
+# Subtest: storage: unreadable folder makes total incomplete, not a false zero
+ok 336 - storage: unreadable folder makes total incomplete, not a false zero
+  ---
+  duration_ms: 1.31225
+  type: 'test'
+  ...
+# Subtest: storage: Finder reveals allowlisted folders only, missing cache reveals parent without mutation
+ok 337 - storage: Finder reveals allowlisted folders only, missing cache reveals parent without mutation
+  ---
+  duration_ms: 1.39725
+  type: 'test'
+  ...
+# Subtest: storage: decimal KB/MB/GB/TB formatting matches Finder-style units
+ok 338 - storage: decimal KB/MB/GB/TB formatting matches Finder-style units
+  ---
+  duration_ms: 0.223292
+  type: 'test'
+  ...
+# Subtest: Superhost starts in administration even with a remembered running session
+ok 339 - Superhost starts in administration even with a remembered running session
+  ---
+  duration_ms: 1.360667
+  type: 'test'
+  ...
+# Subtest: explicit activity switching still opens the picker for Superhost
+ok 340 - explicit activity switching still opens the picker for Superhost
+  ---
+  duration_ms: 0.619583
+  type: 'test'
+  ...
+# Subtest: Superhost sees the hotel, venue and activity fields immediately in the picker
+ok 341 - Superhost sees the hotel, venue and activity fields immediately in the picker
+  ---
+  duration_ms: 0.44475
+  type: 'test'
+  ...
+# Subtest: Host retains automatic entry into its running activity
+ok 342 - Host retains automatic entry into its running activity
+  ---
+  duration_ms: 0.377
+  type: 'test'
+  ...
+# Subtest: a new login can initialize its own landing panel after logout
+ok 343 - a new login can initialize its own landing panel after logout
+  ---
+  duration_ms: 0.32175
+  type: 'test'
+  ...
+# Subtest: Superhost chooses an activity instead of silently reusing the previous Host context
+ok 344 - Superhost chooses an activity instead of silently reusing the previous Host context
+  ---
+  duration_ms: 0.306167
+  type: 'test'
+  ...
+# Subtest: Superhost changing Host context uses the existing workspace exit path
+ok 345 - Superhost changing Host context uses the existing workspace exit path
+  ---
+  duration_ms: 0.323875
+  type: 'test'
+  ...
+# Subtest: Host can return to Superhost without a selection modal covering administration
+ok 346 - Host can return to Superhost without a selection modal covering administration
+  ---
+  duration_ms: 0.342208
+  type: 'test'
+  ...
+# Subtest: las líneas siguen pausa, saltos hacia atrás, huecos y final
+ok 347 - las líneas siguen pausa, saltos hacia atrás, huecos y final
+  ---
+  duration_ms: 0.603667
+  type: 'test'
+  ...
+# Subtest: Star Screen nunca muestra letras de otra pista, fuente o escena
+ok 348 - Star Screen nunca muestra letras de otra pista, fuente o escena
+  ---
+  duration_ms: 0.318916
+  type: 'test'
+  ...
+# Subtest: publicar antes de renderizar una selección nueva no relabela letras antiguas
+ok 349 - publicar antes de renderizar una selección nueva no relabela letras antiguas
+  ---
+  duration_ms: 0.119333
+  type: 'test'
+  ...
+# Subtest: cambiar canción invalida respuestas lentas y borra la letra anterior inmediatamente
+ok 350 - cambiar canción invalida respuestas lentas y borra la letra anterior inmediatamente
+  ---
+  duration_ms: 2.227917
+  type: 'test'
+  ...
+# Subtest: reemplazar fuente con el mismo id también invalida respuestas pendientes
+ok 351 - reemplazar fuente con el mismo id también invalida respuestas pendientes
+  ---
+  duration_ms: 0.321291
+  type: 'test'
+  ...
+# Subtest: audio sin cache comienza una vez; video espera una acción explícita
+ok 352 - audio sin cache comienza una vez; video espera una acción explícita
+  ---
+  duration_ms: 0.3145
+  type: 'test'
+  ...
+# Subtest: una letra en cache evita ASR; polling terminado no continúa y cancelar gana a una respuesta tardía
+ok 353 - una letra en cache evita ASR; polling terminado no continúa y cancelar gana a una respuesta tardía
+  ---
+  duration_ms: 0.318
+  type: 'test'
+  ...
+# Subtest: errores conservan un fallback vacío y una nueva selección puede recuperarse
+ok 354 - errores conservan un fallback vacío y una nueva selección puede recuperarse
+  ---
+  duration_ms: 0.468708
+  type: 'test'
+  ...
+# Subtest: cue inválido se descarta, texto se limita y la UI trata la letra como texto
+ok 355 - cue inválido se descarta, texto se limita y la UI trata la letra como texto
+  ---
+  duration_ms: 1.508042
+  type: 'test'
+  ...
+# Subtest: el DOM real de Star Screen muestra dos líneas, responde al reloj y limpia al cambiar de pista
+ok 356 - el DOM real de Star Screen muestra dos líneas, responde al reloj y limpia al cambiar de pista
+  ---
+  duration_ms: 3.353333
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 1: A/B/C real queue: free Deck 1 loads A in the fast local loop, without adding or moving
+ok 357 - HEAD TEST 1: A/B/C real queue: free Deck 1 loads A in the fast local loop, without adding or moving
+  ---
+  duration_ms: 388.460084
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 2: playing X is protected; A loads as soon as Deck 1 is safe
+ok 358 - HEAD TEST 2: playing X is protected; A loads as soon as Deck 1 is safe
+  ---
+  duration_ms: 1387.690542
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 3: A already loaded: repeated cycles never reload it
+ok 359 - HEAD TEST 3: A already loaded: repeated cycles never reload it
+  ---
+  duration_ms: 1263.086959
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 4: A leaves the real queue: B is loaded with its existing singer and no duplicate
+ok 360 - HEAD TEST 4: A leaves the real queue: B is loaded with its existing singer and no duplicate
+  ---
+  duration_ms: 373.557334
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 5: missing Waiting never inserted, loaded or restored
+ok 361 - HEAD TEST 5: missing Waiting never inserted, loaded or restored
+  ---
+  duration_ms: 1275.964875
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 6: absent Completed/Omitted never return through automatic loading
+ok 362 - HEAD TEST 6: absent Completed/Omitted never return through automatic loading
+  ---
+  duration_ms: 1373.973458
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 7: sync/reload/reconnect loads only a confirmed real \#1
+ok 363 - HEAD TEST 7: sync/reload/reconnect loads only a confirmed real \#1
+  ---
+  duration_ms: 1621.388208
+  type: 'test'
+  ...
+# Subtest: execution guard rejects changed head, changed singer, newly playing/audible state, reused capability and enqueue
+ok 364 - execution guard rejects changed head, changed singer, newly playing/audible state, reused capability and enqueue
+  ---
+  duration_ms: 3.424375
+  type: 'test'
+  ...
+# Subtest: deny-by-default at transport for all automatic enqueue origins, observation writes and forged capabilities
+ok 365 - deny-by-default at transport for all automatic enqueue origins, observation writes and forged capabilities
+  ---
+  duration_ms: 0.908208
+  type: 'test'
+  ...
+# Subtest: durable consumed commands cannot run after restart, ID collision, changed scope or corrupted ledger
+ok 366 - durable consumed commands cannot run after restart, ID collision, changed scope or corrupted ledger
+  ---
+  duration_ms: 163.351458
+  type: 'test'
+  ...
+# Subtest: native LOAD Singer reset preserves request ID, physical row ID, singer and lifecycle across sync/restart
+ok 367 - native LOAD Singer reset preserves request ID, physical row ID, singer and lifecycle across sync/restart
+  ---
+  duration_ms: 511.303458
+  type: 'test'
+  ...
+# Subtest: TEST 1: 20 synchronizations keep the real A/B queue; autoQueueExact=true cannot send Waiting
+ok 368 - TEST 1: 20 synchronizations keep the real A/B queue; autoQueueExact=true cannot send Waiting
+  ---
+  duration_ms: 283.166166
+  type: 'test'
+  ...
+# Subtest: TEST 2: manual VDJ disappearance is observed without restoring B
+ok 369 - TEST 2: manual VDJ disappearance is observed without restoring B
+  ---
+  duration_ms: 179.935667
+  type: 'test'
+  ...
+# Subtest: TEST 3: empty VDJ queue is never reconstructed
+ok 370 - TEST 3: empty VDJ queue is never reconstructed
+  ---
+  duration_ms: 180.116042
+  type: 'test'
+  ...
+# Subtest: TEST 4: disconnect/reconnect performs no enqueue
+ok 371 - TEST 4: disconnect/reconnect performs no enqueue
+  ---
+  duration_ms: 736.400375
+  type: 'test'
+  ...
+# Subtest: TEST 5: server close/open cannot restore absent persisted Waiting rows
+ok 372 - TEST 5: server close/open cannot restore absent persisted Waiting rows
+  ---
+  duration_ms: 286.60925
+  type: 'test'
+  ...
+# Subtest: TEST 6: Bridge reload/bootstrap and screen changes cannot send songs
+ok 373 - TEST 6: Bridge reload/bootstrap and screen changes cannot send songs
+  ---
+  duration_ms: 171.266375
+  type: 'test'
+  ...
+# Subtest: TEST 7: Completed and a delayed Waiting revision survive sync/reload/reconnect without enqueue
+ok 374 - TEST 7: Completed and a delayed Waiting revision survive sync/reload/reconnect without enqueue
+  ---
+  duration_ms: 1132.894875
+  type: 'test'
+  ...
+# Subtest: TEST 8: Omitted and a delayed Waiting revision cannot be resent
+ok 375 - TEST 8: Omitted and a delayed Waiting revision cannot be resent
+  ---
+  duration_ms: 541.683167
+  type: 'test'
+  ...
+# Subtest: TEST 9: absent Waiting stays absent across polling cycles
+ok 376 - TEST 9: absent Waiting stays absent across polling cycles
+  ---
+  duration_ms: 5667.653917
+  type: 'test'
+  ...
+# Subtest: TEST 10: explicit Host Send adds exactly once and a bare/internal intent is rejected
+ok 377 - TEST 10: explicit Host Send adds exactly once and a bare/internal intent is rejected
+  ---
+  duration_ms: 179.390792
+  type: 'test'
+  ...
+# Subtest: TEST 11: duplicate delivery and lost response/restart consume the same command once
+ok 378 - TEST 11: duplicate delivery and lost response/restart consume the same command once
+  ---
+  duration_ms: 301.099167
+  type: 'test'
+  ...
+# Subtest: TEST 12: explicit Return sends a terminal request once; its repeated command does not send again
+ok 379 - TEST 12: explicit Return sends a terminal request once; its repeated command does not send again
+  ---
+  duration_ms: 201.325167
+  type: 'test'
+  ...
+# Subtest: TEST 13: finish and clear cannot start a cleanup/reconciliation reinsertion cycle
+ok 380 - TEST 13: finish and clear cannot start a cleanup/reconciliation reinsertion cycle
+  ---
+  duration_ms: 1400.651958
+  type: 'test'
+  ...
+# Subtest: TEST 14: changing activity never inserts a previous activity row
+ok 381 - TEST 14: changing activity never inserts a previous activity row
+  ---
+  duration_ms: 174.890917
+  type: 'test'
+  ...
+# Subtest: TEST 15: three minutes connected without Host action produce zero queue mutations
+ok 382 - TEST 15: three minutes connected without Host action produce zero queue mutations
+  ---
+  duration_ms: 180159.402583
+  type: 'test'
+  ...
+# Subtest: Guest metadata wins and public projection strips private data / paths / IDs
+ok 383 - Guest metadata wins and public projection strips private data / paths / IDs
+  ---
+  duration_ms: 0.84175
+  type: 'test'
+  ...
+# Subtest: manual or ambiguous track uses official VDJ metadata, never guest misattribution
+ok 384 - manual or ambiguous track uses official VDJ metadata, never guest misattribution
+  ---
+  duration_ms: 0.13875
+  type: 'test'
+  ...
+# Subtest: reorder, remove, completed, activity/hotel/branding/QR scope changes use existing records
+ok 385 - reorder, remove, completed, activity/hotel/branding/QR scope changes use existing records
+  ---
+  duration_ms: 0.577791
+  type: 'test'
+  ...
+# Subtest: every lifecycle state and Player isolation
+ok 386 - every lifecycle state and Player isolation
+  ---
+  duration_ms: 0.135709
+  type: 'test'
+  ...
+# Subtest: read-only HTTP, loopback Host, ETag, public data, no arbitrary logo URLs
+ok 387 - read-only HTTP, loopback Host, ETag, public data, no arbitrary logo URLs
+  ---
+  duration_ms: 16.687125
+  type: 'test'
+  ...
+# Subtest: unconfirmed loaded path or missing deck inventory never consumes or removes future entries
+ok 388 - unconfirmed loaded path or missing deck inventory never consumes or removes future entries
+  ---
+  duration_ms: 0.668666
+  type: 'test'
+  ...
+# Subtest: finish preserves loaded/playing A, removes future B C D, never touches transport
+ok 389 - finish preserves loaded/playing A, removes future B C D, never touches transport
+  ---
+  duration_ms: 0.964084
+  type: 'test'
+  ...
+# Subtest: ambiguous duplicate, unknown deck and context change fail closed
+ok 390 - ambiguous duplicate, unknown deck and context change fail closed
+  ---
+  duration_ms: 0.616125
+  type: 'test'
+  ...
+# Subtest: execution guards recheck identity and every deck during a track change
+ok 391 - execution guards recheck identity and every deck during a track change
+  ---
+  duration_ms: 0.091541
+  type: 'test'
+  ...
+# Subtest: parses real Network Control booleans and volume without assuming unknown is false
+ok 392 - parses real Network Control booleans and volume without assuming unknown is false
+  ---
+  duration_ms: 0.526166
+  type: 'test'
+  ...
+# Subtest: reads only supported explicit deck state and volume
+ok 393 - reads only supported explicit deck state and volume
+  ---
+  duration_ms: 0.800166
+  type: 'test'
+  ...
+# Subtest: unknown Played is not a completion signal
+ok 394 - unknown Played is not a completion signal
+  ---
+  duration_ms: 0.784333
+  type: 'test'
+  ...
+# Subtest: Played flag during early playback is not completion; natural end completes once
+ok 395 - Played flag during early playback is not completion; natural end completes once
+  ---
+  duration_ms: 9.153916
+  type: 'test'
+  ...
+# Subtest: load, cue, preview and silent playback cannot complete a request
+ok 396 - load, cue, preview and silent playback cannot complete a request
+  ---
+  duration_ms: 0.226542
+  type: 'test'
+  ...
+# Subtest: a pre-existing Played flag never completes a newly loaded request
+ok 397 - a pre-existing Played flag never completes a newly loaded request
+  ---
+  duration_ms: 0.097292
+  type: 'test'
+  ...
+# Subtest: manual Skip, Completed, removal and Return invalidate delayed Played for the load
+ok 398 - manual Skip, Completed, removal and Return invalidate delayed Played for the load
+  ---
+  duration_ms: 0.247125
+  type: 'test'
+  ...
+# Subtest: natural-end completion uses the newest metadata CAS revision
+ok 399 - natural-end completion uses the newest metadata CAS revision
+  ---
+  duration_ms: 8.125708
+  type: 'test'
+  ...
+# Subtest: ambiguous/unlinked sources never complete requests
+ok 400 - ambiguous/unlinked sources never complete requests
+  ---
+  duration_ms: 0.307167
+  type: 'test'
+  ...
+# Subtest: reconnect reads state but does not replay commands or trust old Played
+ok 401 - reconnect reads state but does not replay commands or trust old Played
+  ---
+  duration_ms: 0.317833
+  type: 'test'
+  ...
+# Subtest: Play/Pause uses explicit verbs and reads real state rather than toggling a visual simulation
+ok 402 - Play/Pause uses explicit verbs and reads real state rather than toggling a visual simulation
+  ---
+  duration_ms: 0.540584
+  type: 'test'
+  ...
+# Subtest: Restart uses the active confirmed Cue, never arbitrarily Hot Cue 1
+ok 403 - Restart uses the active confirmed Cue, never arbitrarily Hot Cue 1
+  ---
+  duration_ms: 0.08225
+  type: 'test'
+  ...
+# Subtest: Restart without a reliable Cue falls back to real start
+ok 404 - Restart without a reliable Cue falls back to real start
+  ---
+  duration_ms: 0.069083
+  type: 'test'
+  ...
+# Subtest: Master modifies VDJ master_volume, not the Guest Star player
+ok 405 - Master modifies VDJ master_volume, not the Guest Star player
+  ---
+  duration_ms: 0.15
+  type: 'test'
+  ...
+# Subtest: same command ID is idempotent; conflicting payload is rejected
+ok 406 - same command ID is idempotent; conflicting payload is rejected
+  ---
+  duration_ms: 0.110083
+  type: 'test'
+  ...
+# Subtest: stale deck/song and Player mode cannot execute playback commands
+ok 407 - stale deck/song and Player mode cannot execute playback commands
+  ---
+  duration_ms: 0.066125
+  type: 'test'
+  ...
+# Subtest: delimiter ambiguity fails closed instead of guessing song identity
+ok 408 - delimiter ambiguity fails closed instead of guessing song identity
+  ---
+  duration_ms: 0.040375
+  type: 'test'
+  ...
+# Subtest: cached/internal queue rows cannot authorize an automatic deck load
+ok 409 - cached/internal queue rows cannot authorize an automatic deck load
+  ---
+  duration_ms: 0.138208
+  type: 'test'
+  ...
+# Subtest: removal requires physical presence observed in this connection, and never completes an unplayed row
+ok 410 - removal requires physical presence observed in this connection, and never completes an unplayed row
+  ---
+  duration_ms: 0.098916
+  type: 'test'
+  ...
+# Subtest: construye el comando completo de cola karaoke y cantante
+ok 411 - construye el comando completo de cola karaoke y cantante
+  ---
+  duration_ms: 0.533958
+  type: 'test'
+  ...
+# Subtest: construye una eliminación dirigida dentro de la cola karaoke
+ok 412 - construye una eliminación dirigida dentro de la cola karaoke
+  ---
+  duration_ms: 0.107958
+  type: 'test'
+  ...
+# Subtest: detecta copias repetidas con título y artista invertidos sin mezclar dos Alex
+ok 413 - detecta copias repetidas con título y artista invertidos sin mezclar dos Alex
+  ---
+  duration_ms: 0.740667
+  type: 'test'
+  ...
+# Subtest: elimina el bucle repetido de VirtualDJ y conserva invitados distintos
+ok 414 - elimina el bucle repetido de VirtualDJ y conserva invitados distintos
+  ---
+  duration_ms: 33.636417
+  type: 'test'
+  ...
+# Subtest: construye una restauración en el turno exacto de karaoke
+ok 415 - construye una restauración en el turno exacto de karaoke
+  ---
+  duration_ms: 0.101125
+  type: 'test'
+  ...
+# Subtest: mueve varias filas con primitivas +1 documentadas y verifica la identidad final
+ok 416 - mueve varias filas con primitivas +1 documentadas y verifica la identidad final
+  ---
+  duration_ms: 23.871584
+  type: 'test'
+  ...
+# Subtest: lee duraciones exactas reportadas por VirtualDJ
+ok 417 - lee duraciones exactas reportadas por VirtualDJ
+  ---
+  duration_ms: 0.150958
+  type: 'test'
+  ...
+# Subtest: convierte rutas URI, codificadas y abreviadas de VirtualDJ en rutas locales
+ok 418 - convierte rutas URI, codificadas y abreviadas de VirtualDJ en rutas locales
+  ---
+  duration_ms: 0.175459
+  type: 'test'
+  ...
+# Subtest: oculta únicamente el identificador técnico legacy del cantante
+ok 419 - oculta únicamente el identificador técnico legacy del cantante
+  ---
+  duration_ms: 0.2345
+  type: 'test'
+  ...
+# Subtest: rechaza el HRESULT técnico de Network Control sin crear una canción falsa
+ok 420 - rechaza el HRESULT técnico de Network Control sin crear una canción falsa
+  ---
+  duration_ms: 573.634083
+  type: 'test'
+  ...
+# Subtest: usa los endpoints execute y query de Network Control con Bearer
+ok 421 - usa los endpoints execute y query de Network Control con Bearer
+  ---
+  duration_ms: 1.958334
+  type: 'test'
+  ...
+# Subtest: reintenta consultas transitorias pero jamás repite un comando de escritura
+ok 422 - reintenta consultas transitorias pero jamás repite un comando de escritura
+  ---
+  duration_ms: 87.460875
+  type: 'test'
+  ...
+# Subtest: retira solo la solicitud que coincide en archivo y cantante
+ok 423 - retira solo la solicitud que coincide en archivo y cantante
+  ---
+  duration_ms: 11.488084
+  type: 'test'
+  ...
+# Subtest: retira por cantante y título cuando VirtualDJ omite la ruta y altera el artista
+ok 424 - retira por cantante y título cuando VirtualDJ omite la ruta y altera el artista
+  ---
+  duration_ms: 4.324333
+  type: 'test'
+  ...
+# Subtest: no elimina una fila por una ruta sola si el vínculo de cantante no coincide
+ok 425 - no elimina una fila por una ruta sola si el vínculo de cantante no coincide
+  ---
+  duration_ms: 2.664583
+  type: 'test'
+  ...
+# Subtest: avisa cuando VirtualDJ acepta el comando pero no retira la canción
+ok 426 - avisa cuando VirtualDJ acepta el comando pero no retira la canción
+  ---
+  duration_ms: 4.990042
+  type: 'test'
+  ...
+# Subtest: lee la cola Karaoke completa respetando su orden
+ok 427 - lee la cola Karaoke completa respetando su orden
+  ---
+  duration_ms: 6.690416
+  type: 'test'
+  ...
+# Subtest: lee Network Control en serie para evitar desconexiones por ráfagas
+ok 428 - lee Network Control en serie para evitar desconexiones por ráfagas
+  ---
+  duration_ms: 36.669209
+  type: 'test'
+  ...
+# Subtest: repite una captura si la cola crece durante la lectura y devuelve las cuatro filas
+ok 429 - repite una captura si la cola crece durante la lectura y devuelve las cuatro filas
+  ---
+  duration_ms: 96.9365
+  type: 'test'
+  ...
+# Subtest: restaura una canción en su posición anterior y verifica el orden
+ok 430 - restaura una canción en su posición anterior y verifica el orden
+  ---
+  duration_ms: 12.584208
+  type: 'test'
+  ...
+# Subtest: no duplica una canción que VirtualDJ ya confirma en la cola
+ok 431 - no duplica una canción que VirtualDJ ya confirma en la cola
+  ---
+  duration_ms: 4.7135
+  type: 'test'
+  ...
+# Subtest: reconoce una fila legacy con G-code y no envía una segunda copia
+ok 432 - reconoce una fila legacy con G-code y no envía una segunda copia
+  ---
+  duration_ms: 5.013125
+  type: 'test'
+  ...
+# Subtest: si se pierde la respuesta del comando, el siguiente intento detecta la fila y no la duplica
+ok 433 - si se pierde la respuesta del comando, el siguiente intento detecta la fila y no la duplica
+  ---
+  duration_ms: 13.364125
+  type: 'test'
+  ...
+# Subtest: no duplica Mi Vida cuando VirtualDJ invierte título y artista
+ok 434 - no duplica Mi Vida cuando VirtualDJ invierte título y artista
+  ---
+  duration_ms: 4.23825
+  type: 'test'
+  ...
+# Subtest: reintenta hasta que VirtualDJ confirme una inserción demorada
+ok 435 - reintenta hasta que VirtualDJ confirme una inserción demorada
+  ---
+  duration_ms: 87.12425
+  type: 'test'
+  ...
+# Subtest: una lectura técnica fallida después del comando no vuelve a agregar la canción
+ok 436 - una lectura técnica fallida después del comando no vuelve a agregar la canción
+  ---
+  duration_ms: 581.0215
+  type: 'test'
+  ...
+# Subtest: una cola Karaoke vacía se confirma sin mover el navegador de VirtualDJ
+ok 437 - una cola Karaoke vacía se confirma sin mover el navegador de VirtualDJ
+  ---
+  duration_ms: 1.605833
+  type: 'test'
+  ...
+# Subtest: no confunde una respuesta inválida con una cola Karaoke vacía
+ok 438 - no confunde una respuesta inválida con una cola Karaoke vacía
+  ---
+  duration_ms: 83.956666
+  type: 'test'
+  ...
+# Subtest: Vocal reaches native gain while animation frames are suspended
+ok 439 - Vocal reaches native gain while animation frames are suspended
+  ---
+  duration_ms: 1.4255
+  type: 'test'
+  ...
+# Subtest: guía inicial baja configurable y persistente, conserva ajustes ajenos
+ok 440 - guía inicial baja configurable y persistente, conserva ajustes ajenos
+  ---
+  duration_ms: 0.808291
+  type: 'test'
+  ...
+# Subtest: dos buses: acompañamiento fijo y vocal nominal; OFF conserva original
+ok 441 - dos buses: acompañamiento fijo y vocal nominal; OFF conserva original
+  ---
+  duration_ms: 0.143
+  type: 'test'
+  ...
+# Subtest: el motor de stems recibe WAV PCM compatible en macOS y Linux
+ok 442 - el motor de stems recibe WAV PCM compatible en macOS y Linux
+  ---
+  duration_ms: 0.690291
+  type: 'test'
+  ...
+# Subtest: los enlaces externos no crean pestañas dentro del WebView
+ok 443 - los enlaces externos no crean pestañas dentro del WebView
+  ---
+  duration_ms: 0.131167
+  type: 'test'
+  ...
+# Subtest: la ventana interna pertenece al host Cocoa y bloquea ventanas web emergentes
+ok 444 - la ventana interna pertenece al host Cocoa y bloquea ventanas web emergentes
+  ---
+  duration_ms: 0.184084
+  type: 'test'
+  ...
+# Subtest: la música ambiental nativa no depende del foco ni del espejo oculto de WebKit
+ok 445 - la música ambiental nativa no depende del foco ni del espejo oculto de WebKit
+  ---
+  duration_ms: 0.159042
+  type: 'test'
+  ...
+# Subtest: la sincronización en vivo no borra el usuario mientras se escribe
+ok 446 - la sincronización en vivo no borra el usuario mientras se escribe
+  ---
+  duration_ms: 0.159834
+  type: 'test'
+  ...
+# Subtest: Google inicia la sesión del Bridge en el navegador del sistema y solo confía en el servidor
+ok 447 - Google inicia la sesión del Bridge en el navegador del sistema y solo confía en el servidor
+  ---
+  duration_ms: 0.412875
+  type: 'test'
+  ...
+# Subtest: Google se limita al inicio de sesión del Bridge y usa el binding real de Cloudflare
+ok 448 - Google se limita al inicio de sesión del Bridge y usa el binding real de Cloudflare
+  ---
+  duration_ms: 0.093208
+  type: 'test'
+  ...
+# Subtest: el formulario envía el idioma seleccionado y el Bridge se lo muestra al host
+ok 449 - el formulario envía el idioma seleccionado y el Bridge se lo muestra al host
+  ---
+  duration_ms: 0.080583
+  type: 'test'
+  ...
+# Subtest: el idioma seleccionado usa el catálogo de ocho idiomas y persiste la interfaz
+ok 450 - el idioma seleccionado usa el catálogo de ocho idiomas y persiste la interfaz
+  ---
+  duration_ms: 0.2525
+  type: 'test'
+  ...
+# Subtest: los módulos públicos y sugerencias siguen el idioma seleccionado
+ok 451 - los módulos públicos y sugerencias siguen el idioma seleccionado
+  ---
+  duration_ms: 0.368833
+  type: 'test'
+  ...
+# Subtest: la experiencia pública pesada se hidrata en el cliente sin gastar CPU del Worker
+ok 452 - la experiencia pública pesada se hidrata en el cliente sin gastar CPU del Worker
+  ---
+  duration_ms: 0.105916
+  type: 'test'
+  ...
+# Subtest: pedir otra canción conserva los idiomas elegidos localmente
+ok 453 - pedir otra canción conserva los idiomas elegidos localmente
+  ---
+  duration_ms: 0.084209
+  type: 'test'
+  ...
+# Subtest: muestra el comentario o la dedicatoria a simple vista en cada tarjeta
+ok 454 - muestra el comentario o la dedicatoria a simple vista en cada tarjeta
+  ---
+  duration_ms: 0.080333
+  type: 'test'
+  ...
+# Subtest: las acciones rutinarias notifican sin modal y conservan confirmación de alto riesgo
+ok 455 - las acciones rutinarias notifican sin modal y conservan confirmación de alto riesgo
+  ---
+  duration_ms: 0.1455
+  type: 'test'
+  ...
+# Subtest: permite deshacer el resultado y elegir dónde restaurar la pista
+ok 456 - permite deshacer el resultado y elegir dónde restaurar la pista
+  ---
+  duration_ms: 0.158708
+  type: 'test'
+  ...
+# Subtest: el reloj visible avanza cada segundo y recalcula todos los totales
+ok 457 - el reloj visible avanza cada segundo y recalcula todos los totales
+  ---
+  duration_ms: 0.089167
+  type: 'test'
+  ...
+# Subtest: el Bridge respeta el estado sin iniciar y no inventa una hora local
+ok 458 - el Bridge respeta el estado sin iniciar y no inventa una hora local
+  ---
+  duration_ms: 0.05025
+  type: 'test'
+  ...
+# Subtest: el enlace seleccionado se copia y se guarda como referencia
+ok 459 - el enlace seleccionado se copia y se guarda como referencia
+  ---
+  duration_ms: 0.164875
+  type: 'test'
+  ...
+# Subtest: la sincronización de fondo no bloquea los botones por canción
+ok 460 - la sincronización de fondo no bloquea los botones por canción
+  ---
+  duration_ms: 0.066541
+  type: 'test'
+  ...
+# Subtest: el cursor no muestra carga al pasar por el botón y la operación real usa un indicador propio
+ok 461 - el cursor no muestra carga al pasar por el botón y la operación real usa un indicador propio
+  ---
+  duration_ms: 0.131125
+  type: 'test'
+  ...
+# Subtest: la configuración heredada ya no se expone al operador
+ok 462 - la configuración heredada ya no se expone al operador
+  ---
+  duration_ms: 0.07
+  type: 'test'
+  ...
+# Subtest: identifica al huésped por dispositivo y suprime solicitudes repetidas
+ok 463 - identifica al huésped por dispositivo y suprime solicitudes repetidas
+  ---
+  duration_ms: 0.1355
+  type: 'test'
+  ...
+# Subtest: muestra solicitudes y VDJ lado a lado con resultados compactos debajo
+ok 464 - muestra solicitudes y VDJ lado a lado con resultados compactos debajo
+  ---
+  duration_ms: 0.15075
+  type: 'test'
+  ...
+# Subtest: muestra la cola real de VirtualDJ y la hora final sin saturar la lista
+ok 465 - muestra la cola real de VirtualDJ y la hora final sin saturar la lista
+  ---
+  duration_ms: 0.123417
+  type: 'test'
+  ...
+# Subtest: conserva el punto visible y nunca marca ausente una fila viva de VirtualDJ
+ok 466 - conserva el punto visible y nunca marca ausente una fila viva de VirtualDJ
+  ---
+  duration_ms: 0.403708
+  type: 'test'
+  ...
+# Subtest: protege Guest Star Experience y Guest Star como nombres de marca
+ok 467 - protege Guest Star Experience y Guest Star como nombres de marca
+  ---
+  duration_ms: 0.050208
+  type: 'test'
+  ...
+# Subtest: mantiene hotel, actividad, venue y PIN visibles en Modo Host
+ok 468 - mantiene hotel, actividad, venue y PIN visibles en Modo Host
+  ---
+  duration_ms: 0.080667
+  type: 'test'
+  ...
+# Subtest: integra Player Beta dentro de Guest Star y comparte la actividad real
+ok 469 - integra Player Beta dentro de Guest Star y comparte la actividad real
+  ---
+  duration_ms: 0.478542
+  type: 'test'
+  ...
+# Subtest: obliga a elegir Player o Bridge y bloquea el modo durante la actividad
+ok 470 - obliga a elegir Player o Bridge y bloquea el modo durante la actividad
+  ---
+  duration_ms: 0.309416
+  type: 'test'
+  ...
+# Subtest: Player ofrece controles operativos completos y un preview real de Star Screen
+ok 471 - Player ofrece controles operativos completos y un preview real de Star Screen
+  ---
+  duration_ms: 0.94825
+  type: 'test'
+  ...
+# Subtest: los sliders del Player muestran pista, avance y porcentaje en macOS
+ok 472 - los sliders del Player muestran pista, avance y porcentaje en macOS
+  ---
+  duration_ms: 0.132583
+  type: 'test'
+  ...
+# Subtest: tempo y tonalidad conservan datos reales, precisión y controles compactos accesibles
+ok 473 - tempo y tonalidad conservan datos reales, precisión y controles compactos accesibles
+  ---
+  duration_ms: 0.509625
+  type: 'test'
+  ...
+# Subtest: la consola ambiental no solapa botones ni controles de volumen
+ok 474 - la consola ambiental no solapa botones ni controles de volumen
+  ---
+  duration_ms: 0.088708
+  type: 'test'
+  ...
+# Subtest: el preview del Host encaja toda la composición Star Screen dentro de 16:9
+ok 475 - el preview del Host encaja toda la composición Star Screen dentro de 16:9
+  ---
+  duration_ms: 0.108084
+  type: 'test'
+  ...
+# Subtest: al volver desde Player muestra la actividad y oculta la consola VirtualDJ
+ok 476 - al volver desde Player muestra la actividad y oculta la consola VirtualDJ
+  ---
+  duration_ms: 0.0715
+  type: 'test'
+  ...
+# Subtest: Player recibe solicitudes públicas sin reconciliar VirtualDJ
+ok 477 - Player recibe solicitudes públicas sin reconciliar VirtualDJ
+  ---
+  duration_ms: 0.14125
+  type: 'test'
+  ...
+# Subtest: Star Screen abre, enfoca y mueve una única ventana del host nativo
+ok 478 - Star Screen abre, enfoca y mueve una única ventana del host nativo
+  ---
+  duration_ms: 0.532417
+  type: 'test'
+  ...
+# Subtest: Star Screen muestra video limpio y reserva Sonando ahora para la música ambiental
+ok 479 - Star Screen muestra video limpio y reserva Sonando ahora para la música ambiental
+  ---
+  duration_ms: 0.135958
+  type: 'test'
+  ...
+# Subtest: las preferencias visuales ocultan sus regiones sin detener Player, audio ni análisis
+ok 480 - las preferencias visuales ocultan sus regiones sin detener Player, audio ni análisis
+  ---
+  duration_ms: 0.20975
+  type: 'test'
+  ...
+# Subtest: la biblioteca local exige cantante y crea una entrada propia del Player
+ok 481 - la biblioteca local exige cantante y crea una entrada propia del Player
+  ---
+  duration_ms: 0.224625
+  type: 'test'
+  ...
+# Subtest: agregar una pista local a la fila no sustituye el medio activo
+ok 482 - agregar una pista local a la fila no sustituye el medio activo
+  ---
+  duration_ms: 0.123125
+  type: 'test'
+  ...
+# Subtest: la sesión activa bloquea mutaciones externas y confirma acciones de alto riesgo
+ok 483 - la sesión activa bloquea mutaciones externas y confirma acciones de alto riesgo
+  ---
+  duration_ms: 0.199333
+  type: 'test'
+  ...
+# Subtest: la música ambiental tiene fuentes, mezcla aleatoria y volumen independiente
+ok 484 - la música ambiental tiene fuentes, mezcla aleatoria y volumen independiente
+  ---
+  duration_ms: 0.664166
+  type: 'test'
+  ...
+# Subtest: cada turno del Player despliega versiones Karaoke para copiar o abrir
+ok 485 - cada turno del Player despliega versiones Karaoke para copiar o abrir
+  ---
+  duration_ms: 0.253625
+  type: 'test'
+  ...
+# Subtest: la beta detecta archivos automáticamente y refresca el buscador abierto
+ok 486 - la beta detecta archivos automáticamente y refresca el buscador abierto
+  ---
+  duration_ms: 0.173458
+  type: 'test'
+  ...
+# Subtest: Player ofrece pista ambiental específica, EQ real y stems IA separados
+ok 487 - Player ofrece pista ambiental específica, EQ real y stems IA separados
+  ---
+  duration_ms: 0.910833
+  type: 'test'
+  ...
+# Subtest: los motores IA usan el paquete integrado, se prueban de verdad y explican cada fallo
+ok 488 - los motores IA usan el paquete integrado, se prueban de verdad y explican cada fallo
+  ---
+  duration_ms: 0.28525
+  type: 'test'
+  ...
+# Subtest: la fila y Stems mantienen altura fija y las opciones flotan fuera de la tarjeta
+ok 489 - la fila y Stems mantienen altura fija y las opciones flotan fuera de la tarjeta
+  ---
+  duration_ms: 0.187542
+  type: 'test'
+  ...
+# Subtest: historial y Plan B viven dentro del Player y la lista infinita ya no se duplica
+ok 490 - historial y Plan B viven dentro del Player y la lista infinita ya no se duplica
+  ---
+  duration_ms: 0.141333
+  type: 'test'
+  ...
+# Subtest: Plan B permanece compacto, desplegable y con scroll interno junto al Player
+ok 491 - Plan B permanece compacto, desplegable y con scroll interno junto al Player
+  ---
+  duration_ms: 0.416625
+  type: 'test'
+  ...
+# Subtest: las sugerencias de Plan B priorizan título y artista y conservan metadatos reales
+ok 492 - las sugerencias de Plan B priorizan título y artista y conservan metadatos reales
+  ---
+  duration_ms: 0.178209
+  type: 'test'
+  ...
+# Subtest: cada filtro de Plan B refleja una única selección real y conserva el vacío
+ok 493 - cada filtro de Plan B refleja una única selección real y conserva el vacío
+  ---
+  duration_ms: 0.248209
+  type: 'test'
+  ...
+# Subtest: los ajustes visuales de búsqueda, Música de fondo y Plan B conservan los flujos existentes
+ok 494 - los ajustes visuales de búsqueda, Música de fondo y Plan B conservan los flujos existentes
+  ---
+  duration_ms: 0.1825
+  type: 'test'
+  ...
+# Subtest: una actividad en curso bloquea el cambio de modo pero permite volver a Superhost
+ok 495 - una actividad en curso bloquea el cambio de modo pero permite volver a Superhost
+  ---
+  duration_ms: 0.1055
+  type: 'test'
+  ...
+# Subtest: el QR de Star Screen es grande y el preview conserva legibilidad
+ok 496 - el QR de Star Screen es grande y el preview conserva legibilidad
+  ---
+  duration_ms: 0.090458
+  type: 'test'
+  ...
+# Subtest: Saltar y Cantada funcionan con la pista seleccionada o el primer turno, sin depender de Play o Pausa
+ok 497 - Saltar y Cantada funcionan con la pista seleccionada o el primer turno, sin depender de Play o Pausa
+  ---
+  duration_ms: 0.242584
+  type: 'test'
+  ...
+# Subtest: el cambio a karaoke espera reproducción real y la música ambiental no publica candidatos fallidos
+ok 498 - el cambio a karaoke espera reproducción real y la música ambiental no publica candidatos fallidos
+  ---
+  duration_ms: 0.193792
+  type: 'test'
+  ...
+# Subtest: el lanzador web de prueba sigue aislado de la aplicación oficial
+ok 499 - el lanzador web de prueba sigue aislado de la aplicación oficial
+  ---
+  duration_ms: 0.036041
+  type: 'test'
+  ...
+# Subtest: el formulario confirma repeticiones en el idioma elegido
+ok 500 - el formulario confirma repeticiones en el idioma elegido
+  ---
+  duration_ms: 0.069417
+  type: 'test'
+  ...
+# Subtest: muestra opcionalmente el estado público y el Host seguro lo controla
+ok 501 - muestra opcionalmente el estado público y el Host seguro lo controla
+  ---
+  duration_ms: 0.222792
+  type: 'test'
+  ...
+# Subtest: el Superhost administra todo dentro del Bridge y usa QR local
+ok 502 - el Superhost administra todo dentro del Bridge y usa QR local
+  ---
+  duration_ms: 0.217167
+  type: 'test'
+  ...
+# Subtest: Host y Superhost editan agenda única o recurrente con anuncios por día
+ok 503 - Host y Superhost editan agenda única o recurrente con anuncios por día
+  ---
+  duration_ms: 0.093333
+  type: 'test'
+  ...
+# Subtest: el Bridge usa un proxy dedicado sin quitar los tokens de su sesión
+ok 504 - el Bridge usa un proxy dedicado sin quitar los tokens de su sesión
+  ---
+  duration_ms: 0.101792
+  type: 'test'
+  ...
+# Subtest: si una canción desaparece, pregunta si fue intencional
+ok 505 - si una canción desaparece, pregunta si fue intencional
+  ---
+  duration_ms: 0.047084
+  type: 'test'
+  ...
+# Subtest: las decisiones terminales sobreviven lecturas atrasadas y reinicios
+ok 506 - las decisiones terminales sobreviven lecturas atrasadas y reinicios
+  ---
+  duration_ms: 0.093416
+  type: 'test'
+  ...
+# Subtest: la página incluye un favicon propio de Guest Star
+ok 507 - la página incluye un favicon propio de Guest Star
+  ---
+  duration_ms: 0.03775
+  type: 'test'
+  ...
+# Subtest: el Plan B alterna idiomas y permite buscar un enlace Karaoke
+ok 508 - el Plan B alterna idiomas y permite buscar un enlace Karaoke
+  ---
+  duration_ms: 0.106083
+  type: 'test'
+  ...
+# Subtest: la fuente de stems se bloquea antes de reproducir y nunca cambia en caliente
+ok 509 - la fuente de stems se bloquea antes de reproducir y nunca cambia en caliente
+  ---
+  duration_ms: 0.134333
+  type: 'test'
+  ...
+# Subtest: cada selección de video invalida audio y stems de la fila anterior
+ok 510 - cada selección de video invalida audio y stems de la fila anterior
+  ---
+  duration_ms: 0.208042
+  type: 'test'
+  ...
+# Subtest: Player y Star Screen intercambian heartbeat y acuse cada dos segundos
+ok 511 - Player y Star Screen intercambian heartbeat y acuse cada dos segundos
+  ---
+  duration_ms: 0.127333
+  type: 'test'
+  ...
+# Subtest: los snapshots diagnósticos no aceptan identidad ni estado arbitrario del cliente
+ok 512 - los snapshots diagnósticos no aceptan identidad ni estado arbitrario del cliente
+  ---
+  duration_ms: 0.404083
+  type: 'test'
+  ...
+# Subtest: elige un único video directo con la mejor puntuación
+ok 513 - elige un único video directo con la mejor puntuación
+  ---
+  duration_ms: 0.503458
+  type: 'test'
+  ...
+# Subtest: descarta videos marcados como no recomendados
+ok 514 - descarta videos marcados como no recomendados
+  ---
+  duration_ms: 0.376041
+  type: 'test'
+  ...
+# Subtest: devuelve varias opciones directas sin repetir el mismo video
+ok 515 - devuelve varias opciones directas sin repetir el mismo video
+  ---
+  duration_ms: 0.363958
+  type: 'test'
+  ...
+# Subtest: limita la selección a las seis mejores opciones
+ok 516 - limita la selección a las seis mejores opciones
+  ---
+  duration_ms: 0.18425
+  type: 'test'
+  ...
+# Subtest: conserva el orden de canales prioritarios antes de la puntuación
+ok 517 - conserva el orden de canales prioritarios antes de la puntuación
+  ---
+  duration_ms: 0.108208
+  type: 'test'
+  ...
+# Subtest: copia el enlace con pbcopy en Mac
+ok 518 - copia el enlace con pbcopy en Mac
+  ---
+  duration_ms: 0.163917
+  type: 'test'
+  ...
+# Subtest: abre enlaces web con macOS sin crear una ventana en el WebView
+ok 519 - abre enlaces web con macOS sin crear una ventana en el WebView
+  ---
+  duration_ms: 0.105083
+  type: 'test'
+  ...
+# Subtest: rechaza esquemas que no son enlaces web
+ok 520 - rechaza esquemas que no son enlaces web
+  ---
+  duration_ms: 0.164791
+  type: 'test'
+  ...
+1..520
+# tests 527
+# suites 0
+# pass 527
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 196892.371708

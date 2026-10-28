@@ -1,0 +1,268 @@
+TAP version 13
+# Subtest: same running Bridge opens and keeps receiving while YouTube maintenance is stalled
+ok 1 - same running Bridge opens and keeps receiving while YouTube maintenance is stalled
+  ---
+  duration_ms: 2141.9225
+  type: 'test'
+  ...
+# Subtest: fast re-entry rejects another hotel, venue, activity, free context or Player
+ok 2 - fast re-entry rejects another hotel, venue, activity, free context or Player
+  ---
+  duration_ms: 4.868625
+  type: 'test'
+  ...
+# Subtest: remote run, start, playback and authorization scope must still match
+ok 3 - remote run, start, playback and authorization scope must still match
+  ---
+  duration_ms: 6.894667
+  type: 'test'
+  ...
+# Subtest: an invalidation received during an older sync fetches again before resolving
+ok 4 - an invalidation received during an older sync fetches again before resolving
+  ---
+  duration_ms: 2.1535
+  type: 'test'
+  ...
+# Subtest: request invalidation while clear holds the lock survives until a scheduled retry
+ok 5 - request invalidation while clear holds the lock survives until a scheduled retry
+  ---
+  duration_ms: 1.944708
+  type: 'test'
+  ...
+# Subtest: clear always releases its lock even when final persistence fails
+ok 6 - clear always releases its lock even when final persistence fails
+  ---
+  duration_ms: 1.822708
+  type: 'test'
+  ...
+# Subtest: burst invalidations coalesce into one trailing read and a lock stops draining
+ok 7 - burst invalidations coalesce into one trailing read and a lock stops draining
+  ---
+  duration_ms: 1.041125
+  type: 'test'
+  ...
+# Subtest: commands deferred by an activity lock are retained and an obsolete generation does not retry
+ok 8 - commands deferred by an activity lock are retained and an obsolete generation does not retry
+  ---
+  duration_ms: 1.074125
+  type: 'test'
+  ...
+# Subtest: healthy heartbeat uses only the socket and owns one timer
+ok 9 - healthy heartbeat uses only the socket and owns one timer
+  ---
+  duration_ms: 2.269458
+  type: 'test'
+  ...
+# Subtest: a silent socket is detached even if close never emits an event
+ok 10 - a silent socket is detached even if close never emits an event
+  ---
+  duration_ms: 1.125333
+  type: 'test'
+  ...
+# Subtest: durable reconciliation runs even while valid pongs keep the socket healthy
+ok 11 - durable reconciliation runs even while valid pongs keep the socket healthy
+  ---
+  duration_ms: 1.072125
+  type: 'test'
+  ...
+# Subtest: retired generations cannot refresh, ping, reconnect or create another timer
+ok 12 - retired generations cannot refresh, ping, reconnect or create another timer
+  ---
+  duration_ms: 0.866792
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 1: A/B/C real queue: free Deck 1 loads A in the fast local loop, without adding or moving
+ok 13 - HEAD TEST 1: A/B/C real queue: free Deck 1 loads A in the fast local loop, without adding or moving
+  ---
+  duration_ms: 1609.961667
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 2: playing X is protected; A loads as soon as Deck 1 is safe
+ok 14 - HEAD TEST 2: playing X is protected; A loads as soon as Deck 1 is safe
+  ---
+  duration_ms: 5402.6585
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 3: A already loaded: repeated cycles never reload it
+ok 15 - HEAD TEST 3: A already loaded: repeated cycles never reload it
+  ---
+  duration_ms: 5070.061125
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 4: A leaves the real queue: B is loaded with its existing singer and no duplicate
+ok 16 - HEAD TEST 4: A leaves the real queue: B is loaded with its existing singer and no duplicate
+  ---
+  duration_ms: 3368.398958
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 5: missing Waiting never inserted, loaded or restored
+ok 17 - HEAD TEST 5: missing Waiting never inserted, loaded or restored
+  ---
+  duration_ms: 4829.677292
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 6: absent Completed/Omitted never return through automatic loading
+ok 18 - HEAD TEST 6: absent Completed/Omitted never return through automatic loading
+  ---
+  duration_ms: 5353.348083
+  type: 'test'
+  ...
+# Subtest: HEAD TEST 7: sync/reload/reconnect loads only a confirmed real \#1
+ok 19 - HEAD TEST 7: sync/reload/reconnect loads only a confirmed real \#1
+  ---
+  duration_ms: 7681.021541
+  type: 'test'
+  ...
+# Subtest: execution guard rejects changed head, changed singer, newly playing/audible state, reused capability and enqueue
+ok 20 - execution guard rejects changed head, changed singer, newly playing/audible state, reused capability and enqueue
+  ---
+  duration_ms: 6.041083
+  type: 'test'
+  ...
+# Subtest: deny-by-default at transport for all automatic enqueue origins, observation writes and forged capabilities
+ok 21 - deny-by-default at transport for all automatic enqueue origins, observation writes and forged capabilities
+  ---
+  duration_ms: 1.886292
+  type: 'test'
+  ...
+# Subtest: durable consumed commands cannot run after restart, ID collision, changed scope or corrupted ledger
+ok 22 - durable consumed commands cannot run after restart, ID collision, changed scope or corrupted ledger
+  ---
+  duration_ms: 3267.697041
+  type: 'test'
+  ...
+# Subtest: native LOAD Singer reset preserves request ID, physical row ID, singer and lifecycle across sync/restart
+ok 23 - native LOAD Singer reset preserves request ID, physical row ID, singer and lifecycle across sync/restart
+  ---
+  duration_ms: 6946.127125
+  type: 'test'
+  ...
+# Subtest: TEST 1: 20 synchronizations keep the real A/B queue; autoQueueExact=true cannot send Waiting
+ok 24 - TEST 1: 20 synchronizations keep the real A/B queue; autoQueueExact=true cannot send Waiting
+  ---
+  duration_ms: 8138.491625
+  type: 'test'
+  ...
+# Subtest: TEST 2: manual VDJ disappearance is observed without restoring B
+ok 25 - TEST 2: manual VDJ disappearance is observed without restoring B
+  ---
+  duration_ms: 4934.024208
+  type: 'test'
+  ...
+# Subtest: TEST 3: empty VDJ queue is never reconstructed
+ok 26 - TEST 3: empty VDJ queue is never reconstructed
+  ---
+  duration_ms: 5461.403125
+  type: 'test'
+  ...
+# Subtest: TEST 4: disconnect/reconnect performs no enqueue
+ok 27 - TEST 4: disconnect/reconnect performs no enqueue
+  ---
+  duration_ms: 4697.609333
+  type: 'test'
+  ...
+# Subtest: TEST 5: server close/open cannot restore absent persisted Waiting rows
+ok 28 - TEST 5: server close/open cannot restore absent persisted Waiting rows
+  ---
+  duration_ms: 6054.396959
+  type: 'test'
+  ...
+# Subtest: TEST 6: Bridge reload/bootstrap and screen changes cannot send songs
+ok 29 - TEST 6: Bridge reload/bootstrap and screen changes cannot send songs
+  ---
+  duration_ms: 3982.722083
+  type: 'test'
+  ...
+# Subtest: TEST 7: Completed and a delayed Waiting revision survive sync/reload/reconnect without enqueue
+ok 30 - TEST 7: Completed and a delayed Waiting revision survive sync/reload/reconnect without enqueue
+  ---
+  duration_ms: 7732.891041
+  type: 'test'
+  ...
+# Subtest: TEST 8: Omitted and a delayed Waiting revision cannot be resent
+ok 31 - TEST 8: Omitted and a delayed Waiting revision cannot be resent
+  ---
+  duration_ms: 5404.757125
+  type: 'test'
+  ...
+# Subtest: TEST 9: absent Waiting stays absent across polling cycles
+ok 32 - TEST 9: absent Waiting stays absent across polling cycles
+  ---
+  duration_ms: 7302.149959
+  type: 'test'
+  ...
+# Subtest: TEST 10: explicit Host Send adds exactly once and a bare/internal intent is rejected
+ok 33 - TEST 10: explicit Host Send adds exactly once and a bare/internal intent is rejected
+  ---
+  duration_ms: 1629.80875
+  type: 'test'
+  ...
+# Subtest: TEST 11: duplicate delivery and lost response/restart consume the same command once
+ok 34 - TEST 11: duplicate delivery and lost response/restart consume the same command once
+  ---
+  duration_ms: 2751.973375
+  type: 'test'
+  ...
+# Subtest: TEST 12: explicit Return sends a terminal request once; its repeated command does not send again
+ok 35 - TEST 12: explicit Return sends a terminal request once; its repeated command does not send again
+  ---
+  duration_ms: 2029.982333
+  type: 'test'
+  ...
+# Subtest: TEST 13: finish and clear cannot start a cleanup/reconciliation reinsertion cycle
+ok 36 - TEST 13: finish and clear cannot start a cleanup/reconciliation reinsertion cycle
+  ---
+  duration_ms: 3702.216917
+  type: 'test'
+  ...
+# Subtest: TEST 14: changing activity never inserts a previous activity row
+ok 37 - TEST 14: changing activity never inserts a previous activity row
+  ---
+  duration_ms: 1211.803
+  type: 'test'
+  ...
+# Subtest: TEST 15: three minutes connected without Host action produce zero queue mutations
+ok 38 - TEST 15: three minutes connected without Host action produce zero queue mutations
+  ---
+  duration_ms: 180692.154291
+  type: 'test'
+  ...
+# Subtest: Guest metadata wins and public projection strips private data / paths / IDs
+ok 39 - Guest metadata wins and public projection strips private data / paths / IDs
+  ---
+  duration_ms: 4.511916
+  type: 'test'
+  ...
+# Subtest: manual or ambiguous track uses official VDJ metadata, never guest misattribution
+ok 40 - manual or ambiguous track uses official VDJ metadata, never guest misattribution
+  ---
+  duration_ms: 0.479417
+  type: 'test'
+  ...
+# Subtest: reorder, remove, completed, activity/hotel/branding/QR scope changes use existing records
+ok 41 - reorder, remove, completed, activity/hotel/branding/QR scope changes use existing records
+  ---
+  duration_ms: 2.141625
+  type: 'test'
+  ...
+# Subtest: every lifecycle state and Player isolation
+ok 42 - every lifecycle state and Player isolation
+  ---
+  duration_ms: 0.422625
+  type: 'test'
+  ...
+# Subtest: read-only HTTP, loopback Host, ETag, public data, no arbitrary logo URLs
+ok 43 - read-only HTTP, loopback Host, ETag, public data, no arbitrary logo URLs
+  ---
+  duration_ms: 84.428
+  type: 'test'
+  ...
+1..43
+# tests 43
+# suites 0
+# pass 43
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 245856.972917

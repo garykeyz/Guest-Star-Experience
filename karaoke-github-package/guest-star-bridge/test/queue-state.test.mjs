@@ -47,6 +47,11 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
       }
     ],
     playerOrder: ["request-1", "player-local-1", "request-1"],
+    playerQueueVisibility: {
+      "request-1": false,
+      "player-local-1": true,
+      "": false
+    },
     playerPlayback: {
       currentRequestId: "request-1",
       currentTimeSeconds: 83.5,
@@ -55,14 +60,35 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
       updatedAt: "2026-07-29T20:12:00.000Z"
     },
     playerStemJobs: [{
-      id: "request-1",
+      id: "request-1:spleeter",
+      requestId: "request-1",
+      jobId: "stem-job-1",
       filePath: "/Music/Karaoke/song.mp4",
-      status: "ready",
-      progress: 100,
-      phase: "Listo desde caché",
+      engine: "spleeter",
+      intent: "auto",
+      required: true,
+      opportunistic: false,
+      status: "processing",
+      progress: 45,
+      phase: "Separando con Spleeter",
+      fingerprint: "track-fingerprint",
+      cacheKey: "cache-key",
+      modelVersion: "spleeter-model-v1",
+      manifestPath: "/Music/Karaoke/.guest-star-stems/hash/manifest.json",
       instrumentalPath: "/Music/Karaoke/.guest-star-stems/hash/instrumental.m4a",
       vocalsPath: "/Music/Karaoke/.guest-star-stems/hash/vocals.m4a",
+      estimatedTurnSeconds: 90,
+      etaSeconds: 25,
+      resourceState: "live",
+      actualThreads: 2,
+      osPriorityApplied: 19,
       updatedAt: "2026-07-29T20:11:00.000Z"
+    }],
+    requestFileLinks: [{
+      id: "request-1",
+      filePath: "/Music/Karaoke/song-v2.mp4",
+      source: "manual",
+      updatedAt: "2026-07-29T20:13:00.000Z"
     }]
   });
   assert.equal(state.activityId, "activity-1");
@@ -80,11 +106,23 @@ test("conserva solo entradas eliminables de VirtualDJ", () => {
   assert.equal(state.playerRequests[0].singer, "Yefry");
   assert.equal(state.playerRequests[0].status, "Saltado");
   assert.deepEqual(state.playerOrder, ["request-1", "player-local-1"]);
+  assert.deepEqual(state.playerQueueVisibility, {
+    "request-1": false,
+    "player-local-1": true
+  });
   assert.equal(state.playerPlayback.currentRequestId, "request-1");
   assert.equal(state.playerPlayback.currentTimeSeconds, 83.5);
   assert.equal(state.playerPlayback.wasPlaying, true);
   assert.equal(state.playerStemJobs.length, 1);
-  assert.equal(state.playerStemJobs[0].status, "ready");
+  assert.equal(state.playerStemJobs[0].id, "request-1:spleeter");
+  assert.equal(state.playerStemJobs[0].engine, "spleeter");
+  assert.equal(state.playerStemJobs[0].intent, "auto");
+  assert.equal(state.playerStemJobs[0].status, "queued");
+  assert.equal(state.playerStemJobs[0].actualThreads, 2);
+  assert.equal(state.playerStemJobs[0].resourceState, "LIVE");
   assert.match(state.playerStemJobs[0].instrumentalPath, /instrumental\.m4a$/);
   assert.match(state.playerStemJobs[0].vocalsPath, /vocals\.m4a$/);
+  assert.equal(state.requestFileLinks.length, 1);
+  assert.equal(state.requestFileLinks[0].source, "manual");
+  assert.match(state.requestFileLinks[0].filePath, /song-v2\.mp4$/);
 });

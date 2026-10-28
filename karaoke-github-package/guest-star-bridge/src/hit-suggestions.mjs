@@ -1,19 +1,11 @@
 import { findMatches, normalizeText } from "./matcher.mjs";
+import { PLAN_B_SONGS } from "../public/shared/plan-b.js";
+import { LANGUAGE_BY_CODE } from "../public/shared/guest-locales.js";
 
-const HITS = [
-  { song: "Vivir Mi Vida", artist: "Marc Anthony", language: "Español" },
-  { song: "La Vida Es un Carnaval", artist: "Celia Cruz", language: "Español" },
-  { song: "Suavemente", artist: "Elvis Crespo", language: "Español" },
-  { song: "Bailando", artist: "Enrique Iglesias", language: "Español" },
-  { song: "Burbujas de Amor", artist: "Juan Luis Guerra", language: "Español" },
-  { song: "Como La Flor", artist: "Selena", language: "Español" },
-  { song: "Dancing Queen", artist: "ABBA", language: "English" },
-  { song: "I Wanna Dance with Somebody", artist: "Whitney Houston", language: "English" },
-  { song: "Don't Stop Believin'", artist: "Journey", language: "English" },
-  { song: "Sweet Caroline", artist: "Neil Diamond", language: "English" },
-  { song: "Livin' on a Prayer", artist: "Bon Jovi", language: "English" },
-  { song: "Man! I Feel Like a Woman!", artist: "Shania Twain", language: "English" }
-];
+const hostSong = (item) => ({song:item.title,artist:item.artist,language:LANGUAGE_BY_CODE[item.language]?.nativeName||item.language});
+const HITS = PLAN_B_SONGS.filter((item)=>item.language==="es"||item.language==="en")
+  .filter((item,index,items)=>items.filter(candidate=>candidate.language===item.language).indexOf(item)<6)
+  .map(hostSong);
 
 function seedFrom(value) {
   return [...String(value || "guest-star")].reduce(

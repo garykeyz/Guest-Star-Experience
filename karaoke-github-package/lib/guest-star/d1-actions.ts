@@ -1,3 +1,4 @@
+import { activityRun, reserveActivityRun, startActivityRun, processDueActivityRuns, finishActivityRun, cancelRunEndCountdown, processRunEndings, processRunOpenings } from "./activity-run";
 import {
   type ActivityRuntime,
   type D1DatabaseLike,
@@ -6,14 +7,19 @@ import {
   activeRequests,
   archiveActiveRequests,
   checkRateLimit,
+  findAuthSessionByTokenHash,
   findActiveRequest,
   getActivityRuntime,
   getMeta,
   getRecord,
   insertPublicRequestAtomically,
+  insertActivityOnce,
   listRecords,
   listRecordsByJsonField,
+  moveActiveRequestBefore,
+  pendingBridgeCommands,
   setMeta,
+  transitionPendingBridgeCommand,
   updateActiveRequest,
   updateRecord,
   upsertActivityRuntime,
@@ -21,8 +27,27 @@ import {
   upsertRequest
 } from "./d1-store";
 import { hmacSha256Hex, randomId, randomToken, safeEqual, sha256Hex } from "./crypto";
+import {
+  accessContext,
+  activateVenueAccess,
+  activeActivityAccess,
+  activityAccessView,
+  clearPinFailures,
+  clearVenueActivityAccess,
+  createActivitySession,
+  ensureVenueAccess,
+  findAccessByJoinToken,
+  findAccessByPin,
+  pinAttemptState,
+  renewActivitySession,
+  recordPinFailure,
+  resetVenueAccess,
+  resolveActivitySession,
+  updateVenueAccessMessages,
+  type ActivityAccessRow
+} from "./activity-access";
 
-export const GUEST_STAR_D1_VERSION = "4.4.0";
+export const GUEST_STAR_D1_VERSION = "4.5.1";
 export const GUEST_STAR_BRIDGE_COMPAT_VERSION = "4.2.0";
 
 const PERMISSIONS = [
@@ -38,10 +63,9 @@ const PERMISSIONS = [
 
 const PUBLIC_BASE_URL = "https://request.gstarxp.com";
 const HOST_BASE_URL = "https://host.gstarxp.com";
-const DEFAULT_PUBLIC_EXPERIENCE_SETTING = "defaultPublicExperience";
 const PUBLIC_SCHEDULE_CHECK_INTERVAL_MS = 2_000;
 const PUBLIC_SCHEDULE_LEASE_MS = 5_000;
-export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt"] as const;
+export const GUEST_STAR_LANGUAGE_CODES = ["es", "en", "fr", "it", "de", "ru", "pt", "hi"] as const;
 
 type PermissionName = typeof PERMISSIONS[number];
 type Auth = {
@@ -66,6 +90,7 @@ type PublicScheduleCheckState = {
 };
 
 const publicScheduleChecks = new WeakMap<object, Map<string, PublicScheduleCheckState>>();
+const sessionSecrets = new WeakMap<object, Promise<string>>();
 
 function nowIso() {
   return new Date().toISOString();
@@ -149,6 +174,109 @@ function publicUser(user: JsonObject | null) {
   };
 }
 
+const DIAGNOSTIC_REPORTER_ROLES = new Set(["host", "tester", "developer", "superhost"]);
+const DIAGNOSTIC_SEVERITIES = new Set(["INFO", "WARNING", "ERROR", "CRITICAL", "RECOVERED"]);
+const DIAGNOSTIC_REDACTED_KEY = /authorization|password|passwd|secret|token|cookie|credential|api[-_]?key|oauth|song|track|video|stem|singer|guest|email|phone|mobile/i;
+const DIAGNOSTIC_BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+const DIAGNOSTIC_TOKEN = /\b(?:eyJ[A-Za-z0-9_-]{10,}|AIza[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/g;
+
+function diagnosticText(value: unknown, maximum = 4_000) {
+  return limitedText(value, maximum)
+    .replace(DIAGNOSTIC_BEARER, "Bearer <redacted>")
+    .replace(DIAGNOSTIC_TOKEN, "<redacted-token>");
+}
+
+function diagnosticValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) return "<truncated>";
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return diagnosticText(value, 2_000);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value !== "object") return diagnosticText(value, 200);
+  if (Array.isArray(value)) return value.slice(0, 50).map((entry) => diagnosticValue(entry, depth + 1));
+  const result: JsonObject = {};
+  for (const [key, entry] of Object.entries(value as JsonObject).slice(0, 50)) {
+    result[key] = DIAGNOSTIC_REDACTED_KEY.test(key)
+      ? "<redacted>"
+      : diagnosticValue(entry, depth + 1);
+  }
+  return result;
+}
+
+function diagnosticTimestamp(value: unknown, fallback: string) {
+  const parsed = Date.parse(text(value));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
+}
+
+async function submitDiagnosticReport(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const role = text(auth.user.role).toLowerCase();
+  if (!DIAGNOSTIC_REPORTER_ROLES.has(role)) throw new Error("FORBIDDEN");
+  const source = body.report && typeof body.report === "object" && !Array.isArray(body.report)
+    ? body.report as JsonObject
+    : {};
+  const reportId = limitedText(source.reportId, 160);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{7,159}$/.test(reportId)) {
+    return { ok: false, code: "INVALID_DIAGNOSTIC_REPORT" };
+  }
+  const existing = await getRecord(db, "TechnicalReports", reportId);
+  if (existing) {
+    if (text(existing.reporterUserId) !== text(auth.user.userId)) {
+      return { ok: false, code: "DIAGNOSTIC_REPORT_ID_CONFLICT" };
+    }
+    return {
+      ok: true,
+      reportId,
+      receivedAt: text(existing.receivedAt),
+      status: text(existing.status) || "Nuevo",
+      deduplicated: true
+    };
+  }
+  const receivedAt = nowIso();
+  const severity = text(source.severity).toUpperCase();
+  const report = {
+    reportId,
+    automatic: source.automatic === true,
+    deliveryProbe: source.deliveryProbe === true,
+    status: "Nuevo",
+    severity: DIAGNOSTIC_SEVERITIES.has(severity) ? severity : "INFO",
+    createdAt: diagnosticTimestamp(source.createdAt, receivedAt),
+    firstSeenAt: diagnosticTimestamp(source.firstSeenAt, receivedAt),
+    lastSeenAt: diagnosticTimestamp(source.lastSeenAt, receivedAt),
+    receivedAt,
+    reporterUserId: text(auth.user.userId),
+    reporterRole: role,
+    reporterDeviceId: text(auth.device?.deviceId),
+    sessionDiagnosticId: diagnosticText(source.sessionDiagnosticId, 120),
+    modules: Array.isArray(source.modules)
+      ? [...new Set(source.modules.map((module) => diagnosticText(module, 80)).filter(Boolean))].slice(0, 20)
+      : [],
+    summary: diagnosticText(source.summary || source.lastError || "Reporte técnico", 1_000),
+    description: diagnosticText(source.description, 4_000),
+    userAction: diagnosticText(source.userAction, 1_000),
+    version: diagnosticText(source.version, 80),
+    build: diagnosticText(source.build, 160),
+    source: diagnosticValue(source.source),
+    stack: diagnosticText(source.stack, 8_000),
+    lastError: diagnosticText(source.lastError, 4_000),
+    snapshot: diagnosticValue(source.snapshot),
+    recentEvents: diagnosticValue(source.recentEvents),
+    health: diagnosticValue(source.health),
+    createdByBackendAt: receivedAt,
+    updatedAt: receivedAt
+  };
+  if (new TextEncoder().encode(JSON.stringify(report)).byteLength > 128 * 1024) {
+    return { ok: false, code: "DIAGNOSTIC_REPORT_TOO_LARGE" };
+  }
+  await save(db, "TechnicalReports", report, "master", false);
+  await audit(db, {
+    userId: auth.user.userId,
+    deviceId: auth.device?.deviceId,
+    action: "diagnostic.report.submitted",
+    targetId: reportId,
+    details: { automatic: report.automatic, deliveryProbe: report.deliveryProbe, severity: report.severity }
+  });
+  return { ok: true, reportId, receivedAt, status: report.status };
+}
+
 function visibleHotel(user: JsonObject, hotel: JsonObject) {
   if (text(user.role) === "superhost") return hotel;
   const { dataSheetId: _dataSheetId, qrFileId: _qrFileId, ...safe } = hotel;
@@ -164,7 +292,12 @@ function languageCode(value: unknown) {
   if (["de", "german", "deutsch", "alemán", "aleman"].includes(language)) return "de";
   if (["ru", "russian", "русский", "ruso"].includes(language)) return "ru";
   if (["pt", "portuguese", "português", "portugues"].includes(language)) return "pt";
+  if (["hi", "hindi", "हिन्दी", "हिंदी"].includes(language)) return "hi";
   return "";
+}
+
+function containsDevanagari(value: unknown) {
+  return /[\u0900-\u097F\uA8E0-\uA8FF\u{11B00}-\u{11B5F}]/u.test(text(value));
 }
 
 function normalizeLanguages(value: unknown) {
@@ -181,17 +314,29 @@ function normalizeLanguages(value: unknown) {
 }
 
 async function migrateLanguageCatalog(db: D1DatabaseLike) {
-  if (await getMeta(db, "language_catalog_v42_migrated") === "true") return;
-  for (const activity of await listRecords(db, "Activities")) {
-    const languages = normalizeLanguages(activity.allowedLanguagesJson);
-    if (languages.length === 2 && languages.includes("es") && languages.includes("en")) {
-      await patchRecord(db, "Activities", text(activity.activityId), {
-        allowedLanguagesJson: JSON.stringify(GUEST_STAR_LANGUAGE_CODES),
-        updatedAt: nowIso()
+  if (await getMeta(db, "language_catalog_v42_migrated") !== "true") {
+    for (const activity of await listRecords(db, "Activities")) {
+      const languages = normalizeLanguages(activity.allowedLanguagesJson);
+      if (languages.length === 2 && languages.includes("es") && languages.includes("en")) {
+        await patchRecord(db, "Activities", text(activity.activityId), {
+          allowedLanguagesJson: JSON.stringify(GUEST_STAR_LANGUAGE_CODES),
+          updatedAt: nowIso()
+        });
+      }
+    }
+    await setMeta(db, "language_catalog_v42_migrated", "true");
+  }
+  if (await getMeta(db, "language_catalog_v46_hindi_migrated") === "true") return;
+  const legacyCodes=GUEST_STAR_LANGUAGE_CODES.filter(code=>code!=="hi");
+  for(const activity of await listRecords(db,"Activities")){
+    const languages=normalizeLanguages(activity.allowedLanguagesJson);
+    if(languages.length===legacyCodes.length&&legacyCodes.every(code=>languages.includes(code))){
+      await patchRecord(db,"Activities",text(activity.activityId),{
+        allowedLanguagesJson:JSON.stringify(GUEST_STAR_LANGUAGE_CODES),updatedAt:nowIso()
       });
     }
   }
-  await setMeta(db, "language_catalog_v42_migrated", "true");
+  await setMeta(db,"language_catalog_v46_hindi_migrated","true");
 }
 
 function activityWithLanguages(activity: JsonObject | null) {
@@ -252,8 +397,25 @@ async function audit(db: D1DatabaseLike, entry: JsonObject) {
   await save(db, "AuditLog", record);
 }
 
+async function sessionSecret(db: D1DatabaseLike) {
+  let pending = sessionSecrets.get(db as object);
+  if (!pending) {
+    pending = getMeta(db, "session_hash_secret").then((secret) => {
+      if (!secret) throw new Error("D1_SESSION_SECRET_MISSING");
+      return secret;
+    });
+    sessionSecrets.set(db as object, pending);
+  }
+  try {
+    return await pending;
+  } catch (error) {
+    if (sessionSecrets.get(db as object) === pending) sessionSecrets.delete(db as object);
+    throw error;
+  }
+}
+
 async function sessionHash(db: D1DatabaseLike, token: unknown) {
-  return hmacSha256Hex(token, await getMeta(db, "session_hash_secret"));
+  return hmacSha256Hex(token, await sessionSecret(db));
 }
 
 async function revokeUserAccess(db: D1DatabaseLike, userId: string) {
@@ -301,9 +463,11 @@ async function authenticate(db: D1DatabaseLike, body: JsonObject): Promise<Auth 
   const rawToken = text(body.authToken);
   if (!rawToken) return null;
   const hash = await sessionHash(db, rawToken);
-  const sessions = await listRecords(db, "AuthSessions");
-  const session = sessions.find((candidate) => safeEqual(candidate.sessionTokenHash, hash)) || null;
-  if (!session || text(session.revokedAt) || Date.parse(text(session.expiresAt)) <= Date.now()) return null;
+  const session = await findAuthSessionByTokenHash(db, hash);
+  if (
+    !session || !safeEqual(session.sessionTokenHash, hash) ||
+    text(session.revokedAt) || Date.parse(text(session.expiresAt)) <= Date.now()
+  ) return null;
   const user = await getRecord(db, "Users", text(session.userId));
   if (!user || text(user.status) !== "active") return null;
   let device: JsonObject | null = null;
@@ -414,12 +578,14 @@ async function tenantContext(db: D1DatabaseLike, auth: Auth, requested: JsonObje
   const hotel = await getRecord(db, "Hotels", text(requested.hotelId));
   if (!hotel || text(hotel.status) !== "active") throw new Error("HOTEL_NOT_FOUND");
   const venue = text(requested.venueId) ? await getRecord(db, "Venues", text(requested.venueId)) : null;
+  if (text(requested.venueId) && !venue) throw new Error("VENUE_NOT_FOUND");
   if (venue && (text(venue.hotelId) !== text(hotel.hotelId) || text(venue.status) !== "active")) {
     throw new Error("VENUE_NOT_FOUND");
   }
   const activity = text(requested.activityId)
     ? await getRecord(db, "Activities", text(requested.activityId))
     : null;
+  if (text(requested.activityId) && !activity) throw new Error("ACTIVITY_NOT_FOUND");
   if (activity && (
     text(activity.hotelId) !== text(hotel.hotelId) ||
     (venue && text(activity.venueId) !== text(venue.venueId)) ||
@@ -457,7 +623,8 @@ function shareInfo(hotel: JsonObject) {
 
 async function runtimeFor(db: D1DatabaseLike, activity: JsonObject, hotel: JsonObject) {
   const existing = await getActivityRuntime(db, text(activity.activityId));
-  if (existing) return existing;
+  if (existing && existing.hotelId === text(hotel.hotelId) && existing.venueId === text(activity.venueId)) return existing;
+  if (existing) throw new Error("RUNTIME_CONTEXT_MISMATCH");
   const status = text(activity.status);
   return {
     activityId: text(activity.activityId),
@@ -535,7 +702,8 @@ async function recalculateQueue(
   activity: JsonObject
 ) {
   const requests = await currentCycleRequests(db, hotelId, activity);
-  const totalSeconds = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
+  const run = await activityRun(db, activity);
+  const totalSeconds = Math.max(900, numberValue(run?.durationSeconds || activity.defaultDurationSeconds, 7200));
   const defaultTransition = Math.max(0, numberValue(activity.defaultTransitionSeconds, 30));
   let accumulated = 0;
   for (const request of requests) {
@@ -547,9 +715,12 @@ async function recalculateQueue(
       accumulatedSeconds: accumulated,
       remainingSeconds: remaining,
       updatedAt: nowIso()
-    });
+    }, request.stateRevision);
   }
-  return accumulated;
+  return {
+    accumulatedSeconds: accumulated,
+    queuePeopleCount: new Set(requests.filter(publicRequestIsActive).map(publicGuestKey)).size
+  };
 }
 
 async function stateFor(
@@ -564,7 +735,8 @@ async function stateFor(
     if (["Retirada del Player", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status)) return total;
     return total + Math.max(0, request.durationSeconds) + Math.max(0, request.transitionSeconds || numberValue(activity.defaultTransitionSeconds, 30));
   }, 0);
-  const totalSeconds = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
+  const run = await activityRun(db, activity);
+  const totalSeconds = Math.max(900, numberValue(run?.durationSeconds || activity.defaultDurationSeconds, 7200));
   return {
     accepting: runtime.accepting,
     activityHours: totalSeconds / 3600,
@@ -614,68 +786,151 @@ function bridgeRequest(request: GuestStarRequest) {
   };
 }
 
-async function upcomingActivities(db: D1DatabaseLike, hotelId: string) {
+function sameScheduleContext(schedule: JsonObject, activity: JsonObject) {
+  return !!text(activity.hotelId) && !!text(activity.activityId) && !!text(activity.venueId)
+    && text(schedule.hotelId) === text(activity.hotelId)
+    && text(schedule.activityId) === text(activity.activityId)
+    && text(schedule.venueId) === text(activity.venueId);
+}
+
+async function upcomingActivities(db: D1DatabaseLike, hotelId: string, selectedActivity?: JsonObject | null): Promise<JsonObject[]> {
+  if (!selectedActivity || text(selectedActivity.hotelId) !== hotelId) return [];
+  const scopeHotel = await getRecord(db, "Hotels", hotelId);
   const schedules = (await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", hotelId))
-    .filter((schedule) => text(schedule.status) === "active" && Date.parse(text(schedule.scheduledStartAt)) > Date.now())
-    .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)))
-    .slice(0, 3);
-  return await Promise.all(schedules.map(async (schedule) => {
-    const [activity, venue] = await Promise.all([
-      getRecord(db, "Activities", text(schedule.activityId)),
-      getRecord(db, "Venues", text(schedule.venueId))
-    ]);
-    return {
-      scheduleId: text(schedule.scheduleId),
-      activityId: text(schedule.activityId),
-      activityName: text(activity?.name) || "Guest Star Activity",
-      venueName: text(venue?.name),
-      scheduledStartAt: text(schedule.scheduledStartAt),
-      durationSeconds: numberValue(schedule.durationSeconds),
-      showCountdown: bool(schedule.showCountdown)
-    };
-  }));
+    .filter(schedule => sameScheduleContext(schedule, selectedActivity) && text(schedule.status) === "active")
+    .map(schedule => {
+      let cursor = { ...schedule };
+      for (let i = 0; i < 400 && Date.parse(text(cursor.scheduledStartAt)) <= Date.now(); i++) {
+        const next = nextScheduleOccurrence(cursor, schedule.timezone || scopeHotel?.timezone || "UTC");
+        if (!next) return null;
+        cursor = { ...cursor, scheduledStartAt: next };
+      }
+      return Date.parse(text(cursor.scheduledStartAt)) > Date.now() ? cursor : null;
+    }).filter((schedule): schedule is JsonObject => !!schedule)
+    .sort((a,b) => Date.parse(text(a.scheduledStartAt)) - Date.parse(text(b.scheduledStartAt))).slice(0,3);
+  const [hotel, venue] = await Promise.all([getRecord(db, "Hotels", hotelId), getRecord(db, "Venues", text(selectedActivity.venueId))]);
+  if (!hotel || !venue || text(venue.hotelId) !== hotelId) return [];
+  return schedules.map(schedule => ({ ...schedule, hotelId, venueId: venue.venueId,
+    activityId: selectedActivity.activityId, hotelName: hotel.name, venueName: venue.name,
+    activityName: selectedActivity.name, timezone: schedule.timezone || hotel.timezone }));
+}
+
+async function finalExperience(db: D1DatabaseLike, hotel: JsonObject, activity: JsonObject) {
+  const run = await activityRun(db, activity);
+  return {
+    hotelId: hotel.hotelId, activityId: activity.activityId, venueId: activity.venueId,
+    finished: text(activity.status) === "finished",
+    message: text(run?.finalMessage),
+    branding: await safeBranding(db, text(hotel.hotelId)),
+    nextActivity: (await upcomingActivities(db, text(hotel.hotelId), activity))[0] || null
+  };
+}
+
+async function prepareSession(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const context = await tenantContext(db, auth, body);
+  if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
+  requirePermission(context, "canOpenCloseRequests");
+  if(body.requestOpeningLeadSeconds!==undefined && (!Number.isInteger(Number(body.requestOpeningLeadSeconds))||Number(body.requestOpeningLeadSeconds)<0||Number(body.requestOpeningLeadSeconds)>604800))return {ok:false,code:'INVALID_OPENING_OFFSET'};
+  const runtime = await runtimeFor(db, context.activity, context.hotel);
+  const current = await activityRun(db, context.activity);
+  if (current && ["scheduled", "in_progress"].includes(text(current.status))) {
+    if (body.runId && text(body.runId) !== text(current.runId)) return { ok: false, code: "SESSION_STATE_CHANGED" };
+    return toggleRequests(db, auth, { ...body, open: true });
+  }
+  if (runtime.running) return { ok: false, code: "ACTIVITY_ALREADY_RUNNING" };
+  const requests = await activeRequests(db, text(context.hotel.hotelId), text(context.activity.activityId));
+  const previousQueue = requests.filter(request=>(!text(request.venueId)||text(request.venueId)===text(context.activity?.venueId))&&publicRequestIsActive(request));
+  if (previousQueue.length && !["clear", "keep"].includes(text(body.queueChoice))) {
+    return { ok: false, code: "PREVIOUS_QUEUE_CHOICE_REQUIRED", previousQueueCount: previousQueue.length };
+  }
+  if (body.queueChoice === "clear") requirePermission(context, "canArchiveQueue");
+  const mode = text(body.sessionMode);
+  if (!["free", "scheduled"].includes(mode)) return { ok: false, code: "SESSION_MODE_REQUIRED" };
+  const storedSchedule = mode === "scheduled" ? await getRecord(db, "ActivitySchedules", text(body.scheduleId)) : null;
+  const schedule = storedSchedule && sameScheduleContext(storedSchedule,context.activity)
+    ? (await upcomingActivities(db,text(context.hotel.hotelId),context.activity)).find(item=>text(item.scheduleId)===text(storedSchedule.scheduleId)) || storedSchedule
+    : storedSchedule;
+  if (mode === "scheduled" && (!schedule || !sameScheduleContext(schedule, context.activity) || text(schedule.status) !== "active")) {
+    return { ok: false, code: "SCHEDULE_CONTEXT_MISMATCH" };
+  }
+  const start = body.startsLocal ? localDateTimeToUtc(text(body.startsLocal), text(schedule?.timezone || context.hotel.timezone))
+    : new Date(text(body.startsAt) || text(schedule?.scheduledStartAt) || nowIso());
+  if (!Number.isFinite(start.getTime()) || (body.startsLocal && localCalendarText(zonedCalendarDate(start,text(schedule?.timezone || context.hotel.timezone))).slice(0,16) !== text(body.startsLocal).slice(0,16))) return { ok: false, code: "INVALID_SESSION_START" };
+  const source = text(body.source);
+  if (body.autoStart === true) requirePermission(context, "canStartActivity");
+  if (body.autoStart === true && !["player", "bridge"].includes(source)) return { ok: false, code: "PLAYBACK_MODE_REQUIRED" };
+  const stamp = nowIso();
+  const run = { runId: randomId(), hotelId: context.hotel.hotelId, activityId: context.activity.activityId,
+    venueId: context.venue.venueId, scheduleId: mode === "free" ? null : schedule?.scheduleId,
+    scheduleOccurrenceAt: mode === "scheduled" ? schedule?.scheduledStartAt : "",
+    mode, startsAt: start.toISOString(), timezone: text(schedule?.timezone || context.hotel.timezone),
+    durationSeconds: Math.round(bounded(body.durationSeconds, numberValue(schedule?.durationSeconds || context.activity.defaultDurationSeconds,7200),900,604800)),
+    autoStart: body.autoStart === true, autoOpenRequests: body.autoOpenRequests !== false, openBeforeStart: body.openBeforeStart !== false, autoFinish: body.autoFinish !== false, finalMessage: limitedText(body.finalMessage,2000),
+    requestOpeningLeadSeconds:Number(body.requestOpeningLeadSeconds??schedule?.requestOpeningLeadSeconds??0),
+    requestOpeningAt:new Date(start.getTime()-Number(body.requestOpeningLeadSeconds??schedule?.requestOpeningLeadSeconds??0)*1000).toISOString(),
+    playbackSource: source, status: "scheduled", createdAt: stamp, startedByUserId: auth.user.userId };
+  const reserved = await reserveActivityRun(db, run, numberValue(body.expectedRevision, runtime.stateRevision), body.queueChoice === "clear");
+  if (!reserved) return { ok: false, code: "SESSION_STATE_CHANGED" };
+  context.activity = await getRecord(db, "Activities", text(context.activity.activityId)) || context.activity;
+  await activatePublicActivity(db, context);
+  await activateVenueAccess(db, accessContext(context.hotel, context.activity));
+  await processRunOpenings(db,text(context.hotel.hotelId));
+  await processDueActivityRuns(db, text(context.hotel.hotelId));
+  return selectedState(db, auth, context);
 }
 
 async function selectedState(db: D1DatabaseLike, auth: Auth, context: Context) {
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
-  const freshActivity = await getRecord(db, "Activities", text(context.activity.activityId));
-  const freshHotel = await getRecord(db, "Hotels", text(context.hotel.hotelId));
+  const [freshActivity,freshHotel] = await Promise.all([getRecord(db,"Activities",text(context.activity.activityId)),getRecord(db,"Hotels",text(context.hotel.hotelId))]);
   if (!freshActivity || !freshHotel) throw new Error("ACTIVITY_NOT_FOUND");
   const requests = await currentCycleRequests(db, text(freshHotel.hotelId), freshActivity);
-  const schedules = (await listRecordsByJsonField(
-    db,
-    "ActivitySchedules",
-    "hotelId",
-    text(freshHotel.hotelId)
-  )).filter((schedule) => text(schedule.activityId) === text(freshActivity.activityId))
+  const selectedSnapshot = await stateFor(db, freshHotel, freshActivity, requests);
+  const [selectedRun,branding,permissions,playerRuntime,upcoming,final,scheduleRows] = await Promise.all([
+    activityRun(db,freshActivity),safeBranding(db,text(freshHotel.hotelId)),
+    effectivePermissions(db,auth.user,{hotelId:freshHotel.hotelId,venueId:context.venue?.venueId||'',activityId:freshActivity.activityId}),
+    playerRuntimeFor(db,text(freshActivity.activityId)),upcomingActivities(db,text(freshHotel.hotelId),freshActivity),
+    finalExperience(db,freshHotel,freshActivity),listRecordsByJsonField(db,'ActivitySchedules','hotelId',text(freshHotel.hotelId))
+  ]);
+  const roomContext = accessContext(freshHotel, freshActivity);
+  const operationalAccessAllowed = text(auth.user.role) === "host" ||
+    (text(auth.user.role) === "superhost" && Boolean(auth.device));
+  let kioskAccess = operationalAccessAllowed
+    ? await activeActivityAccess(db, roomContext.hotelId, roomContext.activityId, roomContext.venueId)
+    : null;
+  if (!kioskAccess && operationalAccessAllowed) {
+    kioskAccess = await ensureVenueAccess(db, roomContext);
+  }
+  const schedules = scheduleRows.filter((schedule) => sameScheduleContext(schedule, freshActivity))
     .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
   return {
     ok: true,
     codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
     codeBuild: GUEST_STAR_D1_VERSION,
     serverNow: nowIso(),
+    bridgeFeatures: { versionedMetadata: true, playedCompareAndSet: true, administrativeReorder: true },
     user: publicUser(auth.user),
     hotel: visibleHotel(auth.user, freshHotel),
-    branding: await safeBranding(db, text(freshHotel.hotelId)),
+    branding,
     venue: context.venue,
     activity: activityWithLanguages(freshActivity),
-    permissions: await effectivePermissions(db, auth.user, {
-      hotelId: freshHotel.hotelId,
-      venueId: context.venue?.venueId || "",
-      activityId: freshActivity.activityId
-    }),
-    state: await stateFor(db, freshHotel, freshActivity, requests),
+    permissions,
+    state: selectedSnapshot,
+    previousQueueCount: ["scheduled","in_progress"].includes(text(selectedRun?.status)) ? 0 : (await activeRequests(db, text(freshHotel.hotelId), text(freshActivity.activityId))).filter(request=>(!text(request.venueId)||text(request.venueId)===text(freshActivity.venueId))&&publicRequestIsActive(request)).length,
+    session: selectedRun,
+    finalExperience: final,
     config: {
       activityHours: numberValue(freshActivity.defaultDurationSeconds, 7200) / 3600,
       transitionSeconds: numberValue(freshActivity.defaultTransitionSeconds, 30)
     },
     requests: requests
-      .filter((request) => !["Eliminada", "Cancelada"].includes(request.status))
+      .filter((request) => !["Eliminada", "Cancelada"].includes(request.status) ||
+        (auth.device && selectedSnapshot.playbackMode === 'bridge' && request.status === 'Eliminada'))
       .map(bridgeRequest),
-    playerRuntime: await playerRuntimeFor(db, text(freshActivity.activityId)),
+    playerRuntime,
     schedules,
     share: shareInfo(freshHotel),
-    upcomingActivities: await upcomingActivities(db, text(freshHotel.hotelId))
+    kioskAccess: operationalAccessAllowed ? activityAccessView(kioskAccess) : null,
+    upcomingActivities: upcoming
   };
 }
 
@@ -817,74 +1072,9 @@ async function adminState(db: D1DatabaseLike, auth: Auth) {
     schedules: await listRecords(db, "ActivitySchedules"),
     upcomingActivities: await listRecords(db, "UpcomingActivities"),
     branding: await listRecords(db, "HotelBranding"),
-    defaultPublicExperience: await defaultPublicExperienceSetting(db),
+    defaultPublicExperience: { disabled: true, configured: false, available: false },
     auditLog: (await listRecords(db, "AuditLog")).slice(-500)
   };
-}
-
-async function defaultPublicExperienceSetting(db: D1DatabaseLike) {
-  const record = await getRecord(db, "GlobalSettings", DEFAULT_PUBLIC_EXPERIENCE_SETTING);
-  const setting = parseObject(record?.settingValue);
-  const hotelId = text(setting.hotelId);
-  const venueId = text(setting.venueId);
-  const activityId = text(setting.activityId);
-  const configured = bool(setting.enabled) && Boolean(hotelId && venueId && activityId);
-  let available = false;
-  if (configured) {
-    const [hotel, venue, activity] = await Promise.all([
-      getRecord(db, "Hotels", hotelId),
-      getRecord(db, "Venues", venueId),
-      getRecord(db, "Activities", activityId)
-    ]);
-    available = Boolean(
-      hotel && text(hotel.status) === "active" &&
-      venue && text(venue.status) === "active" && text(venue.hotelId) === hotelId &&
-      activity && text(activity.status) !== "inactive" &&
-      text(activity.hotelId) === hotelId && text(activity.venueId) === venueId
-    );
-  }
-  return {
-    configured,
-    available,
-    hotelId,
-    venueId,
-    activityId,
-    updatedAt: text(record?.updatedAt)
-  };
-}
-
-async function setDefaultPublicExperience(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
-  if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
-  const enabled = body.enabled !== false;
-  let settingValue: JsonObject = { enabled: false, hotelId: "", venueId: "", activityId: "" };
-  if (enabled) {
-    const context = await tenantContext(db, auth, {
-      hotelId: body.hotelId,
-      venueId: body.venueId,
-      activityId: body.activityId
-    });
-    if (!context.venue || !context.activity) return { ok: false, code: "DEFAULT_EXPERIENCE_REQUIRED" };
-    settingValue = {
-      enabled: true,
-      hotelId: text(context.hotel.hotelId),
-      venueId: text(context.venue.venueId),
-      activityId: text(context.activity.activityId)
-    };
-  }
-  const stamp = nowIso();
-  await save(db, "GlobalSettings", {
-    settingKey: DEFAULT_PUBLIC_EXPERIENCE_SETTING,
-    settingValue: JSON.stringify(settingValue),
-    updatedAt: stamp
-  });
-  await audit(db, {
-    userId: auth.user.userId,
-    action: enabled ? "public.defaultExperience.updated" : "public.defaultExperience.cleared",
-    hotelId: settingValue.hotelId,
-    venueId: settingValue.venueId,
-    activityId: settingValue.activityId
-  });
-  return { ok: true, defaultPublicExperience: await defaultPublicExperienceSetting(db) };
 }
 
 async function createHost(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1152,7 +1342,7 @@ async function createActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   const name = text(body.name);
   if (!name) return { ok: false, code: "ACTIVITY_NAME_REQUIRED" };
   const stamp = nowIso();
-  const activity = await save(db, "Activities", {
+  const { activity, created } = await insertActivityOnce(db, {
     activityId: randomId(), hotelId: context.hotel.hotelId, venueId: context.venue.venueId,
     name, internalCode: normalizeIdentifier(body.internalCode || name), status: "ready",
     defaultDurationSeconds: Math.round(bounded(body.defaultDurationSeconds, 7200, 900, 604800)),
@@ -1165,8 +1355,8 @@ async function createActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
     currentCycleId: "", createdAt: stamp, updatedAt: stamp,
     allowedLanguagesJson: JSON.stringify(normalizeLanguages(body.allowedLanguages))
   });
-  await audit(db, { userId: auth.user.userId, action: "activity.created", hotelId: context.hotel.hotelId, venueId: context.venue.venueId, activityId: activity.activityId });
-  return { ok: true, activity: activityWithLanguages(activity) };
+  if (created) await audit(db, { userId: auth.user.userId, action: "activity.created", hotelId: context.hotel.hotelId, venueId: context.venue.venueId, activityId: activity.activityId });
+  return { ok: true, activity: activityWithLanguages(activity), deduplicated: !created };
 }
 
 async function updateActivityRecord(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -1175,7 +1365,7 @@ async function updateActivityRecord(db: D1DatabaseLike, auth: Auth, body: JsonOb
   if (!activity) return { ok: false, code: "ACTIVITY_NOT_FOUND" };
   const hotel = await getRecord(db, "Hotels", text(activity.hotelId));
   const venue = await getRecord(db, "Venues", text(activity.venueId));
-  if (!hotel || !venue) return { ok: false, code: "ACTIVITY_NOT_FOUND" };
+  if (!hotel || !venue || text(venue.hotelId) !== text(activity.hotelId)) return { ok: false, code: "ACTIVITY_NOT_FOUND" };
   const deleting = body.status === "inactive";
   if (deleting && text(activity.status) === "in_progress") {
     return { ok: false, code: "ACTIVITY_IN_PROGRESS", error: "Finish the activity before deleting it." };
@@ -1196,7 +1386,7 @@ async function updateActivityRecord(db: D1DatabaseLike, auth: Auth, body: JsonOb
   const updated = await patchRecord(db, "Activities", text(activity.activityId), changes) || activity;
   if (deleting) {
     for (const schedule of await listRecords(db, "ActivitySchedules")) {
-      if (text(schedule.activityId) === text(activity.activityId) && text(schedule.status) === "active") {
+      if (sameScheduleContext(schedule, activity) && text(schedule.status) === "active") {
         await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), { status: "cancelled", updatedAt: nowIso() });
       }
     }
@@ -1447,7 +1637,16 @@ async function startActivity(
   if (requestedMode !== "player" && requestedMode !== "bridge") {
     return { ok: false, code: "PLAYBACK_MODE_REQUIRED" };
   }
+  const preparedRun = await activityRun(db, context.activity);
+  if (preparedRun && ["scheduled", "in_progress"].includes(text(preparedRun.status))) {
+    if (startNew && text(preparedRun.status) === "in_progress") return { ok: false, code: "ACTIVITY_ALREADY_RUNNING" };
+    const activeRuntime = await runtimeFor(db, context.activity, context.hotel);
+    if (activeRuntime.running && playbackModeForRuntime(activeRuntime) && playbackModeForRuntime(activeRuntime) !== requestedMode) return { ok: false, code: "PLAYBACK_MODE_LOCKED" };
+    await startActivityRun(db, preparedRun, false, requestedMode);
+    return selectedState(db, auth, context);
+  }
   const previousRuntime = await runtimeFor(db, context.activity, context.hotel);
+  if (!previousRuntime.running) return { ok: false, code: "SESSION_PREPARATION_REQUIRED" };
   const lockedMode = playbackModeForRuntime(previousRuntime);
   if (previousRuntime.running && startNew) {
     return { ok: false, code: "ACTIVITY_ALREADY_RUNNING", playbackMode: lockedMode };
@@ -1456,14 +1655,16 @@ async function startActivity(
     return { ok: false, code: "PLAYBACK_MODE_LOCKED", playbackMode: lockedMode };
   }
   if (previousRuntime.running && lockedMode === requestedMode) {
+    await activateVenueAccess(db, accessContext(context.hotel, context.activity));
     return selectedState(db, auth, context);
   }
-  if (startNew) {
+  if (startNew || text(context.activity.status) === "finished") {
     const archivedAt = nowIso();
     await archiveActiveRequests(db, text(context.hotel.hotelId), text(context.activity.activityId), archivedAt);
   }
   const cycle = await ensureCycle(db, auth, context, "in_progress", startNew);
   await activatePublicActivity(db, context);
+  await activateVenueAccess(db, accessContext(context.hotel, context.activity));
   if (startNew || !previousRuntime.running) await resetPlayerRuntime(db, context);
   await writeRuntime(db, context, {
     cycleId: text(cycle.cycleId), accepting: true, running: true,
@@ -1478,8 +1679,16 @@ async function finishActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   const context = await tenantContext(db, auth, body);
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canFinishActivity");
-  await processD1ActivitySchedules(db, text(context.hotel.hotelId));
+  if (body.runId && text(body.runId) !== text(context.activity.currentCycleId)) return { ok: false, code: "SESSION_STATE_CHANGED" };
   context.activity = await getRecord(db, "Activities", text(context.activity.activityId)) || context.activity;
+  const preparedRun = await activityRun(db, context.activity);
+  if (preparedRun) {
+    const schedule = preparedRun.scheduleId ? await getRecord(db,"ActivitySchedules",text(preparedRun.scheduleId)) : null;
+    const next = schedule && sameScheduleContext(schedule,context.activity)
+      ? nextScheduleOccurrence({...schedule,scheduledStartAt:preparedRun.scheduleOccurrenceAt},schedule.timezone || context.hotel.timezone) : null;
+    await finishActivityRun(db,preparedRun,next);
+    return selectedState(db,auth,context);
+  }
   const stamp = nowIso();
   const scope = text(context.hotel.hotelId);
   if (text(context.activity.currentCycleId)) {
@@ -1501,6 +1710,8 @@ async function finishActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
     updatedAt: stamp
   }) || context.activity;
   await writeRuntime(db, context, { accepting: false, running: false, finishedAt: stamp, lastAction: "activity.finish" }, body);
+  // Finishing the occurrence closes requests; only the explicit Reset PIN
+  // action revokes persistent activity access.
   await audit(db, { userId: auth.user.userId, action: "activity.finish", hotelId: context.hotel.hotelId, venueId: context.venue?.venueId, activityId: context.activity.activityId });
   return selectedState(db, auth, context);
 }
@@ -1509,6 +1720,9 @@ async function archiveQueue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   const context = await tenantContext(db, auth, body);
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canArchiveQueue");
+  const run = await activityRun(db, context.activity);
+  if (run) await db.prepare("UPDATE guest_star_activity_runs SET status = 'archived', updated_at = ? WHERE run_id = ? AND hotel_id = ? AND activity_id = ? AND venue_id = ?")
+    .bind(nowIso(), run.runId, context.hotel.hotelId, context.activity.activityId, context.activity.venueId).run();
   const stamp = nowIso();
   await archiveActiveRequests(db, text(context.hotel.hotelId), text(context.activity.activityId), stamp);
   if (text(context.activity.currentCycleId)) {
@@ -1517,6 +1731,7 @@ async function archiveQueue(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
     status: "ready", currentCycleId: "", updatedAt: stamp
   }) || context.activity;
+  await clearVenueActivityAccess(db, accessContext(context.hotel, context.activity));
   await resetPlayerRuntime(db, context);
   await writeRuntime(db, context, { cycleId: "", accepting: false, running: false, startedAt: "", finishedAt: "", lastAction: "queue.archiveClear" }, body);
   await audit(db, { userId: auth.user.userId, action: "queue.archiveClear", hotelId: context.hotel.hotelId, activityId: context.activity.activityId });
@@ -1529,19 +1744,91 @@ async function toggleRequests(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   requirePermission(context, "canOpenCloseRequests");
   const open = body.open === true;
   let cycle: JsonObject | null = null;
-  if (open && text(context.activity.status) !== "in_progress") {
+  const preparedExisting = await activityRun(db, context.activity);
+  if (open && preparedExisting?.endCountdown && !preparedExisting.autoFinishCancelledAt) return {ok:false,code:'END_COUNTDOWN_ACTIVE'};
+  if (open && text(context.activity.status) !== "in_progress" && !["scheduled", "in_progress"].includes(text(preparedExisting?.status))) {
+    return { ok: false, code: "SESSION_PREPARATION_REQUIRED" };
+  }
+  if (open && text(context.activity.status) !== "in_progress" && !preparedExisting) {
     cycle = await ensureCycle(db, auth, context, "scheduled");
     context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
       status: "scheduled", acceptEarlyRequests: true, updatedAt: nowIso()
     }) || context.activity;
     await activatePublicActivity(db, context);
   }
-  await writeRuntime(db, context, {
-    cycleId: text(cycle?.cycleId || context.activity.currentCycleId),
-    accepting: open,
-    lastAction: open ? "requests.open" : "requests.close"
-  }, body);
-  await audit(db, { userId: auth.user.userId, action: open ? "requests.open" : "requests.close", hotelId: context.hotel.hotelId, activityId: context.activity.activityId });
+  if (open) await activateVenueAccess(db, accessContext(context.hotel, context.activity));
+  if(preparedExisting && ['scheduled','in_progress'].includes(text(preparedExisting.status))){
+    const runtime=await runtimeFor(db,context.activity,context.hotel);
+    const source=runtime.running ? playbackModeForRuntime(runtime) || runtime.lastSource : text(body.source)||runtime.lastSource||'web';
+    const result=await db.prepare(`UPDATE guest_star_activity_runtime SET accepting=?,state_revision=state_revision+1,
+      last_action=?,last_source=?,updated_at=? WHERE activity_id=? AND hotel_id=? AND venue_id=? AND cycle_id=?
+      AND accepting<>? AND EXISTS(SELECT 1 FROM guest_star_activity_runs WHERE run_id=? AND status IN ('scheduled','in_progress')
+       AND (?=0 OR json_extract(data_json,'$.endCountdown') IS NULL OR json_extract(data_json,'$.autoFinishCancelledAt') IS NOT NULL))`)
+      .bind(open?1:0,open?'requests.open':'requests.close',source,nowIso(),context.activity.activityId,context.hotel.hotelId,
+        context.activity.venueId,preparedExisting.runId,open?1:0,preparedExisting.runId,open?1:0).run();
+    const currentRun=await activityRun(db,context.activity);
+    if(!currentRun || !['scheduled','in_progress'].includes(text(currentRun.status)))return {ok:false,code:'SESSION_STATE_CHANGED'};
+    if(open && currentRun.endCountdown&&!currentRun.autoFinishCancelledAt)return {ok:false,code:'END_COUNTDOWN_ACTIVE'};
+    if(Number(result.meta?.changes)>0)await audit(db,{userId:auth.user.userId,action:open?'requests.open':'requests.close',hotelId:context.hotel.hotelId,activityId:context.activity.activityId});
+  }else{
+    await writeRuntime(db,context,{cycleId:text(cycle?.cycleId||context.activity.currentCycleId),accepting:open,lastAction:open?'requests.open':'requests.close'},body);
+    await audit(db,{userId:auth.user.userId,action:open?'requests.open':'requests.close',hotelId:context.hotel.hotelId,activityId:context.activity.activityId});
+  }
+  if(body.minimal===true){
+    const freshActivity=await getRecord(db,'Activities',text(context.activity.activityId))||context.activity;
+    const [requests,session]=await Promise.all([currentCycleRequests(db,text(context.hotel.hotelId),freshActivity),activityRun(db,freshActivity)]);
+    return {ok:true,serverNow:nowIso(),hotel:visibleHotel(auth.user,context.hotel),venue:context.venue,
+      activity:activityWithLanguages(freshActivity),session,state:await stateFor(db,context.hotel,freshActivity,requests)};
+  }
+  return selectedState(db, auth, context);
+}
+
+async function continueActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const context=await tenantContext(db,auth,body);
+  if(!context.activity)throw new Error('ACTIVITY_REQUIRED');
+  requirePermission(context,'canFinishActivity');
+  const run=await activityRun(db,context.activity);
+  if(!run || text(body.runId)!==text(run.runId))return {ok:false,code:'SESSION_STATE_CHANGED'};
+  if(run.autoFinishCancelledAt && run.status==='in_progress')return selectedState(db,auth,context);
+  if(!await cancelRunEndCountdown(db,run))return {ok:false,code:'SESSION_STATE_CHANGED'};
+  return selectedState(db,auth,context);
+}
+
+async function resetSessionPin(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const context = await tenantContext(db, auth, body);
+  if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
+  requirePermission(context, "canViewQR");
+  await resetVenueAccess(db, accessContext(context.hotel, context.activity));
+  await audit(db, {
+    userId: auth.user.userId,
+    action: "activity.sessionPinReset",
+    hotelId: context.hotel.hotelId,
+    venueId: context.activity.venueId,
+    activityId: context.activity.activityId
+  });
+  return selectedState(db, auth, context);
+}
+
+async function updateKioskMessages(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
+  const context = await tenantContext(db, auth, body);
+  if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
+  requirePermission(context, "canCustomizeGuestMessages");
+  if (!context.venue) throw new Error("VENUE_REQUIRED");
+  await updateVenueAccessMessages(
+    db,
+    text(context.hotel.hotelId),
+    text(context.activity.activityId),
+    text(context.venue.venueId),
+    body.defaultMessagesEnabled !== false,
+    body.customMessages
+  );
+  await audit(db, {
+    userId: auth.user.userId,
+    action: "activity.kioskMessagesUpdated",
+    hotelId: context.hotel.hotelId,
+    venueId: context.activity.venueId,
+    activityId: context.activity.activityId
+  });
   return selectedState(db, auth, context);
 }
 
@@ -1691,6 +1978,14 @@ function scheduleInput(
   body: JsonObject,
   existing: JsonObject | null = null
 ) {
+  const zone=text(body.timezone||context.hotel.timezone||existing?.timezone)||"UTC";
+  try { new Intl.DateTimeFormat('en',{timeZone:zone}); } catch { return {ok:false as const,code:'INVALID_TIMEZONE'}; }
+  const scheduleContext={...context,hotel:{...context.hotel,timezone:zone}};
+  context=scheduleContext;
+  if(body.durationSeconds!==undefined && (!Number.isFinite(Number(body.durationSeconds)) || Number(body.durationSeconds)<900 || Number(body.durationSeconds)>604800))return {ok:false as const,code:'INVALID_DURATION'};
+  if(body.requestOpeningLeadSeconds!==undefined && (!Number.isInteger(Number(body.requestOpeningLeadSeconds)) || Number(body.requestOpeningLeadSeconds)<0 || Number(body.requestOpeningLeadSeconds)>604800))return {ok:false as const,code:'INVALID_OPENING_OFFSET'};
+  if(body.scheduledTime!==undefined && !scheduleTime(body.scheduledTime))return {ok:false as const,code:'INVALID_SCHEDULE_TIME'};
+  if(body.recurrenceType==='monthly' && (!Number.isInteger(Number(body.recurrenceDayOfMonth??existing?.recurrenceDayOfMonth)) || Number(body.recurrenceDayOfMonth??existing?.recurrenceDayOfMonth)<1 || Number(body.recurrenceDayOfMonth??existing?.recurrenceDayOfMonth)>31))return {ok:false as const,code:'INVALID_MONTH_DAY'};
   const requestedRecurrence = body.recurrenceType === undefined
     ? text(existing?.recurrenceType) === "weekly" && numberValue(existing?.recurrenceInterval, 1) === 2
       ? "biweekly"
@@ -1706,9 +2001,9 @@ function scheduleInput(
       52
     ));
   const existingDays = normalizedRecurrenceDays(existing?.recurrenceDaysJson);
-  const recurrenceDays = body.recurrenceDays === undefined
+  const recurrenceDays = recurrence.type === "weekly" ? (body.recurrenceDays === undefined
     ? existingDays
-    : normalizedRecurrenceDays(body.recurrenceDays);
+    : normalizedRecurrenceDays(body.recurrenceDays)) : [];
   const existingStart = new Date(text(existing?.scheduledStartAt));
   const requestedTime = scheduleTime(
     body.scheduledTime === undefined
@@ -1732,6 +2027,8 @@ function scheduleInput(
     return { ok: false as const, code: recurrence.type === "none" ? "ONE_TIME_DATE_REQUIRED" : "RECURRENCE_TIME_REQUIRED" };
   }
   const localStart = zonedCalendarDate(scheduledStart, context.hotel.timezone);
+  if (raw && !/Z$|[+-]\d{2}:?\d{2}$/.test(raw) && localCalendarText(localStart).slice(0,16)!==raw.slice(0,16))return {ok:false as const,code:'INVALID_SCHEDULE_DATE'};
+  if(body.activityDefault===true && scheduledStart.getTime()<=Date.now())return {ok:false as const,code:'SCHEDULE_MUST_BE_FUTURE'};
   if (recurrence.type === "weekly" && !recurrenceDays.length) {
     return { ok: false as const, code: "RECURRENCE_DAYS_REQUIRED" };
   }
@@ -1768,6 +2065,7 @@ function scheduleInput(
   return {
     ok: true as const,
     fields: {
+      timezone:zone,
       scheduledStartAt: scheduledStart.toISOString(),
       durationSeconds,
       requestOpeningLeadSeconds: openingLead,
@@ -1775,12 +2073,15 @@ function scheduleInput(
         ? new Date(scheduledStart.getTime() - openingLead * 1000).toISOString()
         : "",
       autoOpenRequests,
-      autoStartActivity: false,
+      autoStartActivity: body.autoStartActivity === undefined ? existing?.autoStartActivity === true : body.autoStartActivity === true,
+      autoFinish: body.autoFinish === undefined ? existing?.autoFinish !== false : body.autoFinish !== false,
+      playbackSource: text(body.playbackSource || body.source || existing?.playbackSource || "bridge"),
+      finalMessage: limitedText(body.finalMessage === undefined ? existing?.finalMessage : body.finalMessage,2000),
       showCountdown: body.showCountdown === undefined ? existing?.showCountdown !== false : body.showCountdown !== false,
       recurrenceType: recurrence.type,
       recurrenceInterval,
       recurrenceDaysJson: JSON.stringify(recurrenceDays),
-      recurrenceDayOfMonth,
+      recurrenceDayOfMonth: recurrence.type === "monthly" ? recurrenceDayOfMonth : null,
       recurrenceTime: requestedTime || localTimeFor(scheduledStart, context.hotel.timezone),
       recurrenceEndAt: body.recurrenceEndAt === undefined ? text(existing?.recurrenceEndAt) : text(body.recurrenceEndAt),
       weekdayAnnouncementsJson: JSON.stringify(announcements)
@@ -1792,29 +2093,33 @@ async function scheduleActivity(db: D1DatabaseLike, auth: Auth, body: JsonObject
   const context = await tenantContext(db, auth, body);
   if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canChangeSchedule");
+  const defaultId=body.activityDefault===true ? `default-${context.hotel.hotelId}-${context.venue.venueId}-${context.activity.activityId}` : '';
+  if(defaultId){const existing=await getRecord(db,'ActivitySchedules',defaultId);if(existing && text(existing.status)==='active')return updateSchedule(db,auth,{...body,scheduleId:defaultId});}
   const normalized = scheduleInput(context, body);
   if (!normalized.ok) return normalized;
   const stamp = nowIso();
   const schedule = await save(db, "ActivitySchedules", {
-    scheduleId: randomId(), hotelId: context.hotel.hotelId, venueId: context.venue.venueId,
+    scheduleId: defaultId||randomId(), hotelId: context.hotel.hotelId, venueId: context.venue.venueId,
     activityId: context.activity.activityId,
     ...normalized.fields,
     status: "active", lastOccurrenceAt: "", lastOccurrenceEndAt: "",
     createdByUserId: auth.user.userId, createdAt: stamp, updatedAt: stamp
   });
-  context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
+  if(body.activityDefault===true)await patchRecord(db,'Activities',text(context.activity.activityId),{defaultScheduleId:schedule.scheduleId});
+  const existingRun = await activityRun(db, context.activity);
+  if (!existingRun) context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
     status: text(context.activity.status) === "in_progress" ? "in_progress" : "scheduled",
     defaultDurationSeconds: normalized.fields.durationSeconds,
     scheduledStartAt: normalized.fields.scheduledStartAt,
     currentScheduleId: schedule.scheduleId,
     currentScheduleOccurrenceAt: normalized.fields.scheduledStartAt,
     showCountdown: normalized.fields.showCountdown,
-    autoStartEnabled: false,
+    autoStartEnabled: normalized.fields.autoStartActivity,
     acceptEarlyRequests: normalized.fields.autoOpenRequests,
     updatedAt: stamp
   }) || context.activity;
   await activatePublicActivity(db, context);
-  if (text(context.activity.status) !== "in_progress") {
+  if (!existingRun && text(context.activity.status) !== "in_progress") {
     await writeRuntime(db, context, {
       accepting: false,
       running: false,
@@ -1839,15 +2144,24 @@ async function updateSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
   if (!context.activity || !context.venue) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canChangeSchedule");
   if (text(existing.status) !== "active") return { ok: false, code: "SCHEDULE_NOT_ACTIVE" };
+  if (["hotelId", "activityId", "venueId"].some(key => body[key] !== undefined && text(body[key]) !== text(existing[key]))) return { ok: false, code: "SCHEDULE_CONTEXT_MISMATCH" };
   const normalized = scheduleInput(context, body, existing);
   if (!normalized.ok) return normalized;
   const stamp = nowIso();
+  const waiting=await activityRun(db,context.activity);
+  if(waiting?.status==='scheduled' && text(waiting.scheduleId)===text(existing.scheduleId)){
+    await db.batch([
+      db.prepare(`UPDATE guest_star_activity_runs SET status='cancelled',updated_at=? WHERE run_id=? AND hotel_id=? AND activity_id=? AND venue_id=? AND status='scheduled'`).bind(stamp,waiting.runId,existing.hotelId,existing.activityId,existing.venueId),
+      db.prepare(`UPDATE guest_star_activity_runtime SET accepting=0,state_revision=state_revision+1,last_action='schedule.updated',updated_at=? WHERE activity_id=? AND hotel_id=? AND venue_id=? AND cycle_id=? AND running=0 AND EXISTS(SELECT 1 FROM guest_star_activity_runs WHERE run_id=? AND status='cancelled')`).bind(stamp,existing.activityId,existing.hotelId,existing.venueId,waiting.runId,waiting.runId)
+    ]);
+  }
   const schedule = await patchRecord(db, "ActivitySchedules", text(existing.scheduleId), {
     ...normalized.fields,
     lastOpenedFor: "",
     updatedAt: stamp
   }) || existing;
-  if (text(context.activity.status) !== "in_progress") {
+  if(body.activityDefault===true)await patchRecord(db,'Activities',text(context.activity.activityId),{defaultScheduleId:existing.scheduleId});
+  if (!['scheduled','in_progress'].includes(text((await activityRun(db, context.activity))?.status)) && text(context.activity.status) !== "in_progress") {
     context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
       status: "scheduled",
       defaultDurationSeconds: normalized.fields.durationSeconds,
@@ -1855,7 +2169,7 @@ async function updateSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
       currentScheduleId: existing.scheduleId,
       currentScheduleOccurrenceAt: normalized.fields.scheduledStartAt,
       showCountdown: normalized.fields.showCountdown,
-      autoStartEnabled: false,
+      autoStartEnabled: normalized.fields.autoStartActivity,
       acceptEarlyRequests: normalized.fields.autoOpenRequests,
       updatedAt: stamp
     }) || context.activity;
@@ -1880,6 +2194,7 @@ async function updateSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
 async function cancelSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   const schedule = await getRecord(db, "ActivitySchedules", text(body.scheduleId));
   if (!schedule) return { ok: false, code: "SCHEDULE_NOT_FOUND" };
+  if (["hotelId", "activityId", "venueId"].some(key => body[key] !== undefined && text(body[key]) !== text(schedule[key]))) return { ok: false, code: "SCHEDULE_CONTEXT_MISMATCH" };
   const context = await tenantContext(db, auth, schedule);
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
   requirePermission(context, "canChangeSchedule");
@@ -1893,12 +2208,13 @@ async function cancelSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
     text(context.hotel.hotelId)
   )).filter((candidate) =>
     text(candidate.scheduleId) !== text(schedule.scheduleId) &&
-    text(candidate.activityId) === text(context.activity?.activityId) &&
+    sameScheduleContext(candidate, context.activity!) &&
     text(candidate.status) === "active" &&
     Number.isFinite(Date.parse(text(candidate.scheduledStartAt)))
   ).sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
   const nextSchedule = remainingSchedules[0] || null;
-  context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
+  const existingRun = await activityRun(db, context.activity);
+  if (!existingRun) context.activity = await patchRecord(db, "Activities", text(context.activity.activityId), {
     scheduledStartAt: text(nextSchedule?.scheduledStartAt),
     status: text(context.activity.status) === "in_progress"
       ? "in_progress"
@@ -1906,7 +2222,7 @@ async function cancelSchedule(db: D1DatabaseLike, auth: Auth, body: JsonObject) 
     acceptEarlyRequests: nextSchedule ? bool(nextSchedule.autoOpenRequests) : false,
     updatedAt: nowIso()
   }) || context.activity;
-  if (text(context.activity.status) !== "in_progress") {
+  if (!existingRun && text(context.activity.status) !== "in_progress") {
     await writeRuntime(db, context, {
       accepting: false,
       running: false,
@@ -1973,12 +2289,14 @@ async function postActivityAnnouncement(
   activity: JsonObject | null
 ) {
   if (!activity || text(activity.status) !== "finished") return null;
+  const completedRun = await activityRun(db, activity);
+  if (completedRun && text(completedRun.mode) === "free") return null;
   const schedules = (await listRecordsByJsonField(
     db,
     "ActivitySchedules",
     "hotelId",
     text(hotel.hotelId)
-  )).filter((schedule) => text(schedule.activityId) === text(activity.activityId));
+  )).filter((schedule) => sameScheduleContext(schedule, activity));
   const requestedScheduleId = text(activity.lastCompletedScheduleId || activity.currentScheduleId);
   const requestedOccurrence = text(
     activity.lastCompletedScheduleOccurrenceAt || activity.currentScheduleOccurrenceAt
@@ -2023,6 +2341,8 @@ export function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unkn
   const interval = Math.max(1, Math.round(numberValue(schedule.recurrenceInterval, 1)));
   const type = text(schedule.recurrenceType);
   const localCalendar = zonedCalendarDate(start, hotelTimezone);
+  const clock=scheduleTime(schedule.recurrenceTime);
+  if(clock){const [hour,minute]=clock.split(':').map(Number);localCalendar.setUTCHours(hour,minute,0,0);}
   if (type === "daily") {
     localCalendar.setUTCDate(localCalendar.getUTCDate() + interval);
   } else if (type === "monthly") {
@@ -2056,28 +2376,28 @@ export function nextScheduleOccurrence(schedule: JsonObject, hotelTimezone: unkn
   return next.toISOString();
 }
 
+async function processRunAutomation(db: D1DatabaseLike, hotelId:string) {
+  const opened=await processRunOpenings(db,hotelId);
+  const started=await processDueActivityRuns(db,hotelId);
+  const ended=await processRunEndings(db,hotelId,async run=>{
+    const schedule=run.scheduleId ? await getRecord(db,'ActivitySchedules',text(run.scheduleId)) : null;
+    const next=schedule && sameScheduleContext(schedule,run) ? nextScheduleOccurrence({...schedule,scheduledStartAt:run.scheduleOccurrenceAt},run.timezone) : null;
+    return finishActivityRun(db,run,next,true);
+  });
+  return [...opened,...(started ? [{hotelId,action:'started'}] : []),...ended];
+}
+
 export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId = "") {
   const now = Date.now();
+  const runTransitions = onlyHotelId ? await processRunAutomation(db,onlyHotelId) : [];
+  const runStarted = runTransitions.length>0;
   const scheduleRows = onlyHotelId
     ? await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", onlyHotelId)
     : await listRecords(db, "ActivitySchedules");
   const schedules = scheduleRows
-    .filter((schedule) => text(schedule.status) === "active")
-    .filter((schedule) => {
-      const startAt = Date.parse(text(schedule.scheduledStartAt));
-      if (!Number.isFinite(startAt)) return false;
-      if (startAt <= now) return true;
-      if (!bool(schedule.autoOpenRequests)) return false;
-      if (text(schedule.lastOpenedFor) === text(schedule.scheduledStartAt)) return false;
-      const explicitOpeningAt = Date.parse(text(schedule.requestOpeningAt));
-      const openingLeadMilliseconds = Math.max(0, numberValue(schedule.requestOpeningLeadSeconds)) * 1000;
-      const openingAt = Number.isFinite(explicitOpeningAt)
-        ? explicitOpeningAt
-        : startAt - openingLeadMilliseconds;
-      return openingAt <= now;
-    })
+    .filter((schedule) => scheduleNeedsProcessing(schedule, now))
     .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)));
-  if (!schedules.length) return [];
+  if (!schedules.length) return runTransitions;
 
   const recordsByIds = async (tableName: string, ids: string[]) => {
     const records = await Promise.all(
@@ -2098,7 +2418,7 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
         listRecords(db, "Venues"),
         listRecords(db, "Users")
       ]);
-  const processed: JsonObject[] = [];
+  const processed: JsonObject[] = [...runTransitions];
 
   for (const schedule of schedules) {
     const hotel = hotels.find((record) => text(record.hotelId) === text(schedule.hotelId));
@@ -2106,7 +2426,8 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
     const venue = venues.find((record) => text(record.venueId) === text(schedule.venueId));
     const owner = users.find((record) => text(record.userId) === text(schedule.createdByUserId));
     if (!hotel || !activity || !venue || !owner || text(hotel.status) !== "active" || text(owner.status) !== "active") continue;
-    if (text(activity.hotelId) !== text(hotel.hotelId) || text(venue.hotelId) !== text(hotel.hotelId)) continue;
+    if (!sameScheduleContext(schedule, activity) || text(venue.hotelId) !== text(hotel.hotelId)) continue;
+    let activeRun = await activityRun(db, activity);
 
     const occurrence = text(schedule.scheduledStartAt);
     const startAt = Date.parse(occurrence);
@@ -2127,7 +2448,7 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
         break;
       }
       lastOccurrence = text(cursor.scheduledStartAt);
-      const next = nextScheduleOccurrence(cursor, hotel.timezone);
+      const next = nextScheduleOccurrence(cursor, schedule.timezone || hotel.timezone);
       if (!next) {
         nextOccurrence = "";
         break;
@@ -2148,52 +2469,33 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
     const openingOccurrence = activeOccurrence || earlyOccurrence;
     const openingAt = Date.parse(openingOccurrence) - openingLeadMilliseconds;
     if (
-      bool(schedule.autoOpenRequests) &&
+      !["scheduled","in_progress"].includes(text(activeRun?.status)) && (bool(schedule.autoOpenRequests) || bool(schedule.autoStartActivity)) &&
       openingOccurrence &&
       Number.isFinite(openingAt) && openingAt <= now &&
       text(activity.status) !== "in_progress" &&
       text(schedule.lastOpenedFor) !== openingOccurrence
     ) {
       const stamp = nowIso();
-      const scheduleContext: Context = {
-        hotel,
-        venue,
-        activity,
-        permissions: {}
-      };
-      const scheduledCycle = await ensureCycle(
-        db,
-        { user: owner, session: {}, device: null },
-        scheduleContext,
-        "scheduled"
-      );
-      activity = scheduleContext.activity || activity;
-      await patchRecord(db, "Hotels", text(hotel.hotelId), {
-        activePublicActivityId: activity.activityId,
-        updatedAt: stamp
-      });
-      activity = await patchRecord(db, "Activities", text(activity.activityId), {
-        status: "scheduled",
-        acceptEarlyRequests: true,
-        scheduledStartAt: openingOccurrence,
-        currentScheduleId: text(schedule.scheduleId),
-        currentScheduleOccurrenceAt: openingOccurrence,
-        updatedAt: stamp
-      }) || activity;
-      const currentRuntime = await runtimeFor(db, activity, hotel);
-      const runtime: ActivityRuntime = {
-        ...currentRuntime,
-        hotelId: text(hotel.hotelId),
-        venueId: text(venue.venueId),
-        cycleId: text(scheduledCycle.cycleId),
-        accepting: true,
-        running: false,
-        stateRevision: currentRuntime.stateRevision + 1,
-        lastAction: "schedule.autoOpen",
-        lastSource: "d1-automation",
-        updatedAt: stamp
-      };
-      await upsertActivityRuntime(db, runtime);
+      const scheduleContext: Context = { hotel, venue, activity, permissions: {} };
+      const previousQueue = (await activeRequests(db,text(hotel.hotelId),text(activity.activityId)))
+        .filter(request=>(!text(request.venueId)||text(request.venueId)===text(venue.venueId))&&publicRequestIsActive(request));
+      // A legacy automatic opening never makes the prior-queue decision for
+      // the Host. Hold requests closed until explicit preparation/consent.
+      if (previousQueue.length && !bool(schedule.autoStartActivity)) continue;
+      const runtime = await runtimeFor(db,activity,hotel);
+      const run: JsonObject = {runId:randomId(),hotelId:hotel.hotelId,activityId:activity.activityId,
+        venueId:venue.venueId,scheduleId:schedule.scheduleId,scheduleOccurrenceAt:openingOccurrence,
+        mode:"scheduled",startsAt:openingOccurrence,timezone:schedule.timezone||hotel.timezone,
+        requestOpeningAt:new Date(openingAt).toISOString(),requestOpeningLeadSeconds:openingLeadMilliseconds/1000,requestOpenedAt:bool(schedule.autoOpenRequests)?stamp:undefined,
+        openBeforeStart:bool(schedule.autoOpenRequests),durationSeconds:Math.max(900,numberValue(schedule.durationSeconds,7200)),autoStart:bool(schedule.autoStartActivity),autoOpenRequests:bool(schedule.autoOpenRequests),autoFinish:schedule.autoFinish!==false,
+        finalMessage:text(schedule.finalMessage),playbackSource:text(schedule.playbackSource)||"bridge",status:"scheduled",createdAt:stamp,startedByUserId:owner.userId};
+      if (!await reserveActivityRun(db,run,runtime.stateRevision,false)) continue;
+      if(run.autoStart===true && Date.parse(text(run.startsAt))<=now) await startActivityRun(db,run,true);
+      activeRun=run;
+      activity=await getRecord(db,"Activities",text(activity.activityId))||activity;
+      scheduleContext.activity=activity;
+      await activatePublicActivity(db,scheduleContext);
+      await activateVenueAccess(db,accessContext(hotel,activity));
       await patchRecord(db, "ActivitySchedules", text(schedule.scheduleId), {
         lastOpenedFor: openingOccurrence,
         updatedAt: stamp
@@ -2201,6 +2503,9 @@ export async function processD1ActivitySchedules(db: D1DatabaseLike, onlyHotelId
       processed.push({ scheduleId: schedule.scheduleId, action: "opened" });
     }
 
+    // Prepared sessions consume their linked occurrence only at explicit
+    // finish. Free sessions never advance any schedule through this processor.
+    if (activeRun) continue;
     if (lastOccurrence) {
       const scheduleChanges: JsonObject = {
         lastOccurrenceAt: lastOccurrence,
@@ -2342,16 +2647,6 @@ async function consumeOneTimeCode(db: D1DatabaseLike, body: JsonObject) {
   };
 }
 
-async function bridgeHeartbeat(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
-  if (!auth.device) return { ok: false, code: "BRIDGE_DEVICE_REQUIRED" };
-  const device = await patchRecord(db, "Devices", text(auth.device.deviceId), {
-    bridgeVersion: text(body.bridgeVersion) || text(auth.device.bridgeVersion),
-    virtualDJConnected: body.virtualDJConnected === true,
-    lastHeartbeatAt: nowIso(), updatedAt: nowIso()
-  }, "master", false) || auth.device;
-  return { ok: true, serverNow: nowIso(), deviceId: device.deviceId };
-}
-
 async function queueBridgeCommand(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
   const context = await tenantContext(db, auth, body);
   if (!context.activity) throw new Error("ACTIVITY_REQUIRED");
@@ -2362,18 +2657,27 @@ async function queueBridgeCommand(db: D1DatabaseLike, auth: Auth, body: JsonObje
   const deviceId = text(body.deviceId);
   const device = deviceId ? await getRecord(db, "Devices", deviceId) : null;
   const heartbeatAge = Date.now() - Date.parse(text(device?.lastHeartbeatAt));
+  const realtimePresenceChecked = body._realtimePresenceChecked === true;
+  const bridgeOnline = realtimePresenceChecked
+    ? body._realtimeBridgeOnline === true
+    : Number.isFinite(heartbeatAge) && heartbeatAge <= 15_000;
   if (
     !device || text(device.status) !== "active" ||
     text(device.hotelId) !== text(context.hotel.hotelId) ||
     text(device.activityId) !== text(context.activity.activityId) ||
-    !Number.isFinite(heartbeatAge) || heartbeatAge > 15_000
+    !bridgeOnline
   ) return { ok: false, code: "BRIDGE_OFFLINE" };
   const requestedId = text(body.commandId);
   const commandId = /^[A-Za-z0-9_-]{8,80}$/.test(requestedId) ? requestedId : randomId();
   const existing = await getRecord(db, "BridgeCommands", commandId);
   if (existing) {
     if (text(existing.requestedByUserId) !== text(auth.user.userId)) throw new Error("FORBIDDEN");
-    return { ok: true, command: existing, idempotent: true };
+    return {
+      ok: true,
+      command: existing,
+      idempotent: true,
+      realtimeChannel: text(context.hotel.hotelId)
+    };
   }
   const command = await save(db, "BridgeCommands", {
     commandId, deviceId, requestedByUserId: auth.user.userId,
@@ -2382,36 +2686,45 @@ async function queueBridgeCommand(db: D1DatabaseLike, auth: Auth, body: JsonObje
     createdAt: nowIso(), startedAt: "", completedAt: "", resultJson: "", errorMessage: ""
   });
   await audit(db, { userId: auth.user.userId, deviceId, action: "bridgeCommand.queued", hotelId: context.hotel.hotelId, activityId: context.activity.activityId, targetId: command.commandId, details: { commandType } });
-  return { ok: true, command, idempotent: false };
+  return {
+    ok: true,
+    command,
+    idempotent: false,
+    realtimeChannel: text(context.hotel.hotelId)
+  };
 }
 
 async function pollBridgeCommands(db: D1DatabaseLike, auth: Auth) {
   if (!auth.device) return { ok: false, code: "BRIDGE_DEVICE_REQUIRED" };
   if (!text(auth.device.activityId)) return { ok: false, code: "DEVICE_SELECTION_REQUIRED" };
   const commands: JsonObject[] = [];
-  for (const command of await listRecords(db, "BridgeCommands")) {
-    if (
-      text(command.deviceId) !== text(auth.device.deviceId) ||
-      text(command.activityId) !== text(auth.device.activityId) ||
-      text(command.status) !== "pending"
-    ) continue;
+  const pending = await pendingBridgeCommands(
+    db,
+    text(auth.device.deviceId),
+    text(auth.device.activityId),
+    25
+  );
+  for (const command of pending) {
     const age = Date.now() - Date.parse(text(command.createdAt));
     if (!Number.isFinite(age) || age > 120_000) {
-      await patchRecord(db, "BridgeCommands", text(command.commandId), {
-        status: "expired", completedAt: nowIso(), errorMessage: "Bridge did not collect the command before it expired."
+      await transitionPendingBridgeCommand(db, command, {
+        status: "expired",
+        completedAt: nowIso(),
+        errorMessage: "Bridge did not collect the command before it expired."
       });
       continue;
     }
-    await patchRecord(db, "BridgeCommands", text(command.commandId), {
-      status: "processing", startedAt: nowIso()
+    const claimed = await transitionPendingBridgeCommand(db, command, {
+      status: "processing",
+      startedAt: nowIso()
     });
+    if (!claimed) continue;
     commands.push({
-      commandId: command.commandId,
-      commandType: command.commandType,
-      payload: parseObject(command.payloadJson),
-      createdAt: command.createdAt
+      commandId: claimed.commandId,
+      commandType: claimed.commandType,
+      payload: parseObject(claimed.payloadJson),
+      createdAt: claimed.createdAt
     });
-    if (commands.length >= 25) break;
   }
   return { ok: true, serverNow: nowIso(), commands };
 }
@@ -2421,7 +2734,13 @@ async function completeBridgeCommand(db: D1DatabaseLike, auth: Auth, body: JsonO
   const command = await getRecord(db, "BridgeCommands", text(body.commandId));
   if (!command || text(command.deviceId) !== text(auth.device.deviceId)) return { ok: false, code: "COMMAND_NOT_FOUND" };
   if (["completed", "failed", "expired"].includes(text(command.status))) {
-    return { ok: true, commandId: command.commandId, status: command.status, idempotent: true };
+    return {
+      ok: true,
+      commandId: command.commandId,
+      status: command.status,
+      idempotent: true,
+      realtimeChannel: text(auth.device.hotelId)
+    };
   }
   const updated = await patchRecord(db, "BridgeCommands", text(command.commandId), {
     status: body.ok === true ? "completed" : "failed",
@@ -2429,7 +2748,13 @@ async function completeBridgeCommand(db: D1DatabaseLike, auth: Auth, body: JsonO
     errorMessage: text(body.errorMessage)
   });
   await audit(db, { userId: auth.user.userId, deviceId: auth.device.deviceId, action: body.ok === true ? "bridgeCommand.completed" : "bridgeCommand.failed", activityId: command.activityId, targetId: command.commandId });
-  return { ok: true, commandId: updated?.commandId, status: updated?.status, idempotent: false };
+  return {
+    ok: true,
+    commandId: updated?.commandId,
+    status: updated?.status,
+    idempotent: false,
+    realtimeChannel: text(auth.device.hotelId)
+  };
 }
 
 async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObject) {
@@ -2445,6 +2770,35 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
   ]);
   const requestedStatus = text(body.status);
   const nextStatus = allowedStatuses.has(requestedStatus) ? requestedStatus : request.status;
+  const hasMetadata = ['singer', 'song', 'artist'].some(key => body[key] !== undefined);
+  const expectedRevision = body.expectedRevision === undefined ? undefined : numberValue(body.expectedRevision);
+  if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0 || expectedRevision !== request.stateRevision)) {
+    return { ok: false, code: 'REQUEST_REVISION_CONFLICT' };
+  }
+  if (body.eventOrigin === 'VDJ_EVENT' && (
+    expectedRevision === undefined || !['Ya cantó', 'Saltado'].includes(requestedStatus) ||
+    ['Ya cantó', 'Saltado', 'Eliminada', 'Cancelada', 'Retirada del Player', 'Retirada de rotación'].includes(request.status)
+  )) return { ok: false, code: 'MANUAL_OUTCOME_PROTECTED' };
+  if (body.bridgeLifecycle === true && ['Ya cantó', 'Saltado', 'Eliminada'].includes(request.status) && nextStatus !== request.status && body.eventOrigin !== 'USER_RETURN') return { ok: false, code: 'MANUAL_OUTCOME_PROTECTED' };
+  if (hasMetadata && expectedRevision === undefined) return { ok: false, code: 'REQUEST_REVISION_REQUIRED' };
+  const nextSinger = body.singer === undefined ? request.singer : limitedText(body.singer, 120);
+  const nextSong = body.song === undefined ? request.song : limitedText(body.song, 180);
+  const nextArtist = body.artist === undefined ? request.artist : limitedText(body.artist, 180);
+  if (!nextSinger || !nextSong) return { ok: false, code: 'MISSING_REQUEST_METADATA' };
+  if (body.beforeRequestId !== undefined) {
+    const activity = activityId ? await getRecord(db, 'Activities', activityId) : null;
+    const hotel = await getRecord(db, 'Hotels', hotelId);
+    if (!activity || !hotel || playbackModeForRuntime(await runtimeFor(db, activity, hotel)) !== 'bridge') {
+      return { ok: false, code: 'BRIDGE_MODE_REQUIRED' };
+    }
+    requirePermission(await tenantContext(db, auth, { hotelId, activityId }), 'canControlVirtualDJ');
+    if (expectedRevision === undefined || body.eventOrigin !== 'USER_ACTION') return { ok: false, code: 'REQUEST_REVISION_REQUIRED' };
+    const beforeId = body.beforeRequestId === null ? null : text(body.beforeRequestId);
+    if (beforeId === request.requestId) return { ok: true, request: bridgeRequest(request), realtimeChannel: hotelId, backupNeeded: false };
+    const moved = await moveActiveRequestBefore(db, hotelId, activityId, request.requestId, beforeId, expectedRevision, text(activity.currentCycleId));
+    if (!moved) return { ok: false, code: 'REQUEST_REVISION_CONFLICT' };
+    return { ok: true, request: bridgeRequest(moved), realtimeChannel: hotelId, backupNeeded: true };
+  }
   const nextFileName = body.fileName === undefined ? request.fileName : text(body.fileName);
   const nextDurationSeconds = body.durationSeconds === undefined
     ? request.durationSeconds
@@ -2453,13 +2807,14 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
   const nextVirtualDJItemId = body.virtualDJItemId === undefined
     ? request.virtualDJItemId
     : text(body.virtualDJItemId);
-  const nextQueuePosition = body.queuePosition === undefined
+  const nextQueuePosition = body.queuePosition === undefined || request.syncState === 'manual_order'
     ? request.queuePosition
     : Math.max(0, numberValue(body.queuePosition));
-  const nextSyncState = body.syncState === undefined ? request.syncState : text(body.syncState);
+  const nextSyncState = body.syncState === undefined || request.syncState === 'manual_order' ? request.syncState : text(body.syncState);
   const nextLastSeenAt = body.lastSeenAt === undefined ? request.lastSeenAt : text(body.lastSeenAt);
   if (
     request.status === nextStatus &&
+    request.singer === nextSinger && request.song === nextSong && request.artist === nextArtist &&
     request.fileName === nextFileName &&
     request.durationSeconds === nextDurationSeconds &&
     request.sourceUrl === nextSourceUrl &&
@@ -2468,9 +2823,15 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
     request.syncState === nextSyncState &&
     request.lastSeenAt === nextLastSeenAt
   ) {
-    return { ok: true, request: bridgeRequest(request), backupNeeded: false };
+    return {
+      ok: true,
+      request: bridgeRequest(request),
+      realtimeChannel: hotelId,
+      backupNeeded: false
+    };
   }
   const changes: Partial<GuestStarRequest> = {
+    ...(hasMetadata ? { singer: nextSinger, song: nextSong, artist: nextArtist } : {}),
     status: nextStatus,
     fileName: nextFileName,
     durationSeconds: nextDurationSeconds,
@@ -2482,13 +2843,18 @@ async function bridgeRequestUpdate(db: D1DatabaseLike, auth: Auth, body: JsonObj
     stateRevision: request.stateRevision + 1,
     updatedAt: nowIso()
   };
-  const updated = await updateActiveRequest(db, hotelId, request.requestId, changes);
+  const updated = await updateActiveRequest(db, hotelId, request.requestId, changes, expectedRevision);
+  if (!updated && expectedRevision !== undefined) return { ok: false, code: 'REQUEST_REVISION_CONFLICT' };
   const activity = activityId ? await getRecord(db, "Activities", activityId) : null;
-  if (activity) await recalculateQueue(db, hotelId, activity);
+  const recalculated = activity ? await recalculateQueue(db, hotelId, activity) : null;
   const refreshed = await findActiveRequest(db, hotelId, request.requestId);
   return {
     ok: true,
     request: refreshed ? bridgeRequest(refreshed) : null,
+    realtimeChannel: hotelId,
+    ...(activity && bool(activity.showPublicStatus)
+      ? { queuePeopleCount: recalculated?.queuePeopleCount ?? 0 }
+      : {}),
     backupNeeded: Boolean(updated)
   };
 }
@@ -2525,6 +2891,7 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
     ) continue;
     seen.add(virtualId);
     const match = existingByVirtualId.get(virtualId);
+    if (match && ["Ya cantó", "Saltado", "Eliminada", "Cancelada", "Retirada de rotación"].includes(match.status)) continue;
     const stamp = nowIso();
     const nextStatus = text(entry.status) || "Agregada a VirtualDJ";
     const nextFileName = text(entry.filePath || entry.fileName) || match?.fileName || "";
@@ -2584,7 +2951,7 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
   for (const virtualId of missingIds) {
     if (seen.has(virtualId)) continue;
     const match = existingByVirtualId.get(virtualId);
-    if (!match || match.sourceType !== "virtualdj_external") continue;
+    if (!match || match.sourceType !== "virtualdj_external" || ["Ya cantó", "Saltado", "Eliminada", "Cancelada", "Retirada de rotación"].includes(match.status)) continue;
     if (
       match.status === "Fuera de VirtualDJ" &&
       match.syncState === "confirmed_missing"
@@ -2597,13 +2964,18 @@ async function bridgeExternalSync(db: D1DatabaseLike, auth: Auth, body: JsonObje
       changed += 1;
     }
   }
-  const activity = await getRecord(db, "Activities", activityId);
-  if (changed && activity) await recalculateQueue(db, hotelId, activity);
+  const recalculated = changed && currentActivity
+    ? await recalculateQueue(db, hotelId, currentActivity)
+    : null;
   return {
     ok: true,
     imported,
     changed,
     externalCount: seen.size,
+    realtimeChannel: hotelId,
+    ...(currentActivity && bool(currentActivity.showPublicStatus) && recalculated
+      ? { queuePeopleCount: recalculated.queuePeopleCount }
+      : {}),
     backupNeeded: changed > 0
   };
 }
@@ -2644,8 +3016,9 @@ async function youtubeSearch(db: D1DatabaseLike, body: JsonObject) {
   const terms = requestedLanguage === "es"
     ? `${song} ${artist} karaoke letra instrumental`
     : `${song} ${artist} karaoke lyrics instrumental`;
+  const candidateLimit = Math.min(24, Math.max(6, Number(body.candidateLimit) || 6));
   const searchParams = new URLSearchParams({
-    part: "snippet", type: "video", maxResults: "10", q: terms,
+    part: "snippet", type: "video", maxResults: String(candidateLimit > 6 ? 24 : 10), q: terms,
     videoEmbeddable: "true", safeSearch: "moderate",
     relevanceLanguage: requestedLanguage,
     regionCode: requestedLanguage === "es" ? "DO" : "US",
@@ -2695,7 +3068,7 @@ async function youtubeSearch(db: D1DatabaseLike, body: JsonObject) {
     };
   }).filter((item) => item.recommended)
     .sort((left, right) => left.channelPriority - right.channelPriority || right.qualityScore - left.qualityScore)
-    .slice(0, 6);
+    .slice(0, candidateLimit);
   return { ok: true, languageCode: requestedLanguage, items };
 }
 
@@ -2704,12 +3077,7 @@ async function resolvePublicHotel(db: D1DatabaseLike, identifier: unknown) {
     .replace(/^https?:\/\/[^/]+\/h\//i, "")
     .replace(/^\/+|\/+$/g, "");
   if (!key) return null;
-  if (key === "default") {
-    const defaultHotelId = await getMeta(db, "default_public_hotel_id");
-    const selected = defaultHotelId ? await getRecord(db, "Hotels", defaultHotelId) : null;
-    if (selected && text(selected.status) === "active") return selected;
-    return (await listRecords(db, "Hotels")).find((hotel) => text(hotel.status) === "active") || null;
-  }
+  if (key === "default") return null;
   const modernCode = key.match(/([a-z0-9]{16,128})$/i)?.[1] || "";
   const candidates = modernCode
     ? await listRecordsByJsonField(db, "Hotels", "publicCode", modernCode, "master", 4)
@@ -2728,13 +3096,7 @@ async function resolvePublicContext(db: D1DatabaseLike, identifier: unknown): Pr
   const key = text(identifier)
     .replace(/^https?:\/\/[^/]+\/h\//i, "")
     .replace(/^\/+|\/+$/g, "");
-  if (key === "default") {
-    const setting = await defaultPublicExperienceSetting(db);
-    if (setting.configured && setting.available) {
-      const hotel = await getRecord(db, "Hotels", setting.hotelId);
-      if (hotel) return { hotel, activityId: setting.activityId, configuredDefault: true };
-    }
-  }
+  if (key === "default") return null;
   const hotel = await resolvePublicHotel(db, identifier);
   return hotel ? {
     hotel,
@@ -2756,7 +3118,9 @@ async function publicExperience(db: D1DatabaseLike, hotel: JsonObject, activityI
   const activity = activityId
     ? await getRecord(db, "Activities", activityId)
     : null;
+  if (activity && text(activity.hotelId) !== text(hotel.hotelId)) throw new Error("ACTIVITY_CONTEXT_MISMATCH");
   const venue = activity ? await getRecord(db, "Venues", text(activity.venueId)) : null;
+  if (venue && text(venue.hotelId) !== text(hotel.hotelId)) throw new Error("VENUE_CONTEXT_MISMATCH");
   const state = activity ? await stateFor(db, hotel, activity) : {
     accepting: false, activityHours: 2, transitionSeconds: 30,
     accumulatedSeconds: 0, remainingSeconds: 7200, activityStartedAt: "",
@@ -2769,13 +3133,16 @@ async function publicExperience(db: D1DatabaseLike, hotel: JsonObject, activityI
   state.accepting = Boolean(activity && state.accepting && (status === "in_progress" || (status === "scheduled" && acceptsEarly)));
   return {
     ...state,
+    session: activity ? await activityRun(db, activity) : null,
+    finalExperience: activity ? await finalExperience(db, hotel, activity) : null,
     ok: true,
+    realtimeChannel: text(hotel.hotelId),
     codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION,
     serverNow: nowIso(),
     hotel: {
-      name: hotel.name, slug: hotel.slug, publicUrl: hotel.publicUrl, timezone: hotel.timezone
+      hotelId: hotel.hotelId, name: hotel.name, slug: hotel.slug, publicUrl: hotel.publicUrl, timezone: hotel.timezone
     },
-    venue: venue ? { name: venue.name } : null,
+    venue: venue ? { venueId: venue.venueId, name: venue.name } : null,
     activity: activity ? {
       activityId: activity.activityId, name: activity.name, status: activity.status,
       scheduledStartAt: text(activity.scheduledStartAt),
@@ -2784,7 +3151,7 @@ async function publicExperience(db: D1DatabaseLike, hotel: JsonObject, activityI
     } : null,
     branding: await safeBranding(db, text(hotel.hotelId)),
     postActivityAnnouncement: await postActivityAnnouncement(db, hotel, activity),
-    upcomingActivities: await upcomingActivities(db, text(hotel.hotelId))
+    upcomingActivities: await upcomingActivities(db, text(hotel.hotelId), activity)
   };
 }
 
@@ -2815,17 +3182,42 @@ function publicRequestIsActive(request: GuestStarRequest) {
   return !["Ya cantó", "Saltado", "Retirada del Player", "Fuera de VirtualDJ", "Eliminada", "Cancelada"].includes(request.status);
 }
 
+async function publicQueuePeopleCount(
+  db: D1DatabaseLike,
+  hotelId: string,
+  activityId: string,
+  cycleId: string
+) {
+  const result = await db.prepare(`
+    SELECT singer, source_type, status
+    FROM guest_star_requests
+    WHERE hotel_id = ? AND activity_id = ? AND archived_at = ''
+      AND cycle_id IN ('', ?)
+    LIMIT 1000
+  `).bind(hotelId, activityId, cycleId).all<{
+    singer: string;
+    source_type: string;
+    status: string;
+  }>();
+  return new Set((result.results || [])
+    .filter((row) => row.source_type !== "virtualdj_external")
+    .filter((row) => ![
+      "Ya cantó", "Saltado", "Retirada del Player", "Fuera de VirtualDJ",
+      "Eliminada", "Cancelada"
+    ].includes(row.status))
+    .map((row) => publicGuestIdentityFromSource(row.source_type) || duplicateKey(row.singer)))
+    .size;
+}
+
 async function currentCycleRequests(
   db: D1DatabaseLike,
   hotelId: string,
   activity: JsonObject
 ) {
-  const requests = await activeRequests(db, hotelId, text(activity.activityId));
   const cycleId = text(activity.currentCycleId);
-  if (!cycleId) return requests;
-  // Old imports can legitimately have no cycle ID. Preserve those records,
-  // while keeping every explicit previous cycle out of the current activity.
-  return requests.filter((request) => !text(request.cycleId) || text(request.cycleId) === cycleId);
+  // Old imports can legitimately have no cycle ID. The SQL query preserves
+  // those records while excluding every explicit previous cycle.
+  return activeRequests(db, hotelId, text(activity.activityId), cycleId);
 }
 
 async function currentCycleDuplicateSignals(
@@ -2896,6 +3288,27 @@ async function acquirePublicScheduleLease(db: D1DatabaseLike, hotelId: string) {
   return row?.value === token;
 }
 
+function scheduleNeedsProcessing(schedule: JsonObject, now: number) {
+  if (text(schedule.status) !== "active") return false;
+  const startAt = Date.parse(text(schedule.scheduledStartAt));
+  if (!Number.isFinite(startAt)) return false;
+  if (startAt <= now) return true;
+  if (!bool(schedule.autoOpenRequests) && !bool(schedule.autoStartActivity)) return false;
+  if (text(schedule.lastOpenedFor) === text(schedule.scheduledStartAt)) return false;
+  const explicitOpeningAt = Date.parse(text(schedule.requestOpeningAt));
+  const openingLeadMilliseconds = Math.max(0, numberValue(schedule.requestOpeningLeadSeconds)) * 1000;
+  const openingAt = Number.isFinite(explicitOpeningAt)
+    ? explicitOpeningAt
+    : startAt - openingLeadMilliseconds;
+  return openingAt <= now;
+}
+
+async function hasDuePublicSchedule(db: D1DatabaseLike, hotelId: string) {
+  const schedules = await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", hotelId);
+  const now = Date.now();
+  return schedules.some((schedule) => scheduleNeedsProcessing(schedule, now));
+}
+
 async function processPublicSchedules(db: D1DatabaseLike, hotelId: string) {
   if (!hotelId) return false;
   let checks = publicScheduleChecks.get(db as object);
@@ -2913,9 +3326,11 @@ async function processPublicSchedules(db: D1DatabaseLike, hotelId: string) {
   if (state.nextCheckAt > now) return false;
   state.nextCheckAt = now + PUBLIC_SCHEDULE_CHECK_INTERVAL_MS;
   const operation = (async () => {
+    const runStarted = (await processRunAutomation(db,hotelId)).length>0;
+    if (!await hasDuePublicSchedule(db, hotelId)) return runStarted;
     if (!await acquirePublicScheduleLease(db, hotelId)) return false;
     const changes = await processD1ActivitySchedules(db, hotelId);
-    return changes.some((change) => text(change.action) === "opened");
+    return runStarted || changes.some((change) => ["opened", "started"].includes(text(change.action)));
   })();
   state.operation = operation;
   try {
@@ -2925,20 +3340,147 @@ async function processPublicSchedules(db: D1DatabaseLike, hotelId: string) {
   }
 }
 
+function publicDeviceId(value: unknown) {
+  const candidate = limitedText(value, 128);
+  return /^[a-z0-9._:-]{16,128}$/i.test(candidate) ? candidate : "";
+}
+
+function accessFailureCode(access: ActivityAccessRow | null, joinLink = false) {
+  if (!access) return joinLink ? "JOIN_LINK_INVALID" : "INVALID_PIN";
+  if (access.status === "ended") return "ACTIVITY_ENDED";
+  if (access.status === "revoked") return joinLink ? "JOIN_LINK_EXPIRED" : "PIN_EXPIRED";
+  return joinLink ? "JOIN_LINK_INVALID" : "INVALID_PIN";
+}
+
+async function publicExperienceForAccess(db: D1DatabaseLike, access: ActivityAccessRow) {
+  await processPublicSchedules(db, access.hotel_id);
+  const [hotel, activity] = await Promise.all([
+    getRecord(db, "Hotels", access.hotel_id),
+    getRecord(db, "Activities", access.activity_id)
+  ]);
+  if (!hotel || !activity || text(hotel.status) !== "active" || text(activity.status) === "inactive"
+    || text(activity.hotelId) !== access.hotel_id || text(activity.venueId) !== access.venue_id) {
+    return { ok: false, code: "ACCESS_EXPIRED" };
+  }
+  const schedules = (await listRecordsByJsonField(db, "ActivitySchedules", "hotelId", access.hotel_id))
+    .filter((schedule) => text(schedule.activityId) === access.activity_id
+      && text(schedule.venueId) === access.venue_id
+      && text(schedule.status) === "active"
+      && Date.parse(text(schedule.scheduledStartAt)) > Date.now())
+    .sort((left, right) => Date.parse(text(left.scheduledStartAt)) - Date.parse(text(right.scheduledStartAt)))
+    .slice(0, 3);
+  const experience = await publicExperience(db, hotel, access.activity_id);
+  const nextOccurrenceAt = text((experience.upcomingActivities as JsonObject[])[0]?.scheduledStartAt);
+  const accessState = experience.accepting
+    ? "live" : nextOccurrenceAt ? "upcoming" : "no_date";
+  return {
+    ...experience,
+    accessState,
+    nextOccurrenceAt,
+    upcomingOccurrences: (experience.upcomingActivities as JsonObject[]).map((schedule) => text(schedule.scheduledStartAt)),
+    kioskAccess: activityAccessView(access)
+  };
+}
+
+async function joinActivityByPin(db: D1DatabaseLike, body: JsonObject) {
+  const pin = limitedText(body.pin, 6);
+  const deviceId = publicDeviceId(body.guestDeviceId || body.deviceId);
+  if (!/^\d{6}$/.test(pin)) return { ok: false, code: "INVALID_PIN" };
+  if (!deviceId) return { ok: false, code: "DEVICE_ID_REQUIRED" };
+  const deviceAttemptKey = `pin-device:${(await sha256Hex(deviceId)).slice(0, 40)}`;
+  const attempt = await pinAttemptState(db, deviceAttemptKey);
+  if (!attempt.allowed) {
+    return { ok: false, code: "PIN_BACKOFF", retryAfterSeconds: Math.max(1, attempt.retryAfterSeconds) };
+  }
+  const ipSignal = limitedText(body._requestFingerprint, 240);
+  const ipKey = ipSignal ? `pin-ip:${(await sha256Hex(ipSignal)).slice(0, 40)}` : "";
+  if (ipKey && !await checkRateLimit(db, ipKey, 60, 600)) {
+    return { ok: false, code: "RATE_LIMITED", retryAfterSeconds: 30 };
+  }
+  const access = await findAccessByPin(db, pin);
+  if (!access || access.status !== "active") {
+    const failure = await recordPinFailure(db, deviceAttemptKey);
+    return {
+      ok: false,
+      code: accessFailureCode(access),
+      ...(failure.retryAfterSeconds ? { retryAfterSeconds: failure.retryAfterSeconds } : {})
+    };
+  }
+  const experience = await publicExperienceForAccess(db, access);
+  if (experience.ok === false) return experience;
+  await clearPinFailures(db, deviceAttemptKey);
+  if (ipKey) await checkRateLimit(db, ipKey, 60, 600, true);
+  const session = await createActivitySession(db, access, deviceId, "pin");
+  return { ...experience, activitySessionToken: session.token, sessionExpiresAt: session.expiresAt };
+}
+
+async function joinActivityByToken(db: D1DatabaseLike, body: JsonObject) {
+  const joinToken = limitedText(body.joinToken, 128);
+  const deviceId = publicDeviceId(body.guestDeviceId || body.deviceId);
+  if (!joinToken) return { ok: false, code: "JOIN_LINK_INVALID" };
+  if (!deviceId) return { ok: false, code: "DEVICE_ID_REQUIRED" };
+  const access = await findAccessByJoinToken(db, joinToken);
+  if (!access || access.status !== "active") return { ok: false, code: accessFailureCode(access, true) };
+  const experience = await publicExperienceForAccess(db, access);
+  if (experience.ok === false) return experience;
+  const session = await createActivitySession(db, access, deviceId, "join");
+  return { ...experience, activitySessionToken: session.token, sessionExpiresAt: session.expiresAt };
+}
+
+async function resumeActivitySession(db: D1DatabaseLike, body: JsonObject) {
+  const token = limitedText(body.activitySessionToken, 160);
+  const deviceId = publicDeviceId(body.guestDeviceId || body.deviceId);
+  const resolved = await resolveActivitySession(db, token, deviceId);
+  if ("code" in resolved) return { ok: false, code: resolved.code };
+  const experience = await publicExperienceForAccess(db, resolved.access);
+  if (experience.ok === false) return experience;
+  const renewed = await renewActivitySession(db, resolved.session, token);
+  return {
+    ...experience,
+    ...(renewed ? { activitySessionToken: renewed.token, sessionExpiresAt: renewed.expiresAt } : {})
+  };
+}
+
+async function sessionPublicContext(db: D1DatabaseLike, body: JsonObject) {
+  const token = limitedText(body.activitySessionToken, 160);
+  if (!token) return null;
+  const deviceId = publicDeviceId(body.guestDeviceId || body.deviceId);
+  const resolved = await resolveActivitySession(db, token, deviceId);
+  if ("code" in resolved) return { code: resolved.code };
+  const [hotel, activity] = await Promise.all([
+    getRecord(db, "Hotels", resolved.access.hotel_id),
+    getRecord(db, "Activities", resolved.access.activity_id)
+  ]);
+  if (!hotel || !activity || text(activity.status) === "inactive"
+    || text(activity.venueId) !== resolved.access.venue_id) return { code: "ACCESS_EXPIRED" };
+  return { hotel, activityId: resolved.access.activity_id };
+}
+
 export async function handleD1PublicGet(db: D1DatabaseLike, params: URLSearchParams): Promise<JsonObject> {
   const identifier = params.get("hotel") || params.get("publicCode") || params.get("code");
   let context = await resolvePublicContext(db, identifier);
   if (!context) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
-  if (await processPublicSchedules(db, text(context.hotel.hotelId))) {
+  const scheduleTransitioned = await processPublicSchedules(db, text(context.hotel.hotelId));
+  if (scheduleTransitioned) {
     context = await resolvePublicContext(db, identifier) || context;
   }
-  return publicExperience(db, context.hotel, context.activityId);
+  return {
+    ...await publicExperience(db, context.hotel, context.activityId),
+    scheduleTransitioned
+  };
 }
 
-export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
+export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject): Promise<JsonObject> {
   const action = text(body.action);
+  if (action === "joinByPin") return joinActivityByPin(db, body);
+  if (action === "joinByToken") return joinActivityByToken(db, body);
+  if (action === "resumeSession") return resumeActivitySession(db, body);
   const identifier = body.publicCode || body.hotel || body.hotelCode;
-  let publicContext = await resolvePublicContext(db, identifier);
+  const resumedContext = await sessionPublicContext(db, body);
+  if (resumedContext && "code" in resumedContext) return { ok: false, code: resumedContext.code };
+  let publicContext: ResolvedPublicContext | null = resumedContext
+    ? { hotel: resumedContext.hotel, activityId: resumedContext.activityId, configuredDefault: false }
+    : await resolvePublicContext(db, identifier);
   if (!publicContext) return { ok: false, code: "PUBLIC_LINK_NOT_FOUND" };
   if (await processPublicSchedules(db, text(publicContext.hotel.hotelId))) {
     publicContext = await resolvePublicContext(db, identifier) || publicContext;
@@ -3013,6 +3555,9 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   const artist = limitedText(body.artist, 180);
   const requestedLanguage = languageCode(body.languageCode || body.language);
   if (!singer || !song || !artist || !requestedLanguage) return { ok: false, code: "MISSING_FIELDS" };
+  if (requestedLanguage === "hi" && [singer, song, artist].some(containsDevanagari)) {
+    return { ok: false, code: "HINDI_LATIN_REQUIRED" };
+  }
   if (!normalizeLanguages(activity.allowedLanguagesJson).includes(requestedLanguage)) {
     return { ok: false, code: "LANGUAGE_NOT_ALLOWED", state: await publicExperience(db, hotel, publicActivityId) };
   }
@@ -3039,6 +3584,7 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
       ok: true,
       id: exactExisting.requestId,
       deduplicated: true,
+      realtimeChannel: hotelId,
       backupNeeded: false
     };
   }
@@ -3057,7 +3603,8 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
   if (!await checkRateLimit(db, rateKey, 8, 60)) return { ok: false, code: "RATE_LIMITED" };
   const durationSeconds = Math.max(0, numberValue(body.durationSeconds));
   const transitionSeconds = Math.max(0, numberValue(activity.defaultTransitionSeconds, 30));
-  const total = Math.max(900, numberValue(activity.defaultDurationSeconds, 7200));
+  const submittedRun = await activityRun(db, activity);
+  const total = Math.max(900, numberValue(submittedRun?.durationSeconds || activity.defaultDurationSeconds, 7200));
   const stamp = nowIso();
   const requestId = deterministicRequestId || randomId();
   const request: GuestStarRequest = {
@@ -3072,7 +3619,16 @@ export async function handleD1PublicPost(db: D1DatabaseLike, body: JsonObject) {
     lastSeenAt: "", stateRevision: 1, createdAt: stamp, updatedAt: stamp, archivedAt: ""
   };
   const savedRequest = await insertPublicRequestAtomically(db, request, total);
-  return { ok: true, id: savedRequest.requestId, backupNeeded: false };
+  const queuePeopleCount = bool(activity.showPublicStatus)
+    ? await publicQueuePeopleCount(db, hotelId, text(activity.activityId), cycleId)
+    : null;
+  return {
+    ok: true,
+    id: savedRequest.requestId,
+    realtimeChannel: hotelId,
+    ...(queuePeopleCount === null ? {} : { queuePeopleCount }),
+    backupNeeded: false
+  };
 }
 
 export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): Promise<JsonObject | null> {
@@ -3080,6 +3636,11 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
   try {
     if (action === "login") return await login(db, body);
     if (action === "consumeOneTimeLoginCode") return await consumeOneTimeCode(db, body);
+    // Old Bridge releases may still send this keepalive. Presence now lives in
+    // the realtime coordinator, so acknowledge it without reading or writing D1.
+    if (action === "bridgeHeartbeat") {
+      return { ok: true, deprecated: true, serverNow: nowIso() };
+    }
     const auth = await requireAuth(db, body);
     if (action === "logout") {
       await patchRecord(db, "AuthSessions", text(auth.session.authSessionId), { revokedAt: nowIso() }, "master", false);
@@ -3090,10 +3651,31 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
       ok: true, codeVersion: GUEST_STAR_BRIDGE_COMPAT_VERSION, codeBuild: GUEST_STAR_D1_VERSION,
       backend: "cloudflare-d1", user: publicUser(auth.user), selection: await accessibleSelection(db, auth.user)
     };
+    if (action === "realtimeConnect") {
+      if (!auth.device) return { ok: false, code: "BRIDGE_DEVICE_REQUIRED" };
+      const requestedDeviceId = text(body.deviceId);
+      const requestedHotelId = text(body.hotelId);
+      const requestedActivityId = text(body.activityId);
+      if (
+        requestedDeviceId !== text(auth.device.deviceId) ||
+        requestedHotelId !== text(auth.device.hotelId) ||
+        requestedActivityId !== text(auth.device.activityId)
+      ) return { ok: false, code: "REALTIME_SELECTION_MISMATCH" };
+      return {
+        ok: true,
+        deviceId: requestedDeviceId,
+        hotelId: requestedHotelId,
+        activityId: requestedActivityId
+      };
+    }
+    if (action === "submitDiagnosticReport") return await submitDiagnosticReport(db, auth, body);
     if (action === "changePassword") return await changePassword(db, auth, body);
     if (action === "createOneTimeLoginCode") return await createOneTimeCode(db, auth);
     if (action === "adminState") return await adminState(db, auth);
-    if (action === "setDefaultPublicExperience") return await setDefaultPublicExperience(db, auth, body);
+    if (action === "setDefaultPublicExperience") {
+      if (text(auth.user.role) !== "superhost") throw new Error("FORBIDDEN");
+      return { ok: false, code: "DEFAULT_PUBLIC_EXPERIENCE_DISABLED" };
+    }
     if (action === "setDefaultGoogleFallback") {
       return { ok: false, code: "GOOGLE_REQUEST_BACKUP_DISABLED" };
     }
@@ -3112,23 +3694,30 @@ export async function handleD1HostAction(db: D1DatabaseLike, body: JsonObject): 
     if (action === "revokeDevice") return await revokeDevice(db, auth, body);
     if (action === "selectActivity") return await selectActivity(db, auth, body);
     if (action === "activityState") {
-      await processD1ActivitySchedules(db, text(body.hotelId || auth.device?.hotelId));
-      return await selectedState(db, auth, await tenantContext(db, auth, body));
+      const context=await tenantContext(db,auth,body);
+      const transitions = await processD1ActivitySchedules(db,text(context.hotel.hotelId));
+      return {
+        ...await selectedState(db, auth, context),
+        scheduleTransitioned: transitions.length > 0
+      };
     }
     if (action === "startActivityV4") return await startActivity(db, auth, body, false);
     if (action === "startNewActivityV4") return await startActivity(db, auth, body, true);
     if (action === "playerRuntimeUpdate") return await updatePlayerRuntime(db, auth, body);
+    if (action === "continueActivityV4") return await continueActivity(db,auth,body);
     if (action === "finishActivityV4") return await finishActivity(db, auth, body);
     if (action === "archiveClearQueue") return await archiveQueue(db, auth, body);
     if (action === "toggleRequests") return await toggleRequests(db, auth, body);
+    if (action === "resetSessionPin") return await resetSessionPin(db, auth, body);
+    if (action === "updateKioskMessages") return await updateKioskMessages(db, auth, body);
     if (action === "updateActivitySettings") return await updateActivitySettings(db, auth, body);
+    if (action === "prepareSession") return await prepareSession(db, auth, body);
     if (action === "scheduleActivity") return await scheduleActivity(db, auth, body);
     if (action === "updateSchedule") return await updateSchedule(db, auth, body);
     if (action === "cancelSchedule") return await cancelSchedule(db, auth, body);
     if (action === "updateHotelBranding") return await updateBranding(db, auth, body);
     if (action === "listReviews") return await listReviewsAction(db, auth, body);
     if (action === "updateReview") return await updateReviewAction(db, auth, body);
-    if (action === "bridgeHeartbeat") return await bridgeHeartbeat(db, auth, body);
     if (action === "queueBridgeCommand") return await queueBridgeCommand(db, auth, body);
     if (action === "pollBridgeCommands") return await pollBridgeCommands(db, auth);
     if (action === "completeBridgeCommand") return await completeBridgeCommand(db, auth, body);

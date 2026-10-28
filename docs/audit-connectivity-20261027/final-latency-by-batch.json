@@ -1,0 +1,62 @@
+{
+  "batch3": {
+    "count": 3,
+    "meanMs": 22811,
+    "p95Ms": 65238,
+    "maxMs": 65238
+  },
+  "batch10": {
+    "count": 10,
+    "meanMs": 2433.8,
+    "p95Ms": 3564,
+    "maxMs": 3564
+  },
+  "batch25": {
+    "count": 25,
+    "meanMs": 4701.08,
+    "p95Ms": 5621,
+    "maxMs": 5621
+  },
+  "batch50": {
+    "count": 50,
+    "meanMs": 5002.36,
+    "p95Ms": 5889,
+    "maxMs": 5889
+  },
+  "concurrent100": {
+    "count": 100,
+    "meanMs": 3988.99,
+    "p95Ms": 3991,
+    "maxMs": 3991
+  },
+  "offline": {
+    "count": 20,
+    "meanMs": 18764.05,
+    "p95Ms": 18765,
+    "maxMs": 18765
+  },
+  "lost-invalidation": {
+    "count": 1,
+    "meanMs": 22805,
+    "p95Ms": 22805,
+    "maxMs": 22805
+  },
+  "latency1700": {
+    "count": 10,
+    "meanMs": 36620,
+    "p95Ms": 36620,
+    "maxMs": 36620
+  },
+  "during-updates": {
+    "count": 20,
+    "meanMs": 2908.8,
+    "p95Ms": 3555,
+    "maxMs": 3555
+  },
+  "soak": {
+    "count": 44,
+    "meanMs": 3714.75,
+    "p95Ms": 6810,
+    "maxMs": 13668
+  }
+}

@@ -42,11 +42,11 @@ test("cuenta ya cantó, conserva la cola real y resta saltados", () => {
   assert.equal(summary.skippedSeconds, 330);
   assert.equal(summary.plannedSeconds, 510);
   assert.equal(summary.elapsedSeconds, 3600);
-  assert.equal(summary.gapSeconds, 6690);
+  assert.equal(summary.gapSeconds, 3360);
   assert.equal(summary.queueSongCount, 1);
 });
 
-test("recomienda cerrar cuando lo cantado y la cola cubren la actividad", () => {
+test("no recomienda cerrar una actividad que todavía no ha empezado", () => {
   const summary = buildActivitySummary(
     { activityHours: 0.1, transitionSeconds: 0, accepting: true },
     [
@@ -55,8 +55,8 @@ test("recomienda cerrar cuando lo cantado y la cola cubren la actividad", () => 
     ]
   );
 
-  assert.equal(summary.suggestClose, true);
-  assert.equal(summary.overrunSeconds, 20);
+  assert.equal(summary.suggestClose, false);
+  assert.equal(summary.overrunSeconds, 0);
 });
 
 test("normaliza los resultados finales en español", () => {

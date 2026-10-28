@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import {
-  appsScriptAction,
   controlActivity,
   searchKaraokeYouTube,
   signInBridge,
@@ -51,13 +50,6 @@ test("espera el arranque lento del servicio D1 al iniciar sesion", async (t) => 
 
   assert.equal(result.ok, true);
   assert.equal(result.deviceId, "device-1");
-});
-
-test("bloquea por completo el backend heredado de Google Sheets y PIN", async () => {
-  await assert.rejects(
-    appsScriptAction({ appsScriptUrl: "https://script.google.com/example", hostPin: "123456" }, "bridgeUpdate"),
-    /Google Sheets\/PIN backend is disabled/
-  );
 });
 
 test("envía los controles compartidos con origen bridge", async (t) => {
@@ -192,6 +184,7 @@ test("envía el idioma de la canción al buscar opciones en YouTube", async (t) 
 
   assert.deepEqual(received, {
     action: "youtubeSearchV4",
+    candidateLimit: 6,
     authToken: "auth-token",
     deviceToken: "device-token",
     hotelId: "hotel-1",

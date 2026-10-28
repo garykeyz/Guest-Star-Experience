@@ -1,0 +1,175 @@
+{
+  "startedAt": "2026-10-27T23:07:32.507Z",
+  "requestId": "req-079582cec4ad50591e98eb9328d7414b",
+  "filePath": "/Users/garykeyzz/Documents/ChatGPT/Guest star 2/release-audit-20261027/test-karaoke-library/Guest Star Audit - Conectividad UI Request.wav",
+  "played": false,
+  "before": {
+    "playback": {
+      "connected": true,
+      "selectedDeck": 1,
+      "masterVolume": 1,
+      "decks": [
+        {
+          "position": 0,
+          "durationSeconds": 0,
+          "title": "Arrastre una canción a este deck para cargarlo",
+          "artist": "",
+          "currentTimeSeconds": 0,
+          "deck": 1,
+          "loaded": false,
+          "playing": false,
+          "audible": false,
+          "filePath": "",
+          "played": null,
+          "cue": null
+        },
+        {
+          "position": 0,
+          "durationSeconds": 0,
+          "title": "Arrastre una canción a este deck para cargarlo",
+          "artist": "",
+          "currentTimeSeconds": 0,
+          "deck": 2,
+          "loaded": false,
+          "playing": false,
+          "audible": false,
+          "filePath": "",
+          "played": null,
+          "cue": null
+        }
+      ],
+      "error": ""
+    },
+    "entries": [],
+    "automix": "33"
+  },
+  "queue": {
+    "status": 200,
+    "data": {
+      "ok": true,
+      "result": {
+        "inserted": true,
+        "alreadyQueued": false,
+        "index": 0,
+        "verified": true,
+        "positionAdjusted": false,
+        "entry": {
+          "index": 0,
+          "filePath": "/Users/garykeyzz/Documents/ChatGPT/Guest star 2/release-audit-20261027/test-karaoke-library/Guest Star Audit - Conectividad UI Request.wav",
+          "singer": "AUDIT UI REQUEST 20261027",
+          "song": "Conectividad UI Request",
+          "artist": "Guest Star Audit",
+          "durationSeconds": 4
+        }
+      },
+      "alreadyQueued": false,
+      "linked": false,
+      "restored": false,
+      "warning": ""
+    }
+  },
+  "observation": {
+    "entries": [
+      {
+        "index": 0,
+        "filePath": "/Users/garykeyzz/Documents/ChatGPT/Guest star 2/release-audit-20261027/test-karaoke-library/Guest Star Audit - Conectividad UI Request.wav",
+        "singer": "AUDIT UI REQUEST 20261027",
+        "song": "Conectividad UI Request",
+        "artist": "Guest Star Audit",
+        "durationSeconds": 4
+      }
+    ],
+    "playback": {
+      "connected": true,
+      "selectedDeck": 1,
+      "masterVolume": 1,
+      "decks": [
+        {
+          "position": 0,
+          "durationSeconds": 4,
+          "title": "Conectividad UI Request",
+          "artist": "Guest Star Audit",
+          "currentTimeSeconds": 0,
+          "deck": 1,
+          "loaded": true,
+          "playing": false,
+          "audible": false,
+          "filePath": "/Users/garykeyzz/Documents/ChatGPT/Guest star 2/release-audit-20261027/test-karaoke-library/Guest Star Audit - Conectividad UI Request.wav",
+          "played": false,
+          "cue": null
+        },
+        {
+          "position": 0,
+          "durationSeconds": 0,
+          "title": "Arrastre una canción a este deck para cargarlo",
+          "artist": "",
+          "currentTimeSeconds": 0,
+          "deck": 2,
+          "loaded": false,
+          "playing": false,
+          "audible": false,
+          "filePath": "",
+          "played": null,
+          "cue": null
+        }
+      ],
+      "error": ""
+    }
+  },
+  "realKaraokeAndHeadAutoloadPassed": true,
+  "remove": {
+    "status": 200,
+    "data": {
+      "ok": true,
+      "removed": true,
+      "verified": true,
+      "singer": "AUDIT UI REQUEST 20261027",
+      "song": "Conectividad UI Request",
+      "status": "Fuera de VirtualDJ",
+      "warning": ""
+    }
+  },
+  "after": {
+    "playback": {
+      "connected": true,
+      "selectedDeck": 1,
+      "masterVolume": 1,
+      "decks": [
+        {
+          "position": 0,
+          "durationSeconds": 0,
+          "title": "Arrastre una canción a este deck para cargarlo",
+          "artist": "",
+          "currentTimeSeconds": 0,
+          "deck": 1,
+          "loaded": false,
+          "playing": false,
+          "audible": false,
+          "filePath": "",
+          "played": null,
+          "cue": null
+        },
+        {
+          "position": 0,
+          "durationSeconds": 0,
+          "title": "Arrastre una canción a este deck para cargarlo",
+          "artist": "",
+          "currentTimeSeconds": 0,
+          "deck": 2,
+          "loaded": false,
+          "playing": false,
+          "audible": false,
+          "filePath": "",
+          "played": null,
+          "cue": null
+        }
+      ],
+      "error": ""
+    },
+    "entries": [],
+    "automix": "33"
+  },
+  "cleanupPassed": true,
+  "passed": true,
+  "endedAt": "2026-10-27T23:08:35.955Z"
+}

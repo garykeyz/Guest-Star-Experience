@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+let starts=0;const broadcasts=[];
+globalThis.__runTestWorker={async fetch(){starts++;return Response.json({ok:true,hotel:{hotelId:'hotel-12345678'},session:{runId:'run-12345678',status:'in_progress'}});}};
+const source=(await readFile(new URL('../worker.mjs',import.meta.url),'utf8')).replace('import openNextWorker from "./.open-next/worker.js";','const openNextWorker = globalThis.__runTestWorker;');
+const {GuestStarRealtime}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const values=new Map();let alarmAt=null;
+const state={storage:{async get(key){return values.get(key);},async put(key,value){values.set(key,structuredClone(value));},async setAlarm(at){alarmAt=at;}},waitUntil(){},getWebSockets(){return []}};
+const env={GUEST_STAR_REALTIME:{idFromName(channel){return channel;},get(){return {async fetch(url,options){broadcasts.push(JSON.parse(options.body));return Response.json({ok:true});}};}}};
+const object=new GuestStarRealtime(state,env);
+const wake={runId:'run-12345678',hotelId:'hotel-12345678',hotel:'https://request.gstarxp.com/h/public-12345678',startsAt:new Date(Date.now()-10).toISOString()};
+assert.equal((await object.fetch(new Request('https://internal/schedule-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(wake)}))).status,200);
+assert.ok(alarmAt>=Date.now());
+// The stored alarm survives constructing a fresh DO instance, with no clients.
+const restored=new GuestStarRealtime(state,env);
+await restored.alarm();await restored.alarm();
+assert.equal(starts,1);assert.equal(broadcasts.length,1);
+assert.equal(broadcasts[0].type,'activity.changed');
+assert.deepEqual(broadcasts[0].targets,['public','host','bridge']);
+assert.deepEqual(values.get('activityRunWakeups'),{});
+console.log('PASS: persistent zero-client alarm, restart, one wakeup and shared public/Host/Bridge invalidation.');

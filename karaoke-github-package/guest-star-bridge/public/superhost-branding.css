@@ -1,0 +1,368 @@
+/* Original Guest Star administrative paints; scoped exclusively to Superhost. */
+body.gs-superhost-view {
+  --bg: #09070c;
+  --panel: rgba(25, 16, 31, 0.82);
+  --panel-strong: #19111f;
+  --line: rgba(255, 255, 255, 0.1);
+  --text: #fffafc;
+  --muted: #ab9eb1;
+  --pink: #ff2d95;
+  --purple: #8b3dff;
+  --blue: #00c8ff;
+  --gold: #f6c866;
+  --green: #4ce6a2;
+  --danger: #ff6b81;
+}
+body.gs-superhost-view {
+  background:
+    radial-gradient(circle at 15% 5%, rgba(139, 61, 255, 0.12), transparent 28rem),
+    radial-gradient(circle at 85% 15%, rgba(255, 45, 149, 0.1), transparent 30rem),
+    var(--bg);
+  color: var(--text);
+}
+body.gs-superhost-view .glow { filter: blur(110px); }
+body.gs-superhost-view .glow-one { background: var(--pink); }
+body.gs-superhost-view .glow-two { background: var(--purple); }
+body.gs-superhost-view .topbar { background: linear-gradient(180deg, rgba(16,7,21,.98), rgba(16,7,21,.93)); }
+body.gs-superhost-view .eyebrow { color: var(--gold); }
+body.gs-superhost-view h1 span { background: linear-gradient(90deg, var(--pink), #db75ff); color: transparent; }
+body.gs-superhost-view .subtitle,body.gs-superhost-view .toolbar p { color: var(--muted); }
+body.gs-superhost-view .live-pill { border: 1px solid rgba(76, 230, 162, .28); background: rgba(76, 230, 162, .08); color: var(--green); }
+body.gs-superhost-view .live-pill i { background: var(--green); box-shadow: 0 0 10px var(--green); }
+body.gs-superhost-view .mode-status { border: 1px solid var(--line); color: var(--muted); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .host-session-pin { border: 1px solid rgba(99,221,255,.34); background: linear-gradient(135deg, rgba(7,24,42,.94), rgba(32,12,43,.94)); box-shadow: 0 10px 34px rgba(0,0,0,.25), 0 0 28px rgba(99,221,255,.08); }
+body.gs-superhost-view .host-session-pin small { color: #78dfff; }
+body.gs-superhost-view .host-session-pin strong { color: #fff; }
+body.gs-superhost-view #hostSessionPinValue { color: #ffd679; }
+body.gs-superhost-view .host-session-qr-button { border: 1px solid rgba(120,223,255,.45); background: rgba(120,223,255,.1); color: #d8f7ff; }
+body.gs-superhost-view .host-session-qr-button:hover:not(:disabled),body.gs-superhost-view .host-session-qr-button:focus-visible { background: rgba(120,223,255,.22); }
+body.gs-superhost-view .host-activity-qr-content header p:last-child { color: var(--muted); }
+body.gs-superhost-view #hostActivityQrImage { border: 12px solid white; background: white; }
+body.gs-superhost-view #hostActivityQrPin { color: var(--gold); }
+body.gs-superhost-view .host-activity-direct-link small { color:#78dfff; }
+body.gs-superhost-view .host-activity-direct-link input { border:1px solid rgba(255,255,255,.2); color:#fff; background:#06050d; }
+@media (max-width:520px) { }
+@media (max-width: 1120px) { }
+@media (max-width: 520px) { }
+body.gs-superhost-view .status-card { border: 1px solid var(--line); background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); }
+body.gs-superhost-view .status-icon { background: linear-gradient(145deg, rgba(255,45,149,.22), rgba(139,61,255,.18)); color: #ff9ccd; }
+body.gs-superhost-view .status-card small { color: var(--muted); }
+body.gs-superhost-view .status-card p { color: var(--muted); }
+body.gs-superhost-view .status-card.ok .status-icon { color: var(--green); background: rgba(76,230,162,.11); }
+body.gs-superhost-view .status-card.error .status-icon { color: var(--danger); background: rgba(255,107,129,.11); }
+body.gs-superhost-view .time-card { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .time-card small { color: var(--muted); }
+body.gs-superhost-view .time-card strong { color: #fff; }
+body.gs-superhost-view .time-card p { color: var(--muted); }
+body.gs-superhost-view .time-card.ok { border-color: rgba(76,230,162,.28); background: rgba(76,230,162,.055); }
+body.gs-superhost-view .time-card.ok strong { color: var(--green); }
+body.gs-superhost-view .time-card.warning { border-color: rgba(246,200,102,.25); }
+body.gs-superhost-view .time-card.warning strong { color: var(--gold); }
+body.gs-superhost-view .time-card.over { border-color: rgba(255,107,129,.28); background: rgba(255,107,129,.05); }
+body.gs-superhost-view .time-card.over strong { color: #ff9dac; }
+body.gs-superhost-view .coverage-advice { border: 1px solid rgba(246,200,102,.25); background: rgba(246,200,102,.06); }
+body.gs-superhost-view .coverage-advice strong { color: var(--gold); }
+body.gs-superhost-view .coverage-advice p { color: #dccfb4; }
+body.gs-superhost-view .event-reminder { border: 1px solid rgba(255,45,149,.24); background: linear-gradient(100deg, rgba(255,45,149,.08), rgba(139,61,255,.045)); }
+body.gs-superhost-view .event-reminder small { color: #ff90c4; }
+body.gs-superhost-view .event-reminder p { color: #d7c7d8; }
+body.gs-superhost-view .vdj-queue-panel { border: 1px solid rgba(0,200,255,.22); background: rgba(0,200,255,.035); }
+body.gs-superhost-view .queue-panel-head h3 { color: #bdecff; }
+body.gs-superhost-view .queue-panel-head small { color: var(--muted); }
+body.gs-superhost-view .live-queue-dot { background: var(--blue); box-shadow: 0 0 12px var(--blue); }
+body.gs-superhost-view .vdj-live-row { border: 1px solid var(--line); background: rgba(6,8,14,.48); }
+body.gs-superhost-view .vdj-live-row > b { color: var(--blue); }
+body.gs-superhost-view .vdj-live-row small { color: var(--muted); }
+body.gs-superhost-view .vdj-live-row > span:last-child { color: #c8bdcc; }
+body.gs-superhost-view .vdj-live-row .missing-file { color: #ff9dac; }
+body.gs-superhost-view .button { border: 1px solid transparent; color: white; }
+body.gs-superhost-view .button.is-loading[aria-busy="true"]::after { border: 2px solid rgba(255,255,255,.35); }
+body.gs-superhost-view .button.ghost { background: rgba(255,255,255,.045); border-color: var(--line); }
+body.gs-superhost-view .button.primary { background: linear-gradient(120deg, var(--pink), var(--purple)); box-shadow: 0 8px 24px rgba(255,45,149,.16); }
+body.gs-superhost-view .button.success { background: rgba(76,230,162,.11); border-color: rgba(76,230,162,.24); color: #8dffd0; }
+body.gs-superhost-view .button.danger { background: rgba(255,107,129,.1); border-color: rgba(255,107,129,.22); color: #ffabb8; }
+body.gs-superhost-view .button.youtube { background: rgba(255,55,75,.1); border-color: rgba(255,55,75,.22); color: #ff8c98; }
+body.gs-superhost-view .mode-change-button { border-color: rgba(246,200,102,.28); color: var(--gold); }
+body.gs-superhost-view .mode-change-button:disabled { border-color: var(--line); color: var(--muted); }
+body.gs-superhost-view .request-group { border: 1px solid var(--line); background: rgba(255,255,255,.014); }
+body.gs-superhost-view .request-group.finished > summary.request-group-head::after { color: var(--muted); }
+body.gs-superhost-view .request-group-head p { color: var(--muted); }
+body.gs-superhost-view .request-group-count { color: white; background: rgba(255,255,255,.07); }
+body.gs-superhost-view .request-group.active .request-group-head h3 { color: var(--gold); }
+body.gs-superhost-view .request-group.finished .request-group-head h3 { color: var(--green); }
+body.gs-superhost-view .group-empty { color: var(--muted); }
+body.gs-superhost-view .request-card { border: 1px solid var(--line); background: var(--panel); }
+body.gs-superhost-view .request-number { background: rgba(255,255,255,.055); color: var(--gold); }
+body.gs-superhost-view .singer { color: #ffe8f4; }
+body.gs-superhost-view .guest-alias-badge { border: 1px solid currentColor; box-shadow: 0 5px 16px rgba(0,0,0,.18); }
+body.gs-superhost-view .guest-tone-0 { color: #ff90c4; background: rgba(255,45,149,.15); }
+body.gs-superhost-view .guest-tone-1 { color: #78ddff; background: rgba(0,200,255,.13); }
+body.gs-superhost-view .guest-tone-2 { color: #f6c866; background: rgba(246,200,102,.13); }
+body.gs-superhost-view .guest-tone-3 { color: #8dffd0; background: rgba(76,230,162,.13); }
+body.gs-superhost-view .guest-tone-4 { color: #c69cff; background: rgba(173,101,255,.14); }
+body.gs-superhost-view .guest-tone-5 { color: #ff9dac; background: rgba(255,107,129,.13); }
+body.gs-superhost-view .artist { color: var(--muted); }
+body.gs-superhost-view .request-comment { color: #ffe0ef; background: rgba(255,45,149,.075); }
+body.gs-superhost-view .request-meta { color: #c9bbcc; }
+body.gs-superhost-view .request-language { border: 1px solid rgba(246,200,102,.2); color: var(--gold); background: rgba(246,200,102,.07); }
+body.gs-superhost-view .state-badge.exact { background: rgba(76,230,162,.1); color: var(--green); }
+body.gs-superhost-view .state-badge.possible { background: rgba(246,200,102,.1); color: var(--gold); }
+body.gs-superhost-view .state-badge.missing { background: rgba(255,107,129,.1); color: #ff91a2; }
+body.gs-superhost-view .state-badge.queued { background: rgba(0,200,255,.1); color: var(--blue); }
+body.gs-superhost-view .state-badge.queued-missing { background: rgba(246,200,102,.11); color: var(--gold); }
+body.gs-superhost-view .state-badge.unverified,body.gs-superhost-view .state-badge.unverified-missing { background: rgba(246,200,102,.11); color: var(--gold); }
+body.gs-superhost-view .state-badge.adding,body.gs-superhost-view .state-badge.confirming { background: rgba(0,200,255,.1); color: var(--blue); }
+body.gs-superhost-view .state-badge.removed,body.gs-superhost-view .state-badge.removed-missing { background: rgba(246,200,102,.11); color: var(--gold); }
+body.gs-superhost-view .state-badge.completed { background: rgba(76,230,162,.11); color: var(--green); }
+body.gs-superhost-view .state-badge.skipped { background: rgba(255,107,129,.1); color: #ff9dac; }
+body.gs-superhost-view .request-details > summary { color: #cfc2d2; }
+body.gs-superhost-view .request-details > summary i { color: #ff8fc3; }
+body.gs-superhost-view .source-panel { border: 1px solid rgba(0,200,255,.18); background: rgba(0,200,255,.055); }
+body.gs-superhost-view .source-panel small { color: #78ddff; }
+body.gs-superhost-view .source-panel a { color: #c7f3ff; }
+body.gs-superhost-view .match-file small { color: var(--muted); }
+body.gs-superhost-view .empty-match { color: var(--muted); }
+body.gs-superhost-view .candidate,body.gs-superhost-view .youtube-item { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .candidate small,body.gs-superhost-view .youtube-item small { color: var(--muted); }
+body.gs-superhost-view .youtube-panel { background: rgba(255,55,75,.04); border: 1px solid rgba(255,55,75,.12); }
+body.gs-superhost-view .youtube-panel > p { color: var(--muted); }
+body.gs-superhost-view .youtube-option-label { color: #ff8c98 !important; }
+body.gs-superhost-view .change-link-panel > summary { color: #8fe7ff; }
+body.gs-superhost-view .change-link-panel > p { color: var(--muted); }
+body.gs-superhost-view .outcome-summary p { color: var(--muted); }
+body.gs-superhost-view .outcome-summary.completed { border: 1px solid rgba(76,230,162,.22); background: rgba(76,230,162,.055); }
+body.gs-superhost-view .outcome-summary.completed strong { color: var(--green); }
+body.gs-superhost-view .outcome-summary.skipped { border: 1px solid rgba(255,107,129,.22); background: rgba(255,107,129,.05); }
+body.gs-superhost-view .outcome-summary.skipped strong { color: #ff9dac; }
+body.gs-superhost-view .missing-warning { color: #ffc1ca; }
+body.gs-superhost-view .requeue-prompt { border: 1px solid rgba(246,200,102,.24); background: rgba(246,200,102,.06); }
+body.gs-superhost-view .requeue-prompt strong { color: var(--gold); }
+body.gs-superhost-view .requeue-prompt p { color: #e1d3b6; }
+body.gs-superhost-view .notice { border: 1px solid rgba(0,200,255,.2); background: rgba(0,200,255,.07); color: #9deaff; }
+body.gs-superhost-view .notice.error { border-color: rgba(255,107,129,.25); background: rgba(255,107,129,.07); color: #ffabb8; }
+/* Reserved footer lane: no overlap with the transport, queue or main controls. */
+body.gs-superhost-view #notice { background: #17101e; box-shadow: 0 3px 12px #0005; }
+body.gs-superhost-view #notice > button { border: 0; background: transparent; color: var(--gold); }
+body.gs-superhost-view #notice.error { background: #23121b; }
+@media (max-width: 1050px) { }
+body.gs-superhost-view .request-card.processing { border-color: rgba(0,200,255,.36); box-shadow: 0 0 34px rgba(0,200,255,.1); }
+body.gs-superhost-view .empty-state { border: 1px dashed var(--line); color: var(--muted); }
+body.gs-superhost-view .hit-suggestions { border: 1px solid rgba(246,200,102,.19); background: rgba(246,200,102,.035); }
+body.gs-superhost-view .hit-header > div > p:last-child { color: var(--muted); }
+body.gs-superhost-view .superhost-hero { border: 1px solid rgba(246,200,102,.2); background: linear-gradient(145deg, rgba(246,200,102,.08), rgba(139,61,255,.06)); }
+body.gs-superhost-view .superhost-hero > div > p:last-child { color: var(--muted); }
+body.gs-superhost-view .language-switch .active { border-color: var(--gold); color: var(--gold); }
+body.gs-superhost-view .superhost-tabs button { border: 1px solid var(--line); background: rgba(255,255,255,.035); color: var(--muted); }
+body.gs-superhost-view .superhost-tabs button.active { border-color: rgba(255,45,149,.5); background: rgba(255,45,149,.12); color: var(--text); }
+body.gs-superhost-view .superhost-card { border: 1px solid var(--line); background: rgba(25,16,31,.76); }
+body.gs-superhost-view .superhost-card details { border: 1px solid var(--line); background: rgba(4,3,7,.24); }
+body.gs-superhost-view .superhost-card details > summary { color: var(--text); }
+body.gs-superhost-view .superhost-card details details { background: rgba(255,255,255,.018); }
+body.gs-superhost-view .superhost-card > label,body.gs-superhost-view .superhost-form label { color: var(--muted); }
+body.gs-superhost-view .superhost-card input,body.gs-superhost-view .superhost-card select { border: 1px solid var(--line); background: rgba(5,4,8,.7); color: var(--text); }
+body.gs-superhost-view .superhost-entity { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .superhost-entity small { color: var(--muted); }
+body.gs-superhost-view .superhost-entity code { color: #c9b8d0; }
+body.gs-superhost-view .superhost-entity button { border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--text); }
+body.gs-superhost-view .superhost-entity button.danger { color: var(--danger); border-color: rgba(255,107,129,.3); }
+body.gs-superhost-view .hotel-qr-preview { background: white; }
+body.gs-superhost-view .check-row { color: var(--muted); }
+body.gs-superhost-view .language-fieldset { border: 1px solid var(--line); }
+body.gs-superhost-view .language-fieldset legend { color: var(--muted); }
+body.gs-superhost-view .activity-manage-card { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .activity-manage-card small { color: var(--muted); }
+body.gs-superhost-view .activity-manage-card .danger { color: var(--danger); border-color: rgba(255,107,129,.3); }
+body.gs-superhost-view .activity-language-form > span { color: var(--muted); }
+body.gs-superhost-view .host-account-card { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .host-edit-form small { color: var(--muted); }
+body.gs-superhost-view .host-account-card button,body.gs-superhost-view .activity-language-form button { border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--text); }
+body.gs-superhost-view .temporary-password { border: 1px solid rgba(246,200,102,.35); background: rgba(246,200,102,.08); }
+body.gs-superhost-view .temporary-password code { color: var(--gold); }
+body.gs-superhost-view .audit-list span { color: var(--muted); }
+body.gs-superhost-view .hit-card { border: 1px solid var(--line); background: rgba(9,7,12,.42); }
+body.gs-superhost-view .hit-card small { color: var(--gold); }
+body.gs-superhost-view .hit-card p { color: var(--muted); }
+body.gs-superhost-view .hit-card em { color: #b7aeb9; }
+body.gs-superhost-view .hit-youtube-link { color: #8ce6ff; }
+body.gs-superhost-view .hit-youtube-empty { color: #ff9dac; }
+body.gs-superhost-view dialog { border: 1px solid var(--line); color: var(--text); background: #120d17; box-shadow: 0 40px 100px rgba(0,0,0,.6); }
+body.gs-superhost-view dialog::backdrop { background: rgba(4,3,6,.78); }
+body.gs-superhost-view .close-button { border: 0; background: rgba(255,255,255,.06); color: white; }
+body.gs-superhost-view label { color: #d8ccd9; }
+body.gs-superhost-view input { border: 1px solid var(--line); background: rgba(255,255,255,.045); color: white; outline: none; }
+body.gs-superhost-view input:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,45,149,.09); }
+body.gs-superhost-view .folder-row button { border: 0; color: #ff9aac; background: rgba(255,107,129,.08); }
+body.gs-superhost-view .toggle span { background: rgba(255,255,255,.12); }
+body.gs-superhost-view .toggle span::after { background: white; }
+body.gs-superhost-view .toggle input:checked + span { background: linear-gradient(90deg, var(--pink), var(--purple)); }
+body.gs-superhost-view .memory-toggle { color: var(--muted); }
+body.gs-superhost-view .text-button { border: 0; color: #ff9dac; background: transparent; }
+body.gs-superhost-view .sheet-settings { border: 1px solid rgba(0,200,255,.16); background: rgba(0,200,255,.035); }
+body.gs-superhost-view .sheet-state-grid > div { border: 1px solid var(--line); background: rgba(255,255,255,.025); }
+body.gs-superhost-view .sheet-state-grid small { color: var(--muted); }
+body.gs-superhost-view .settings-help { color: var(--muted); }
+body.gs-superhost-view .success-check { border: 1px solid rgba(76,230,162,.35); color: var(--green); background: rgba(76,230,162,.1); box-shadow: 0 0 40px rgba(76,230,162,.18); }
+body.gs-superhost-view .success-content .eyebrow { color: var(--green); }
+body.gs-superhost-view .success-content > p:not(.eyebrow) { color: var(--muted); }
+body.gs-superhost-view .confirm-icon { border: 1px solid rgba(255,107,129,.36); color: #ff91a4; background: rgba(255,107,129,.1); box-shadow: 0 0 36px rgba(255,107,129,.15); }
+body.gs-superhost-view .confirm-content .eyebrow { color: #ff91a4; }
+body.gs-superhost-view .confirm-content > p:not(.eyebrow) { color: var(--muted); }
+body.gs-superhost-view .bridge-language-control { border: 1px solid var(--line); color: var(--muted); background: rgba(255,255,255,.035); }
+body.gs-superhost-view .bridge-language-control select { border: 0; color: var(--text); background-color: rgba(8,6,12,.72); }
+body.gs-superhost-view .auth-divider { color: var(--muted); }
+body.gs-superhost-view .auth-divider::before,body.gs-superhost-view .auth-divider::after { background: var(--line); }
+body.gs-superhost-view .google-login-button { border-color: rgba(255,255,255,.22); background: #fff; color: #151219; }
+body.gs-superhost-view .google-login-button:hover { background: #f2eef4; }
+body.gs-superhost-view .google-login-help { color: var(--muted); }
+body.gs-superhost-view .google-auth-card { border: 1px solid var(--line); background: linear-gradient(145deg,rgba(30,19,37,.96),rgba(10,8,14,.98)); box-shadow: 0 32px 90px rgba(0,0,0,.45); }
+body.gs-superhost-view .google-auth-copy,body.gs-superhost-view .google-auth-help,body.gs-superhost-view .google-auth-status { color: var(--muted); }
+body.gs-superhost-view .google-auth-status { color: #c8f7e2; }
+body.gs-superhost-view .google-auth-status.error { color: #ffabb8; }
+body.gs-superhost-view .requests-toggle b { color: var(--muted); }
+body.gs-superhost-view .legacy-settings { border: 1px solid var(--line); }
+body.gs-superhost-view .legacy-settings > summary { color: var(--muted); }
+body.gs-superhost-view select { border: 1px solid var(--line); background: #211628; color: white; outline: none; }
+body.gs-superhost-view select:focus { border-color: rgba(255,45,149,.6); box-shadow: 0 0 0 3px rgba(255,45,149,.09); }
+body.gs-superhost-view .auth-dialog form > p:not(.eyebrow) { color: var(--muted); }
+body.gs-superhost-view .auth-dialog .first-login-help { border: 1px solid #7b5cff45; color: #d7ccff; background: #5d3bca18; }
+body.gs-superhost-view .auth-dialog .first-login-help strong { color: #fff; }
+body.gs-superhost-view .form-error { color: #ff9dac !important; }
+body.gs-superhost-view .share-qr { background: white; }
+
+/* Global preferences and diagnostics */
+body.gs-superhost-view .preferences-dialog form > header p:last-child,body.gs-superhost-view .diagnostic-report-dialog form > header p:last-child {
+  color: var(--muted);
+}
+body.gs-superhost-view .preferences-section {
+  border: 1px solid var(--line);
+  background: linear-gradient(145deg, rgba(255,255,255,.036), rgba(255,255,255,.014));
+}
+body.gs-superhost-view .preferences-storage {
+  border-color: rgba(214, 66, 255, .24);
+  background: linear-gradient(145deg, rgba(214,66,255,.06), rgba(139,61,255,.025));
+}
+body.gs-superhost-view .preferences-storage-title > svg {
+  fill: none;
+  stroke: var(--pink);
+}
+body.gs-superhost-view .preferences-storage-refresh svg,body.gs-superhost-view .preferences-storage-actions svg {
+  fill: none;
+  stroke: currentColor;
+}
+body.gs-superhost-view .preferences-storage-total {
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(6,4,10,.34);
+  color: var(--muted);
+}
+body.gs-superhost-view .preferences-storage-total strong { color: var(--gold); }
+body.gs-superhost-view .preferences-storage-row {
+  border: 1px solid rgba(255,255,255,.07);
+  background: rgba(7,5,12,.42);
+}
+body.gs-superhost-view .preferences-storage-kind strong { color: #fff; }
+body.gs-superhost-view .preferences-storage-path {
+  color: var(--muted);
+}
+body.gs-superhost-view .preferences-storage-size strong { color: #f7effa; }
+body.gs-superhost-view .preferences-storage-size small { color: var(--muted); }
+body.gs-superhost-view .preferences-diagnostics {
+  border-color: rgba(0,200,255,.22);
+  background: linear-gradient(145deg, rgba(0,200,255,.055), rgba(139,61,255,.035));
+}
+body.gs-superhost-view .diagnostic-recent li {
+  border: 1px solid var(--line);
+  color: #d8ccd9;
+  background: rgba(4,3,7,.28);
+}
+body.gs-superhost-view .diagnostic-recent li b { color: var(--danger); }
+body.gs-superhost-view .diagnostic-recent li small { color: var(--muted); }
+
+/* Optional Player surfaces disappear only through an explicit saved preference. */
+body.gs-superhost-view .diagnostic-report-dialog textarea {
+  border: 1px solid var(--line);
+  outline: none;
+  color: var(--text);
+  background: rgba(255,255,255,.045);
+}
+body.gs-superhost-view .diagnostic-report-dialog textarea:focus {
+  border-color: rgba(255,45,149,.6);
+  box-shadow: 0 0 0 3px rgba(255,45,149,.09);
+}
+body.gs-superhost-view .diagnostic-detected {
+  border: 1px solid rgba(246,200,102,.3);
+  color: #f5ddb0;
+  background: rgba(246,200,102,.075);
+}
+body.gs-superhost-view .diagnostic-modules {
+  border: 1px solid var(--line);
+}
+body.gs-superhost-view .diagnostic-modules legend {
+  color: var(--muted);
+}
+body.gs-superhost-view .diagnostic-modules label {
+  background: rgba(255,255,255,.025);
+}
+body.gs-superhost-view .diagnostic-modules input { accent-color: var(--pink); }
+body.gs-superhost-view .diagnostic-current-state {
+  border: 1px solid rgba(0,200,255,.2);
+  background: rgba(0,200,255,.04);
+}
+body.gs-superhost-view .diagnostic-current-state details,body.gs-superhost-view .diagnostic-report-card details {
+  border: 1px solid var(--line);
+  background: rgba(4,3,7,.38);
+}
+body.gs-superhost-view .diagnostic-current-state pre,body.gs-superhost-view .diagnostic-report-card pre {
+  color: #d8cde0;
+  background: #08060b;
+}
+body.gs-superhost-view .diagnostic-health-map > div {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.025);
+}
+body.gs-superhost-view .diagnostic-health-map > div > span {
+  color: var(--gold);
+  background: rgba(246,200,102,.1);
+}
+body.gs-superhost-view .diagnostic-health-map em { color: var(--gold); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="OK"],body.gs-superhost-view .diagnostic-health-map [data-health-status="READY"],body.gs-superhost-view .diagnostic-health-map [data-health-status="RUNNING"],body.gs-superhost-view .diagnostic-health-map [data-health-status="LIVE"] { border-color: rgba(76,230,162,.23); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="OK"] > span,body.gs-superhost-view .diagnostic-health-map [data-health-status="READY"] > span,body.gs-superhost-view .diagnostic-health-map [data-health-status="RUNNING"] > span,body.gs-superhost-view .diagnostic-health-map [data-health-status="LIVE"] > span { color: var(--green); background: rgba(76,230,162,.1); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="OK"] em,body.gs-superhost-view .diagnostic-health-map [data-health-status="READY"] em,body.gs-superhost-view .diagnostic-health-map [data-health-status="RUNNING"] em,body.gs-superhost-view .diagnostic-health-map [data-health-status="LIVE"] em { color: var(--green); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="ERROR"],body.gs-superhost-view .diagnostic-health-map [data-health-status="OFFLINE"] { border-color: rgba(255,107,129,.3); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="ERROR"] > span,body.gs-superhost-view .diagnostic-health-map [data-health-status="OFFLINE"] > span { color: var(--danger); background: rgba(255,107,129,.1); }
+body.gs-superhost-view .diagnostic-health-map [data-health-status="ERROR"] em,body.gs-superhost-view .diagnostic-health-map [data-health-status="OFFLINE"] em { color: var(--danger); }
+body.gs-superhost-view .diagnostic-actions { background: linear-gradient(180deg, rgba(18,13,23,0), #120d17 18px); }
+
+/* Superhost diagnostic inbox */
+body.gs-superhost-view .diagnostic-superhost-grid code { color: #c7f3ff; }
+body.gs-superhost-view .superhost-card .diagnostic-report-card {
+  background: rgba(4,3,7,.36);
+}
+body.gs-superhost-view .diagnostic-report-card > summary::after {
+  color: var(--muted);
+}
+body.gs-superhost-view .diagnostic-report-card > summary b { color: var(--gold); }
+body.gs-superhost-view .diagnostic-report-card[data-severity="CRITICAL"] > summary b,body.gs-superhost-view .diagnostic-report-card[data-severity="ERROR"] > summary b { color: var(--danger); }
+body.gs-superhost-view .diagnostic-report-card > summary small { color: var(--muted); }
+body.gs-superhost-view .diagnostic-report-detail > p { color: #ded2e1; }
+body.gs-superhost-view .diagnostic-report-detail dl > div { border: 1px solid var(--line); background: rgba(255,255,255,.02); }
+body.gs-superhost-view .diagnostic-report-detail dt { color: var(--muted); }
+body.gs-superhost-view .diagnostic-report-detail .superhost-actions button {
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: rgba(255,255,255,.045);
+}
+body.gs-superhost-view .diagnostic-report-detail .superhost-actions button:hover { border-color: rgba(255,45,149,.42); }
+
+@media (max-width: 760px) {
+}
+
+@media (min-width: 761px) and (max-width: 1050px) {
+}
+
+@media (max-width: 900px) {
+}
+
+@media (max-width: 560px) {
+}
+
+body.gs-superhost-view{--gs-primary:#ff2d95;--gs-secondary:#8b3dff;--gs-accent:#00c8ff;--gs-primary-ink:#ff2d95;--gs-secondary-ink:#8b3dff;--gs-accent-ink:#00c8ff;--gs-on-primary:#fff;--gs-on-secondary:#fff;--gs-on-accent:#000;--gs-background:#09070c;--gs-surface:#19111f;--gs-text:#fffafc}

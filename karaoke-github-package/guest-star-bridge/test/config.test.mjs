@@ -4,58 +4,46 @@ import {
   BRIDGE_PROXY_URL,
   configForStorage,
   DEFAULT_CONFIG,
-  LEGACY_DIRECT_APPS_SCRIPT_URL,
   mergeLoadedSecrets,
   migrateAppsScriptUrl,
   publicConfig,
   sanitizeConfig
 } from "../src/config.mjs";
 
-test("recuerda carpeta y PIN por defecto", () => {
+test("recuerda la carpeta y descarta controles heredados de PIN y polling", () => {
   const clean = sanitizeConfig(
     {
       libraryFolders: ["/Users/Yefry/Music/Karaoke"],
-      hostPin: "123456"
+      hostPin: "123456",
+      rememberHostPin: true,
+      requestIntervalSeconds: 2
     },
     DEFAULT_CONFIG
   );
   const stored = configForStorage(clean);
 
   assert.deepEqual(stored.libraryFolders, ["/Users/Yefry/Music/Karaoke"]);
-  assert.equal(stored.hostPin, "123456");
   assert.equal(stored.rememberLibraryFolders, true);
-  assert.equal(stored.rememberHostPin, true);
-  assert.equal(stored.requestIntervalSeconds, 2);
+  assert.equal(Object.hasOwn(stored, "hostPin"), false);
+  assert.equal(Object.hasOwn(stored, "rememberHostPin"), false);
+  assert.equal(Object.hasOwn(stored, "requestIntervalSeconds"), false);
 });
 
-test("permite sincronizar Google Sheets cada dos segundos", () => {
-  const clean = sanitizeConfig(
-    { requestIntervalSeconds: 1 },
-    DEFAULT_CONFIG
-  );
-
-  assert.equal(clean.requestIntervalSeconds, 2);
-});
-
-test("permite olvidar carpeta y PIN por separado al cerrar", () => {
+test("permite olvidar la carpeta al cerrar", () => {
   const runtime = sanitizeConfig(
     {
       libraryFolders: ["/Users/Yefry/Music/Karaoke"],
-      rememberLibraryFolders: false,
-      hostPin: "123456",
-      rememberHostPin: false
+      rememberLibraryFolders: false
     },
     DEFAULT_CONFIG
   );
   const stored = configForStorage(runtime);
 
   assert.deepEqual(runtime.libraryFolders, ["/Users/Yefry/Music/Karaoke"]);
-  assert.equal(runtime.hostPin, "123456");
   assert.deepEqual(stored.libraryFolders, []);
-  assert.equal(stored.hostPin, "");
 });
 
-test("la configuración 12 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
+test("la configuración 15 recuerda sesión, selección e idioma sin guardar contraseñas de usuario", () => {
   const runtime = sanitizeConfig(
     {
       authToken: "session-token",
@@ -72,12 +60,83 @@ test("la configuración 12 recuerda sesión, selección e idioma sin guardar con
   );
   const stored = configForStorage(runtime);
 
-  assert.equal(runtime.configVersion, 12);
+  assert.equal(runtime.configVersion, 15);
   assert.equal(runtime.uiLanguage, "en");
   assert.equal(stored.authToken, "session-token");
   assert.equal(stored.deviceToken, "device-token");
   assert.equal(stored.lastHotelId, "hotel-1");
   assert.equal(Object.hasOwn(stored, "password"), false);
+});
+
+test("persiste las Preferencias generales de audio, pantalla, IA e interfaz", () => {
+  const runtime = sanitizeConfig({
+    audioOutputDeviceId: "usb-interface-1",
+    starScreenDisplayId: "display-uuid-2",
+    defaultStemEngine: "demucs",
+    interfacePreferences: {
+      showStarScreenPreview: false,
+      showWaveform: true,
+      showEq: false,
+      showAdvancedControls: true
+    }
+  }, DEFAULT_CONFIG);
+  const stored = configForStorage(runtime);
+
+  assert.equal(stored.audioOutputDeviceId, "usb-interface-1");
+  assert.equal(stored.starScreenDisplayId, "display-uuid-2");
+  assert.equal(stored.defaultStemEngine, "demucs");
+  assert.deepEqual(stored.interfacePreferences, {
+    showStarScreenPreview: false,
+    showWaveform: true,
+    showStarScreenNowPlaying: true,
+    showActivityAccess: false,
+    showCurrentSongBackground: false,
+    starScreenSongSource: "request",
+    starScreenLineupCount: 5,
+    showEq: false,
+    showAdvancedControls: true
+  });
+});
+
+test("Streaming vocal y diagnósticos privados son los valores iniciales de la configuración 15", () => {
+  assert.equal(DEFAULT_CONFIG.configVersion, 15);
+  assert.equal(DEFAULT_CONFIG.defaultStemEngine, "gsvocalrt");
+  assert.deepEqual(DEFAULT_CONFIG.diagnostics, {
+    autoSendTechnicalErrors: false,
+    testerMode: false
+  });
+
+  const runtime = sanitizeConfig({
+    defaultStemEngine: "AUTO",
+    diagnostics: {
+      autoSendTechnicalErrors: true,
+      testerMode: true
+    }
+  }, DEFAULT_CONFIG);
+  const stored = configForStorage(runtime);
+
+  assert.equal(runtime.defaultStemEngine, "spleeter");
+  assert.deepEqual(runtime.diagnostics, {
+    autoSendTechnicalErrors: true,
+    testerMode: true
+  });
+  assert.deepEqual(stored.diagnostics, runtime.diagnostics);
+});
+
+test("normaliza Preferencias inválidas a valores seguros", () => {
+  const runtime = sanitizeConfig({
+    audioOutputDeviceId: null,
+    starScreenDisplayId: null,
+    defaultStemEngine: "desconocido",
+    interfacePreferences: { showWaveform: false }
+  }, DEFAULT_CONFIG);
+
+  assert.equal(runtime.audioOutputDeviceId, "");
+  assert.equal(runtime.starScreenDisplayId, "");
+  assert.equal(runtime.defaultStemEngine, "spleeter");
+  assert.equal(runtime.interfacePreferences.showWaveform, false);
+  assert.equal(runtime.interfacePreferences.showEq, true);
+  assert.deepEqual(runtime.diagnostics, DEFAULT_CONFIG.diagnostics);
 });
 
 test("conserva las carpetas y archivos elegidos para música ambiental", () => {
@@ -120,7 +179,7 @@ test("guarda favoritos independientes por hotel y elimina duplicados", () => {
 
 test("la actualización migra cualquier endpoint directo de Apps Script al proxy estable", () => {
   assert.equal(
-    migrateAppsScriptUrl(LEGACY_DIRECT_APPS_SCRIPT_URL, 7),
+    migrateAppsScriptUrl("https://script.google.com/macros/s/legacy-test/exec", 7),
     BRIDGE_PROXY_URL
   );
   assert.equal(
@@ -130,7 +189,7 @@ test("la actualización migra cualquier endpoint directo de Apps Script al proxy
     ),
     BRIDGE_PROXY_URL
   );
-  assert.equal(migrateAppsScriptUrl("https://example.com/custom", 7), "https://example.com/custom");
+  assert.equal(migrateAppsScriptUrl("https://example.com/custom", 7), BRIDGE_PROXY_URL);
   assert.equal(DEFAULT_CONFIG.appsScriptUrl, BRIDGE_PROXY_URL);
 });
 
